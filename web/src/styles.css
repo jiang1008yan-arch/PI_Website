@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-[#f7faff] text-[#07183f] antialiased;
+  background:
+    radial-gradient(circle at 82% 4%, rgba(111, 143, 217, 0.16), transparent 30rem),
+    linear-gradient(180deg, #fbfdff 0%, #f4f8ff 42%, #f8fbff 100%);
+  min-height: 100vh;
+}
+
+input, select, textarea {
+  @apply rounded-lg border border-[#d9e2f5] bg-white/95 px-3 py-2 text-sm text-[#07183f] shadow-sm outline-none transition placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/15;
+}
+
+select {
+  @apply cursor-pointer appearance-none pr-9;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #244477 50%),
+    linear-gradient(135deg, #244477 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+select:disabled {
+  @apply cursor-not-allowed bg-[#f4f7fc] text-[#8290ad];
+}
+
+button {
+  @apply rounded-lg px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.btn-primary {
+  @apply bg-primary text-white shadow-sm shadow-primary/20 hover:bg-[#0d327f] hover:shadow-md;
+}
+
+.btn-secondary {
+  @apply border border-[#dfe7f7] bg-white/95 text-[#132a5c] shadow-[0_10px_24px_rgba(8,36,107,0.06)] hover:border-[#c5d3ef] hover:bg-[#f8fbff] hover:text-primary hover:shadow-[0_14px_30px_rgba(8,36,107,0.1)];
+}
+
+.btn-danger {
+  @apply bg-gradient-to-r from-[#9276ad] to-[#6f548f] text-white shadow-[0_12px_24px_rgba(111,84,143,0.22)] hover:from-[#8767a5] hover:to-[#63477f] hover:shadow-[0_16px_32px_rgba(111,84,143,0.28)];
+}
+
+.card {
+  @apply rounded-lg border border-[#e3ebf8] bg-white/90 p-5 shadow-[0_12px_32px_rgba(8,36,107,0.055)];
+  backdrop-filter: blur(14px);
+}
+
+table th {
+  @apply font-semibold;
+}
+
+tbody tr {
+  @apply border-[#e4eaf7];
+}
