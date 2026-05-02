@@ -5,8 +5,8 @@ import { ErrorText, Field } from "../components/Form";
 
 export function LoginPage() {
   const { user, login } = useAuth();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("Admin@123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   if (user) return <Navigate to="/" replace />;
 

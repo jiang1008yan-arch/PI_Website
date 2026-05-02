@@ -5,6 +5,7 @@ export type Env = {
   DB: D1Database;
   FILES: R2Bucket;
   JWT_SECRET: string;
+  ALLOW_DEFAULT_ADMIN?: string;
   R2_PUBLIC_BASE?: string;
 };
 
