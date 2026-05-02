@@ -3,17 +3,13 @@ compatibility_date = "2025-04-01"
 pages_build_output_dir = "web/dist"
 
 [vars]
-JWT_SECRET = "change-this-dev-secret-before-deploy"
 R2_PUBLIC_BASE = ""
 
 [[d1_databases]]
 binding = "DB"
 database_name = "sales-portal-db"
-database_id = "local-dev"
+database_id = "fd065e2a-698f-4a51-ba91-428ba5f22734"
 
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "sales-portal-files"
-
-[triggers]
-crons = ["0 3 * * *"]
