@@ -5,7 +5,6 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, Field, PageHero, Section } from "../components/Form";
 import type { Language, Pi, PiItem, Product, ProductField, User } from "../types";
-import { exportPi } from "../excel/exportPi";
 import { LineItem } from "../pi/LineItem";
 import { OptionSetModal } from "../pi/OptionSetModal";
 import { SelectWithManage } from "../pi/SelectWithManage";
@@ -192,7 +191,10 @@ export function PiPage({ language }: { language: Language }) {
     try {
       await withTimeout(async () => {
         const id = locked ? current.id : await save();
-        if (id) await exportPi(id);
+        if (id) {
+          const { exportPi } = await import("../excel/exportPi");
+          await exportPi(id);
+        }
       }, EXCEL_DOWNLOAD_TIMEOUT_MS);
     } catch (err: any) {
       setExportError(err.response?.data?.error ?? err.message ?? "Excel download failed.");

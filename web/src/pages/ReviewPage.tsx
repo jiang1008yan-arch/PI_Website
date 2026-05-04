@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Clock3 } from "lucide-react";
 import { api } from "../api/client";
 import { EmptyState, PageHero, Section } from "../components/Form";
-import { exportPi } from "../excel/exportPi";
 
 const EXCEL_DOWNLOAD_TIMEOUT_MS = 45000;
 
@@ -40,7 +39,10 @@ export function ReviewPage() {
     setExportError("");
     setExporting(true);
     try {
-      await withTimeout(() => exportPi(detail.pi.id), EXCEL_DOWNLOAD_TIMEOUT_MS);
+      await withTimeout(async () => {
+        const { exportPi } = await import("../excel/exportPi");
+        await exportPi(detail.pi.id);
+      }, EXCEL_DOWNLOAD_TIMEOUT_MS);
     } catch (err: any) {
       setExportError(err.response?.data?.error ?? err.message ?? "Excel download failed.");
     } finally {
