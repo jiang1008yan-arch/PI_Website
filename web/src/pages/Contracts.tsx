@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { Folder } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { Section } from "../components/Form";
+import { EmptyState, PageHero, Section } from "../components/Form";
 import { FilePicker } from "../products/FilePicker";
 
 export function ContractsPage() {
@@ -25,13 +26,23 @@ export function ContractsPage() {
   }
 
   return <div className="space-y-6">
+    <PageHero
+      eyebrow="Shared files"
+      title="Contract Templates"
+      description="Keep approved contract files close to the PI workflow so teams can download the right version quickly."
+      Icon={Folder}
+    />
     {user?.role === "ADMIN" && <Section title="Upload Contract">
       <div className="max-w-xl">
         <FilePicker label="File" accept="" onPick={upload} />
       </div>
     </Section>}
     <Section title="Contract Templates">
-      {rows.map((r) => <div key={r.id} className="flex items-center justify-between border-t py-3 text-sm"><span>{r.name} - {Math.round(r.size / 1024)} KB</span><span className="space-x-2"><button className="btn-secondary" onClick={() => download(r.id)}>Download</button>{user?.role === "ADMIN" && <button className="btn-danger" onClick={async () => { await api.delete(`/contract-templates/${r.id}`); load(); }}>Delete</button>}</span></div>)}
+      {rows.length === 0 ? (
+        <EmptyState title="No contract templates" description="Upload shared files so everyone can work from the same approved documents." />
+      ) : (
+        rows.map((r) => <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 border-t py-3 text-sm"><span className="font-medium text-[#294477]">{r.name} - {Math.round(r.size / 1024)} KB</span><span className="space-x-2"><button className="btn-secondary" onClick={() => download(r.id)}>Download</button>{user?.role === "ADMIN" && <button className="btn-danger" onClick={async () => { await api.delete(`/contract-templates/${r.id}`); load(); }}>Delete</button>}</span></div>)
+      )}
     </Section>
   </div>;
 }

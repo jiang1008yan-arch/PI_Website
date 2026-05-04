@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
+import { UsersRound } from "lucide-react";
 import { api } from "../api/client";
-import { ErrorText, Field, Section } from "../components/Form";
+import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
 import type { User } from "../types";
 
 export function PermissionsPage() {
@@ -31,8 +32,14 @@ export function PermissionsPage() {
   }
 
   return <div className="space-y-6">
+    <PageHero
+      eyebrow="Admin access"
+      title="Permission Management"
+      description="Invite teammates with the right role so sales work can move from drafting to review without handoffs getting lost."
+      Icon={UsersRound}
+    />
     <Section title="Add User">
-      <form onSubmit={add} className="grid grid-cols-5 gap-3">
+      <form onSubmit={add} className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
         <Field label="Username"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></Field>
         <Field label="Display Name"><input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></Field>
         <Field label="Password"><input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></Field>
@@ -42,9 +49,13 @@ export function PermissionsPage() {
       <ErrorText message={error} />
     </Section>
     <Section title="Users">
-      <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Username</th><th>Name</th><th>Role</th><th></th></tr></thead><tbody>
-        {users.map((u) => <tr key={u.id} className="border-t"><td className="py-3">{u.username}</td><td>{u.displayName}</td><td><select value={u.role} onChange={(e) => patch(u.id, e.target.value)}><option>USER</option><option>ADMIN</option></select></td><td className="text-right"><button className="btn-danger" onClick={() => remove(u.id)}>Delete</button></td></tr>)}
-      </tbody></table>
+      {users.length === 0 ? (
+        <EmptyState title="No users yet" description="Add a teammate above to start assigning review and admin responsibilities." />
+      ) : (
+        <table className="w-full text-sm"><thead><tr className="text-left text-slate-500"><th>Username</th><th>Name</th><th>Role</th><th></th></tr></thead><tbody>
+          {users.map((u) => <tr key={u.id} className="border-t"><td className="py-3 font-medium text-[#07183f]">{u.username}</td><td>{u.displayName}</td><td><select value={u.role} onChange={(e) => patch(u.id, e.target.value)}><option>USER</option><option>ADMIN</option></select></td><td className="text-right"><button className="btn-danger" onClick={() => remove(u.id)}>Delete</button></td></tr>)}
+        </tbody></table>
+      )}
     </Section>
   </div>;
 }

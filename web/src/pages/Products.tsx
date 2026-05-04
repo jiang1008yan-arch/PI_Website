@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Package, Plus } from "lucide-react";
 import { api } from "../api/client";
-import { ErrorText, Field, Section } from "../components/Form";
+import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
 import type { Language, Product, ProductField } from "../types";
 import { blankRule, ModelRule, modelRuleKey, optionPath } from "../pi/modelRule";
 import { FieldRow } from "../products/FieldRow";
@@ -176,7 +176,17 @@ export function ProductsPage() {
   if (!editing) {
     return (
       <div className="space-y-6">
-        <Section title="Products" action={<button className="btn-primary" onClick={startNewProduct}>Add Product</button>}>
+        <PageHero
+          eyebrow="Admin setup"
+          title="Product Management"
+          description="Shape each product once, then let PI creators fill consistent fields with fewer decisions and fewer mistakes."
+          Icon={Package}
+          action={<button className="btn-primary flex items-center gap-2" onClick={startNewProduct}><Plus size={16} />Add Product</button>}
+        />
+        <Section title="Products">
+          {products.length === 0 ? (
+            <EmptyState title="No products yet" description="Add your first product to unlock reusable PI fields and Excel sub-templates." />
+          ) : (
           <table className="w-full text-sm">
             <tbody>
               {products.map((p) => (
@@ -191,6 +201,7 @@ export function ProductsPage() {
               ))}
             </tbody>
           </table>
+          )}
         </Section>
       </div>
     );
@@ -198,6 +209,12 @@ export function ProductsPage() {
 
   return (
     <div className="space-y-6">
+      <PageHero
+        eyebrow="Product details"
+        title={selected ? `Edit ${selected.nameEn || selected.nameZh}` : "Add Product"}
+        description="Keep names, status, language fields and templates together so future invoices are faster to complete."
+        Icon={Package}
+      />
       <Section
         title={selected ? `Edit ${selected.nameEn || selected.nameZh}` : "Add Product"}
         action={
@@ -208,7 +225,7 @@ export function ProductsPage() {
         }
       >
         <form onSubmit={saveProduct} className="space-y-5">
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="English Name">
               <input value={product.nameEn} onChange={(e) => setProduct({ ...product, nameEn: e.target.value })} required />
             </Field>
@@ -258,7 +275,7 @@ export function ProductsPage() {
           />
         )}
 
-        <div className="grid grid-cols-2 gap-3 border-t pt-5">
+        <div className="grid grid-cols-1 gap-3 border-t pt-5 md:grid-cols-2">
           <FilePicker label="English sub-template" disabled={!selected} onPick={(file) => uploadTemplate("EN", file)} />
           <FilePicker label="Chinese sub-template" disabled={!selected} onPick={(file) => uploadTemplate("ZH", file)} />
         </div>

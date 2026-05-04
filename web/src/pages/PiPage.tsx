@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Calendar, FileCheck2, FileText, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { Field, Section } from "../components/Form";
+import { EmptyState, Field, PageHero, Section } from "../components/Form";
 import type { Language, Pi, PiItem, Product, ProductField, User } from "../types";
 import { exportPi } from "../excel/exportPi";
 import { LineItem } from "../pi/LineItem";
@@ -262,7 +263,7 @@ export function PiPage({ language }: { language: Language }) {
   function renderPiCard(p: Pi) {
     return (
       <div key={p.id} className="relative">
-        <button className="btn-secondary w-full pr-16 text-left" onClick={() => selectPi(p.id)}>
+        <button className="choice-card w-full pr-16" onClick={() => selectPi(p.id)}>
           {piDisplayName(p, language)}
           <br />
           <span className="text-xs text-slate-500">{piListSubtitle(p, language)}</span>
@@ -282,11 +283,23 @@ export function PiPage({ language }: { language: Language }) {
 
   return (
     <div className="space-y-6">
+      <PageHero
+        eyebrow="PI workspace"
+        title={title}
+        description={language === "EN" ? "Create a clear English proforma invoice with customer, sender and product details in one guided flow." : "Fill the Chinese PI draft, send it for review, and keep approved work ready for Excel export."}
+        Icon={language === "EN" ? FileText : FileCheck2}
+        action={!linkedPiId ? <button className="btn-primary flex items-center gap-2" onClick={reset} type="button"><Plus size={16} />New</button> : null}
+      />
+
       {!linkedPiId && (
-        <Section title={`${title} List`} action={<button className="btn-secondary" onClick={reset}>New</button>}>
-          <div className="grid grid-cols-3 gap-3">
-            {activePis.map(renderPiCard)}
-          </div>
+        <Section title={`${title} List`}>
+          {activePis.length === 0 ? (
+            <EmptyState title="Start with a fresh PI" description="Create a draft, add products, then save or send it when the details feel complete." />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {activePis.map(renderPiCard)}
+            </div>
+          )}
         </Section>
       )}
 
@@ -296,12 +309,12 @@ export function PiPage({ language }: { language: Language }) {
           {locked && current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {current.status}.</div>}
           {canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edit it, then confirm to save it for Excel download.</div>}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {language === "EN" ? (
               <>
                 <Field label="PI No."><input disabled={locked} value={header.piNo ?? ""} onChange={(e) => setHeader({ ...header, piNo: e.target.value })} required /></Field>
-                <Field label="Date"><input disabled={locked} value={header.date ?? today} placeholder="YYYY-MM-DD" onChange={(e) => setHeader({ ...header, date: e.target.value })} /></Field>
-                <Field label="Valid Until"><input disabled={locked} value={header.validUntil ?? ""} placeholder="YYYY-MM-DD" onChange={(e) => setHeader({ ...header, validUntil: e.target.value })} /></Field>
+                <DateField label="Date" disabled={locked} value={header.date ?? today} onChange={(value) => setHeader({ ...header, date: value })} />
+                <DateField label="Valid Until" disabled={locked} value={header.validUntil ?? ""} onChange={(value) => setHeader({ ...header, validUntil: value })} />
                 <SelectWithManage label="Incoterm" value={header.incoterm ?? ""} options={incotermOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, incoterm: value })} onManage={() => setOptionEditor("incoterm")} />
                 <SelectWithManage label="Shipment Mode" value={header.shipmentMode ?? ""} options={shipmentOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, shipmentMode: value })} onManage={() => setOptionEditor("shipmentMode")} />
                 <Field label="Payment Term"><input disabled={locked} value={header.paymentTerm ?? ""} onChange={(e) => setHeader({ ...header, paymentTerm: e.target.value })} /></Field>
@@ -311,7 +324,7 @@ export function PiPage({ language }: { language: Language }) {
                 <Field label="Production Order No."><input disabled={locked} value={header.productionOrderNo ?? ""} onChange={(e) => setHeader({ ...header, productionOrderNo: e.target.value })} /></Field>
                 <SelectWithManage label="Customer Source" value={header.customerSource ?? ""} options={sourceOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, customerSource: value })} onManage={() => setOptionEditor("customerSource")} />
                 <SelectWithManage label="Customer Type" value={header.customerType ?? ""} options={typeOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, customerType: value })} onManage={() => setOptionEditor("customerType")} />
-                <Field label="Delivery Date"><input disabled={locked} value={header.deliveryDate ?? ""} placeholder="YYYY-MM-DD" onChange={(e) => setHeader({ ...header, deliveryDate: e.target.value })} /></Field>
+                <DateField label="Delivery Date" disabled={locked} value={header.deliveryDate ?? ""} onChange={(value) => setHeader({ ...header, deliveryDate: value })} />
               </>
             )}
           </div>
@@ -319,7 +332,7 @@ export function PiPage({ language }: { language: Language }) {
 
         {language === "EN" && (
           <Section title="Sender Information">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["senderCorp", "senderAddress", "senderFrom", "senderPhone", "senderEmail"].map((k) => (
                 <Field key={k} label={labelForSender(k)}>
                   <input disabled={locked} value={header[k] ?? ""} onChange={(e) => setHeader({ ...header, [k]: e.target.value })} />
@@ -331,7 +344,7 @@ export function PiPage({ language }: { language: Language }) {
 
         {language === "EN" && (
           <Section title="Customer Information">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["customerCompany", "customerContact", "customerEmail", "customerPhone", "customerAddress"].map((k) => (
                 <Field key={k} label={labelForCustomer(k)}>
                   <input disabled={locked} value={header[k] ?? ""} onChange={(e) => setHeader({ ...header, [k]: e.target.value })} required={k === "customerCompany"} />
@@ -351,6 +364,7 @@ export function PiPage({ language }: { language: Language }) {
           )}
         >
           <div className="space-y-3">
+            {items.length === 0 && !locked && <EmptyState title="Add the first product" description="Pick a product above and the page will open the fields needed for this invoice." />}
             {items.map((it, idx) => (
               <LineItem
                 key={idx}
@@ -415,6 +429,32 @@ export function PiPage({ language }: { language: Language }) {
         />
       )}
     </div>
+  );
+}
+
+function DateField({ label, disabled, value, onChange }: { label: string; disabled: boolean; value: string; onChange: (value: string) => void }) {
+  return (
+    <Field label={label}>
+      <span className="relative block">
+        <input
+          readOnly
+          disabled={disabled}
+          value={value}
+          placeholder="YYYY-MM-DD"
+          className="w-full pr-10"
+        />
+        <input
+          aria-label={label}
+          type="date"
+          disabled={disabled}
+          value={value}
+          lang="en-US"
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <Calendar size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#294477]" />
+      </span>
+    </Field>
   );
 }
 

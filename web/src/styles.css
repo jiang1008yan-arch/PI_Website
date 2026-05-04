@@ -34,6 +34,12 @@ button {
   @apply rounded-lg px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
 }
 
+button:not(:disabled),
+a.btn-secondary,
+a.btn-primary {
+  @apply active:scale-[0.99];
+}
+
 .btn-primary {
   @apply bg-primary text-white shadow-sm shadow-primary/20 hover:bg-[#0d327f] hover:shadow-md;
 }
@@ -57,4 +63,36 @@ table th {
 
 tbody tr {
   @apply border-[#e4eaf7];
+}
+
+table thead th {
+  @apply pb-2 text-xs font-semibold uppercase tracking-wide text-[#63749b];
+}
+
+table tbody tr {
+  @apply transition hover:bg-[#f8fbff];
+}
+
+.page-hero {
+  @apply relative overflow-hidden rounded-lg border border-[#dbe6fb] bg-gradient-to-br from-white via-[#f9fbff] to-[#dbe7ff] px-6 py-8 shadow-[0_24px_70px_rgba(8,36,107,0.09)];
+}
+
+.page-hero-art {
+  @apply pointer-events-none absolute rounded-full;
+}
+
+.page-hero-art-one {
+  @apply -right-14 -top-24 h-72 w-72 bg-[#adc4fb]/45 blur-sm;
+}
+
+.page-hero-art-two {
+  @apply -bottom-24 right-24 hidden h-52 w-52 bg-white/70 ring-1 ring-white/80 md:block;
+}
+
+.soft-panel {
+  @apply rounded-lg border border-[#e5edf9] bg-[#f8fbff] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)];
+}
+
+.choice-card {
+  @apply rounded-lg border border-[#dfe7f7] bg-white/95 p-4 text-left shadow-[0_10px_24px_rgba(8,36,107,0.06)] transition hover:-translate-y-0.5 hover:border-[#c5d3ef] hover:shadow-[0_16px_36px_rgba(8,36,107,0.11)];
 }

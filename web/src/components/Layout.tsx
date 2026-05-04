@@ -10,7 +10,7 @@ export function Layout() {
       <header className="sticky top-0 z-10 border-b border-[#e8eef9] bg-white/90 shadow-[0_8px_30px_rgba(8,36,107,0.05)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
           <div className="flex shrink-0 items-center gap-3">
-            <NavLink to="/" end aria-label="Home" title="Home" className={({ isActive }) => `grid h-11 w-11 place-items-center rounded-full text-sm shadow-lg shadow-primary/15 ${isActive ? "bg-primary text-white" : "bg-white text-primary ring-1 ring-[#dfe7f7] hover:bg-[#f1f5ff]"}`}>
+            <NavLink to="/" end aria-label="Home" title="Home" className={({ isActive }) => `grid h-11 w-11 place-items-center rounded-full bg-white text-sm text-primary shadow-lg shadow-primary/15 ring-1 ${isActive ? "ring-primary/45" : "ring-[#dfe7f7] hover:bg-[#f1f5ff]"}`}>
               <Home size={20} />
             </NavLink>
             <div>

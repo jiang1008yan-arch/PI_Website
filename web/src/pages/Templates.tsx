@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { LayoutGrid } from "lucide-react";
 import { api } from "../api/client";
-import { Field, Section } from "../components/Form";
+import { EmptyState, Field, PageHero, Section } from "../components/Form";
 import { FilePicker } from "../products/FilePicker";
 
 type Language = "EN" | "ZH";
@@ -104,8 +105,14 @@ export function TemplatesPage() {
   }
 
   return <div className="space-y-6">
+    <PageHero
+      eyebrow="Excel setup"
+      title="Excel Template Settings"
+      description="Map PI fields to precise cells so completed invoices export cleanly without manual cleanup."
+      Icon={LayoutGrid}
+    />
     <Section title="Upload PI Header Template">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Field label="Language"><select value={language} onChange={(e) => setLanguage(e.target.value as Language)}><option>EN</option><option>ZH</option></select></Field>
         <Field label="Anchor Name"><input value={anchor} onChange={(e) => setAnchor(e.target.value)} /></Field>
         <FilePicker label="Excel File" onPick={upload} />
@@ -127,9 +134,9 @@ export function TemplatesPage() {
         <button type="button" className="btn-secondary" onClick={addPositionField}>Add Field</button>
       </div>
       <div className="space-y-3">
-        {selectedFields.length === 0 && <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">No fields added yet.</div>}
+        {selectedFields.length === 0 && <div className="rounded-lg bg-[#f8fbff] p-3 text-sm text-[#63749b]">No fields added yet.</div>}
         {selectedFields.map(([key, label]) => (
-          <div key={key} className="grid grid-cols-[1fr_180px_auto] items-end gap-3 rounded-lg bg-slate-50 p-3">
+          <div key={key} className="grid grid-cols-1 items-end gap-3 rounded-lg border border-[#e5edf9] bg-[#f8fbff] p-3 md:grid-cols-[1fr_180px_auto]">
             <div>
               <div className="text-sm font-medium">{label}</div>
               <div className="text-xs text-slate-500">{key}</div>
@@ -149,7 +156,11 @@ export function TemplatesPage() {
     </Section>
 
     <Section title="Templates">
-      {templates.map((t) => <div key={t.id} className="flex items-center justify-between border-t py-3"><span>{t.language} - {t.r2Key} - {t.anchorCellName}</span><button className="btn-danger" onClick={async () => { await api.delete(`/excel-templates/${t.language}`); load(); }}>Delete</button></div>)}
+      {templates.length === 0 ? (
+        <EmptyState title="No templates uploaded" description="Upload an Excel header template above, then map the fields it needs." />
+      ) : (
+        templates.map((t) => <div key={t.id} className="flex flex-wrap items-center justify-between gap-3 border-t py-3 text-sm"><span className="font-medium text-[#294477]">{t.language} - {t.r2Key} - {t.anchorCellName}</span><button className="btn-danger" onClick={async () => { await api.delete(`/excel-templates/${t.language}`); load(); }}>Delete</button></div>)
+      )}
     </Section>
   </div>;
 }
