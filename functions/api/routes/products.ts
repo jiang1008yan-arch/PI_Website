@@ -40,6 +40,34 @@ productRoutes.post("/products/:id/fields", async (c) => {
   return c.json({ id: fieldId });
 });
 
+productRoutes.post("/products/:id/fields-bulk", async (c) => {
+  admin(c);
+  const d = await body<{ fields: any[] }>(c);
+  const fields = Array.isArray(d.fields) ? d.fields : [];
+  if (!fields.length) return c.json({ ids: [] });
+  const productId = c.req.param("id");
+  const insert = c.env.DB.prepare(
+    "INSERT INTO productFields (id, productId, language, label, fieldType, options, defaultValue, sortOrder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+  const ids: string[] = [];
+  const stmts = fields.map((f) => {
+    const fieldId = id("fld");
+    ids.push(fieldId);
+    return insert.bind(
+      fieldId,
+      productId,
+      f.language === "ZH" ? "ZH" : "EN",
+      f.label,
+      f.fieldType === "DROPDOWN" ? "DROPDOWN" : "TEXT",
+      JSON.stringify(f.options ?? []),
+      f.defaultValue ?? "",
+      Number(f.sortOrder ?? 0)
+    );
+  });
+  await c.env.DB.batch(stmts);
+  return c.json({ ids });
+});
+
 productRoutes.patch("/products/:productId/fields/:id", async (c) => {
   admin(c);
   const d = await body<any>(c);

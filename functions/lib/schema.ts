@@ -89,7 +89,7 @@ export const piReviewEvents = sqliteTable("piReviewEvents", {
   id: text("id").primaryKey(),
   piId: text("piId").notNull(),
   actorId: text("actorId").notNull(),
-  action: text("action", { enum: ["SUBMITTED", "APPROVED", "REJECTED"] }).notNull(),
+  action: text("action", { enum: ["SUBMITTED", "APPROVED", "APPROVED_WITH_EDITS", "REJECTED"] }).notNull(),
   note: text("note"),
   createdAt: text("createdAt").notNull()
 });
