@@ -9,7 +9,6 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [allowInput, setAllowInput] = useState(false);
   const [error, setError] = useState("");
-  if (user) return <Navigate to="/" replace />;
 
   useEffect(() => {
     setUsername("");
@@ -20,6 +19,8 @@ export function LoginPage() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, []);
+
+  if (user) return <Navigate to="/" replace />;
 
   async function submit(e: FormEvent) {
     e.preventDefault();

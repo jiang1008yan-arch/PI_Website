@@ -87,11 +87,15 @@ export function ProductsPage() {
       } else {
         const res = await api.post("/products", productPayload(product));
         const productId = res.data.id;
-        for (const language of ["EN", "ZH"] as const) {
-          for (const field of fieldsByLang[language]) {
-            if (field.label.trim()) await api.post(`/products/${productId}/fields`, normalizeField(field, language));
-          }
-        }
+        await Promise.all(
+          (["EN", "ZH"] as const).map((language) => {
+            const fields = fieldsByLang[language]
+              .filter((field) => field.label.trim())
+              .map((field) => normalizeField(field, language));
+            if (!fields.length) return Promise.resolve();
+            return api.post(`/products/${productId}/fields-bulk`, { fields });
+          })
+        );
         await saveModelRules(productId);
         setNotice("Product created.");
         resetForm();
@@ -123,8 +127,15 @@ export function ProductsPage() {
       return;
     }
 
-    if (field.id) await api.patch(`/products/${selected.id}/fields/${field.id}`, normalized);
-    else await api.post(`/products/${selected.id}/fields`, normalized);
+    if (field.id) {
+      await api.patch(`/products/${selected.id}/fields/${field.id}`, normalized);
+    } else {
+      const existing = fieldsByLang[lang];
+      const nextSortOrder = existing.length
+        ? Math.max(...existing.map((f) => Number(f.sortOrder ?? 0))) + 1
+        : 0;
+      await api.post(`/products/${selected.id}/fields`, { ...normalized, sortOrder: nextSortOrder });
+    }
     const res = await api.get(`/products/${selected.id}/fields?language=${lang}`);
     setFieldsByLang((state) => ({ ...state, [lang]: res.data.map(parseField) }));
   }
@@ -150,6 +161,8 @@ export function ProductsPage() {
 
   async function deleteField(field: ProductField) {
     if (!field.id) return;
+    const fieldLabel = field.label?.trim() || "this field";
+    if (!window.confirm(`Delete "${fieldLabel}"? This cannot be undone.`)) return;
     if (selected && !field.id.startsWith("draft-")) await api.delete(`/products/${selected.id}/fields/${field.id}`);
     setFieldsByLang((state) => ({
       ...state,

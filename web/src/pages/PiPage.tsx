@@ -9,6 +9,7 @@ import { LineItem } from "../pi/LineItem";
 import { OptionSetModal } from "../pi/OptionSetModal";
 import { SelectWithManage } from "../pi/SelectWithManage";
 import { getMeta } from "../pi/fieldValues";
+import { computePiDiff, type PiSnapshot } from "../pi/piDiff";
 import { formatCurrency } from "../pi/format";
 import {
   labelForCustomer,
@@ -50,7 +51,10 @@ export function PiPage({ language }: { language: Language }) {
   const [optionEditor, setOptionEditor] = useState<OptionKey | null>(null);
   const [exporting, setExporting] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
   const [exportError, setExportError] = useState("");
+  const [canonical, setCanonical] = useState<PiSnapshot | null>(null);
   const canEditPendingZh = language === "ZH" && current?.status === "PENDING_REVIEW" && user?.role === "ADMIN";
   const canConfirmReceivedZh = canEditPendingZh;
   const locked = Boolean(language === "ZH" && current && !["DRAFT", "REJECTED"].includes(current.status) && !canEditPendingZh);
@@ -98,6 +102,21 @@ export function PiPage({ language }: { language: Language }) {
     if (language === "ZH" && linkedPiId) void open(linkedPiId);
   }, [language, linkedPiId]);
 
+  const hasBufferedEdits = useMemo(() => {
+    if (!canConfirmReceivedZh || !canonical) return false;
+    return computePiDiff(canonical, { header: { ...header, language, items: undefined }, items }) !== null;
+  }, [canConfirmReceivedZh, canonical, header, items, language]);
+
+  useEffect(() => {
+    if (!hasBufferedEdits) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasBufferedEdits]);
+
   const total = useMemo(
     () => items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unitPrice) * (1 - Number(it.discountPct) / 100), 0),
     [items]
@@ -110,8 +129,11 @@ export function PiPage({ language }: { language: Language }) {
     setHeader(res.data.pi);
     setAssignedToId(res.data.pi.assignedToId ?? assignedToId);
     const parsedItems = res.data.items.map((x: any) => ({ ...x, fieldValues: JSON.parse(x.fieldValues || "[]") }));
-    setItems(await hydrateFieldOptions(parsedItems));
+    const hydrated = await hydrateFieldOptions(parsedItems);
+    setItems(hydrated);
     setEvents(res.data.events ?? []);
+    setCanonical({ header: { ...res.data.pi }, items: hydrated });
+    setRejectNote("");
   }
 
   function reset() {
@@ -120,6 +142,8 @@ export function PiPage({ language }: { language: Language }) {
     setHeader({ ...(language === "EN" ? senderDefaults : {}), language, date: today, customerCompany: "" });
     setItems([]);
     setEvents([]);
+    setCanonical(null);
+    setRejectNote("");
   }
 
   function selectPi(id: string) {
@@ -158,20 +182,54 @@ export function PiPage({ language }: { language: Language }) {
     await load();
   }
 
+  function currentSnapshot(): PiSnapshot {
+    return { header: { ...header, language, items: undefined }, items };
+  }
+
   async function confirmReceivedPi() {
-    if (!current) return;
+    if (!current || !canonical) return;
     setExportError("");
     setConfirming(true);
     try {
-      const id = await save();
-      if (!id) return;
-      await api.post(`/pi/${id}/approve`);
-      await open(id);
+      const diff = computePiDiff(canonical, currentSnapshot());
+      const payload = diff
+        ? {
+            pi: { ...header, customerCompany: header.customerCompany || "Chinese PI", language },
+            items,
+            diff
+          }
+        : {};
+      await api.post(`/pi/${current.id}/approve`, payload);
+      await open(current.id);
       await load();
     } catch (err: any) {
       setExportError(err.response?.data?.error ?? err.message ?? "Confirm failed.");
     } finally {
       setConfirming(false);
+    }
+  }
+
+  async function rejectReview() {
+    if (!current || !canonical) return;
+    if (!rejectNote.trim()) {
+      setExportError("Please add a rejection note so the submitter knows what to fix.");
+      return;
+    }
+    setExportError("");
+    setRejecting(true);
+    try {
+      const diff = computePiDiff(canonical, currentSnapshot());
+      await api.post(`/pi/${current.id}/reject`, {
+        note: rejectNote.trim(),
+        suggestedChanges: diff ?? undefined
+      });
+      setRejectNote("");
+      reset();
+      await load();
+    } catch (err: any) {
+      setExportError(err.response?.data?.error ?? err.message ?? "Reject failed.");
+    } finally {
+      setRejecting(false);
     }
   }
 
@@ -309,7 +367,7 @@ export function PiPage({ language }: { language: Language }) {
         <Section title={current ? piSectionTitle(current, language) : `New ${title}`}>
           {current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{current.rejectionNote}</div>}
           {locked && current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {current.status}.</div>}
-          {canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edit it, then confirm to save it for Excel download.</div>}
+          {canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {language === "EN" ? (
@@ -398,6 +456,18 @@ export function PiPage({ language }: { language: Language }) {
           </Section>
         )}
 
+        {canConfirmReceivedZh && (
+          <Section title="Reject this PI">
+            <textarea
+              className="w-full"
+              rows={3}
+              placeholder="Reason the submitter needs (required to reject)"
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+            />
+          </Section>
+        )}
+
         <div className="flex flex-wrap items-end gap-2">
           {language === "ZH" && !locked && !canConfirmReceivedZh && (
             <Field label="Send to">
@@ -409,9 +479,14 @@ export function PiPage({ language }: { language: Language }) {
           {!locked && !canConfirmReceivedZh && <button className="btn-primary">{language === "EN" ? "Save" : "Save Draft"}</button>}
           {language === "ZH" && !locked && !canConfirmReceivedZh && <button type="button" className="btn-secondary" onClick={submit}>Send to Recipient</button>}
           {canConfirmReceivedZh && (
-            <button type="button" className="btn-primary" disabled={confirming} onClick={confirmReceivedPi}>
-              {confirming ? "Confirming..." : "Confirm"}
-            </button>
+            <>
+              <button type="button" className="btn-primary" disabled={confirming || rejecting} onClick={confirmReceivedPi}>
+                {confirming ? "Confirming..." : "Confirm"}
+              </button>
+              <button type="button" className="btn-danger" disabled={confirming || rejecting} onClick={rejectReview}>
+                {rejecting ? "Rejecting..." : "Reject"}
+              </button>
+            </>
           )}
           {current && (language === "EN" || (language === "ZH" && user?.role === "ADMIN" && current.status === "APPROVED")) && (
             <button type="button" className="btn-secondary" disabled={exporting} onClick={downloadExcel}>
