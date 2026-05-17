@@ -11,6 +11,7 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Sender profile** — singleton (id=1) holding the company's default sender details for EN PIs.
 - **Excel template** — per-language workbook used to render approved PIs.
 - **Submitted snapshot** — an immutable JSON capture of a ZH PI's header + line items, frozen at `submit-for-review` time and stored on `pi.submittedSnapshot`. Lets the submitter see what they sent even after admin edits land on the PI row. Overwritten on each new submit-for-review; per-submission history lives in `piReviewEvents`.
+- **PI number sequence** — per-date sequence state stored in `piNumberSequences`, independent from retained PI rows. This lets scheduled cleanup hard-delete old PIs without reusing PI numbers.
 
 ## PI status state machine
 
@@ -34,6 +35,7 @@ A PI moves through these statuses. Transitions are gated by language, ownership,
 - **SUBMITTED** — EN-only terminal-ish state; remains editable by owner/admin (EN has no lock).
 - **PENDING_REVIEW** — ZH-only. **Locked for direct writes.** Admin reviewers edit in **review mode** (see below) and commit changes only via Approve.
 - **APPROVED** — ZH only. Required before Excel export. Triggers visibility on the submitter's "Confirmed Received" view.
+- Approved ZH PIs are retained only for the configured cleanup window; the scheduled janitor hard-deletes expired rows and their line items/review events to control database size.
 - **REJECTED** — ZH only. Editable again by owner/admin; carries `rejectionNote` and (optionally) `suggestedChanges` from the reviewer.
 
 ## Review workflow

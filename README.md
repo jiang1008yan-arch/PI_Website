@@ -49,7 +49,7 @@ wrangler pages dev web/dist
 - Batch 2: categories, products, EN/ZH product fields, product sub-template uploads, PI header templates, contract templates.
 - Batch 3: EN/ZH PI creation, item snapshots, EN submit, ZH send/review/approve/reject workflow.
 - Batch 4: browser-side ExcelJS export using header templates, product sub-templates, token replacement, totals.
-- Batch 5: scheduled janitor for approved Chinese PIs older than 14 days, archived listing support via `includeArchived=1`.
+- Batch 5: scheduled janitor for approved Chinese PIs older than 14 days, with PI numbering kept in an independent sequence table so expired PI rows can be hard-deleted.
 
 ## Excel Template Notes
 
