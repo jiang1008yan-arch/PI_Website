@@ -36,5 +36,32 @@ export const onScheduled: PagesFunction<Env> = async ({ env }) => {
         WHERE piId = pi.id AND action = 'APPROVED'
       ) < datetime('now', '-14 days')
   `).run();
+
+  await env.DB.batch([
+    env.DB.prepare(`
+      DELETE FROM piItems
+      WHERE piId IN (
+        SELECT id FROM pi
+        WHERE language = 'ZH'
+          AND status = 'APPROVED'
+          AND archivedAt IS NOT NULL
+      )
+    `),
+    env.DB.prepare(`
+      DELETE FROM piReviewEvents
+      WHERE piId IN (
+        SELECT id FROM pi
+        WHERE language = 'ZH'
+          AND status = 'APPROVED'
+          AND archivedAt IS NOT NULL
+      )
+    `),
+    env.DB.prepare(`
+      DELETE FROM pi
+      WHERE language = 'ZH'
+        AND status = 'APPROVED'
+        AND archivedAt IS NOT NULL
+    `)
+  ]);
   return new Response("ok");
 };
