@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePiDiff, type PiSnapshot } from "./piDiff";
+import { computePiDiff, isPiDirty, type PiSnapshot } from "./piDiff";
 
 const snap = (overrides: Partial<PiSnapshot> = {}): PiSnapshot => ({
   header: { piNo: "PI-1", customerCompany: "Acme", customerEmail: "a@b.c" },
@@ -72,5 +72,35 @@ describe("computePiDiff", () => {
     const before = snap({ header: { ...snap().header, customerEmail: null } });
     const after = snap({ header: { ...snap().header, customerEmail: "" } });
     expect(computePiDiff(before, after)).toBeNull();
+  });
+});
+
+describe("isPiDirty", () => {
+  it("returns false for a fresh editor with no canonical and empty state", () => {
+    expect(isPiDirty(null, { header: { customerCompany: "" }, items: [] })).toBe(false);
+  });
+
+  it("returns true when customerCompany has been typed into (no canonical)", () => {
+    expect(isPiDirty(null, { header: { customerCompany: "Acme" }, items: [] })).toBe(true);
+  });
+
+  it("ignores whitespace-only customerCompany (no canonical)", () => {
+    expect(isPiDirty(null, { header: { customerCompany: "   " }, items: [] })).toBe(false);
+  });
+
+  it("returns true when any item has been added (no canonical)", () => {
+    const item: any = { productId: "p1", quantity: 1, unitPrice: 0, discountPct: 0, fieldValues: [] };
+    expect(isPiDirty(null, { header: { customerCompany: "" }, items: [item] })).toBe(true);
+  });
+
+  it("returns false when canonical matches edits exactly", () => {
+    const s = snap();
+    expect(isPiDirty(s, s)).toBe(false);
+  });
+
+  it("returns true when edits diverge from canonical", () => {
+    const before = snap();
+    const after = snap({ header: { ...before.header, customerCompany: "Acme Corp" } });
+    expect(isPiDirty(before, after)).toBe(true);
   });
 });

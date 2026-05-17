@@ -14,7 +14,7 @@ export type ExportBundle = {
 export function tokensFor(data: ExportBundle): Record<string, string> {
   const pi = data.pi;
   const sender = data.sender ?? {};
-  const totalCurrency = data.items[0] ? meta(JSON.parse(data.items[0].fieldValues || "[]"), "currency") || "USD" : "USD";
+  const totalCurrency = data.items[0] ? meta(data.items[0].fieldValues, "currency") || "USD" : "USD";
   const totalAmount = data.items.reduce((sum, item) => {
     return sum + Number(item.quantity) * Number(item.unitPrice) * (1 - Number(item.discountPct) / 100);
   }, 0);

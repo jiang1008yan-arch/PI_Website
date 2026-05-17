@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { api } from "../api/client";
+import { parsePiItems } from "../pi/piItemCodec";
 import {
   currencyFormat,
   ExportBundle,
@@ -16,7 +17,8 @@ import {
 const TEMPLATE_FETCH_TIMEOUT_MS = 30000;
 
 export async function exportPi(id: string) {
-  const { data } = await api.get<ExportBundle>(`/pi/${id}/export-bundle`);
+  const { data: raw } = await api.get<ExportBundle>(`/pi/${id}/export-bundle`);
+  const data: ExportBundle = { ...raw, items: parsePiItems(raw.items) };
   const workbook = data.excelTemplateUrl
     ? await loadWorkbook(data.excelTemplateUrl, "PI header template")
     : new ExcelJS.Workbook();
@@ -83,7 +85,7 @@ async function writeLineItem(
   data: ExportBundle,
   amountRows: number[]
 ) {
-  const fields = JSON.parse(item.fieldValues || "[]");
+  const fields = item.fieldValues;
   const subUrl = data.productTemplateUrls[item.productId];
 
   if (subUrl) {
@@ -365,7 +367,7 @@ function writeTotalsRow(
   amountRows: number[]
 ) {
   const totalRow = rowNo + 1;
-  const firstFields = data.items[0] ? JSON.parse(data.items[0].fieldValues || "[]") : [];
+  const firstFields = data.items[0]?.fieldValues ?? [];
   const currency = meta(firstFields, "currency") || "USD";
   sheet.getCell(`F${totalRow}`).value = "Total";
   sheet.getCell(`G${totalRow}`).value = {

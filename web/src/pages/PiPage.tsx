@@ -1,20 +1,17 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Calendar, FileCheck2, FileText, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, Field, PageHero, Section } from "../components/Form";
-import type { Language, Pi, PiItem, Product, ProductField, User } from "../types";
+import type { Language, Pi, Product, ProductField, User } from "../types";
 import { LineItem } from "../pi/LineItem";
 import { OptionSetModal } from "../pi/OptionSetModal";
 import { SelectWithManage } from "../pi/SelectWithManage";
-import { getMeta } from "../pi/fieldValues";
-import { computePiDiff, type PiSnapshot } from "../pi/piDiff";
 import { formatCurrency } from "../pi/format";
 import {
   labelForCustomer,
   labelForSender,
-  isConfirmedReceivedPi,
   piDisplayName,
   productOptionLabel,
   senderDefaultsFrom
@@ -27,47 +24,37 @@ import {
   normalizeRule,
   optionPath
 } from "../pi/modelRule";
+import { parseField } from "../products/productFields";
+import { usePiEditor } from "../pi/usePiEditor";
 
 const today = new Date().toISOString().slice(0, 10);
-const EXCEL_DOWNLOAD_TIMEOUT_MS = 45000;
 type OptionKey = "customerSource" | "customerType" | "incoterm" | "shipmentMode";
 
 export function PiPage({ language }: { language: Language }) {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
-  const [pis, setPis] = useState<Pi[]>([]);
-  const [current, setCurrent] = useState<Pi | null>(null);
-  const [events, setEvents] = useState<any[]>([]);
-  const [items, setItems] = useState<PiItem[]>([]);
-  const [header, setHeader] = useState<any>({ language, date: today, customerCompany: "" });
   const [recipients, setRecipients] = useState<User[]>([]);
-  const [assignedToId, setAssignedToId] = useState("");
   const [sourceOptions, setSourceOptions] = useState<string[]>([]);
   const [typeOptions, setTypeOptions] = useState<string[]>([]);
   const [incotermOptions, setIncotermOptions] = useState<string[]>([]);
   const [shipmentOptions, setShipmentOptions] = useState<string[]>([]);
   const [senderDefaults, setSenderDefaults] = useState<Record<string, string>>({});
   const [optionEditor, setOptionEditor] = useState<OptionKey | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
-  const [rejectNote, setRejectNote] = useState("");
-  const [exportError, setExportError] = useState("");
-  const [canonical, setCanonical] = useState<PiSnapshot | null>(null);
-  const canEditPendingZh = language === "ZH" && current?.status === "PENDING_REVIEW" && user?.role === "ADMIN";
-  const canConfirmReceivedZh = canEditPendingZh;
-  const locked = Boolean(language === "ZH" && current && !["DRAFT", "REJECTED"].includes(current.status) && !canEditPendingZh);
   const title = language === "EN" ? "English PI" : "Chinese PI";
   const linkedPiId = searchParams.get("piId");
-  const activePis = language === "ZH"
-    ? pis.filter((p) => p.status !== "APPROVED" && !isConfirmedReceivedPi(p, user?.id))
-    : pis;
 
-  const load = async () => {
-    const [p, list] = await Promise.all([api.get("/products"), api.get("/pi")]);
-    setProducts(p.data.filter((x: Product) => x.status === "ACTIVE"));
-    setPis(list.data.filter((x: Pi) => x.language === language));
+  const editor = usePiEditor({
+    language,
+    user,
+    linkedPiId,
+    senderDefaults,
+    setSearchParams
+  });
+
+  const loadProducts = async () => {
+    const res = await api.get("/products");
+    setProducts(res.data.filter((x: Product) => x.status === "ACTIVE"));
   };
 
   const loadEnSetup = async () => {
@@ -79,9 +66,7 @@ export function PiPage({ language }: { language: Language }) {
     ]);
     setIncotermOptions(incoterms.data.map((row: any) => row.value));
     setShipmentOptions(shipments.data.map((row: any) => row.value));
-    const defaults = senderDefaultsFrom(sender.data);
-    setSenderDefaults(defaults);
-    setHeader((prev: any) => prev.language === "EN" ? { ...defaults, ...prev } : prev);
+    setSenderDefaults(senderDefaultsFrom(sender.data));
   };
 
   const loadZhSetup = async () => {
@@ -92,181 +77,19 @@ export function PiPage({ language }: { language: Language }) {
       api.get("/options/customerType")
     ]);
     setRecipients(users.data);
-    setAssignedToId((currentValue) => currentValue || users.data[0]?.id || "");
+    editor.setAssignedToId(editor.assignedToId || users.data[0]?.id || "");
     setSourceOptions(sources.data.map((row: any) => row.value));
     setTypeOptions(types.data.map((row: any) => row.value));
   };
 
-  useEffect(() => { load(); loadEnSetup(); loadZhSetup(); }, [language]);
-  useEffect(() => {
-    if (language === "ZH" && linkedPiId) void open(linkedPiId);
-  }, [language, linkedPiId]);
-
-  const hasBufferedEdits = useMemo(() => {
-    if (!canConfirmReceivedZh || !canonical) return false;
-    return computePiDiff(canonical, { header: { ...header, language, items: undefined }, items }) !== null;
-  }, [canConfirmReceivedZh, canonical, header, items, language]);
-
-  useEffect(() => {
-    if (!hasBufferedEdits) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [hasBufferedEdits]);
-
-  const total = useMemo(
-    () => items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unitPrice) * (1 - Number(it.discountPct) / 100), 0),
-    [items]
-  );
-  const totalCurrency = getMeta(items[0], "currency") || "USD";
-
-  async function open(id: string) {
-    const res = await api.get(`/pi/${id}`);
-    setCurrent(res.data.pi);
-    setHeader(res.data.pi);
-    setAssignedToId(res.data.pi.assignedToId ?? assignedToId);
-    const parsedItems = res.data.items.map((x: any) => ({ ...x, fieldValues: JSON.parse(x.fieldValues || "[]") }));
-    const hydrated = await hydrateFieldOptions(parsedItems);
-    setItems(hydrated);
-    setEvents(res.data.events ?? []);
-    setCanonical({ header: { ...res.data.pi }, items: hydrated });
-    setRejectNote("");
-  }
-
-  function reset() {
-    if (language === "ZH") setSearchParams({});
-    setCurrent(null);
-    setHeader({ ...(language === "EN" ? senderDefaults : {}), language, date: today, customerCompany: "" });
-    setItems([]);
-    setEvents([]);
-    setCanonical(null);
-    setRejectNote("");
-  }
-
-  function selectPi(id: string) {
-    if (language === "ZH") setSearchParams({ piId: id });
-    void open(id);
-  }
-
-  async function save(e?: FormEvent) {
-    e?.preventDefault();
-    const payload = {
-      ...header,
-      customerCompany: language === "ZH" ? (header.customerCompany || "Chinese PI") : header.customerCompany,
-      language,
-      items
-    };
-    if (current) {
-      await api.patch(`/pi/${current.id}`, payload);
-      await open(current.id);
-      await load();
-      return current.id;
-    }
-    const res = await api.post("/pi", payload);
-    await open(res.data.id);
-    await load();
-    return res.data.id as string;
-  }
-
-  async function submit() {
-    const id = current?.id ?? await save();
-    if (!id) return;
-    await api.post(
-      language === "ZH" ? `/pi/${id}/submit-for-review` : `/pi/${id}/submit`,
-      language === "ZH" ? { assignedToId } : {}
-    );
-    await open(id);
-    await load();
-  }
-
-  function currentSnapshot(): PiSnapshot {
-    return { header: { ...header, language, items: undefined }, items };
-  }
-
-  async function confirmReceivedPi() {
-    if (!current || !canonical) return;
-    setExportError("");
-    setConfirming(true);
-    try {
-      const diff = computePiDiff(canonical, currentSnapshot());
-      const payload = diff
-        ? {
-            pi: { ...header, customerCompany: header.customerCompany || "Chinese PI", language },
-            items,
-            diff
-          }
-        : {};
-      await api.post(`/pi/${current.id}/approve`, payload);
-      await open(current.id);
-      await load();
-    } catch (err: any) {
-      setExportError(err.response?.data?.error ?? err.message ?? "Confirm failed.");
-    } finally {
-      setConfirming(false);
-    }
-  }
-
-  async function rejectReview() {
-    if (!current || !canonical) return;
-    if (!rejectNote.trim()) {
-      setExportError("Please add a rejection note so the submitter knows what to fix.");
-      return;
-    }
-    setExportError("");
-    setRejecting(true);
-    try {
-      const diff = computePiDiff(canonical, currentSnapshot());
-      await api.post(`/pi/${current.id}/reject`, {
-        note: rejectNote.trim(),
-        suggestedChanges: diff ?? undefined
-      });
-      setRejectNote("");
-      reset();
-      await load();
-    } catch (err: any) {
-      setExportError(err.response?.data?.error ?? err.message ?? "Reject failed.");
-    } finally {
-      setRejecting(false);
-    }
-  }
-
-  async function deleteDraft(pi: Pi) {
-    if (language === "ZH" && pi.status !== "DRAFT") return;
-    const ok = window.confirm(`Delete ${language === "EN" ? "PI" : "draft"} ${piDisplayName(pi, language)}?`);
-    if (!ok) return;
-    await api.delete(`/pi/${pi.id}`);
-    if (current?.id === pi.id) reset();
-    await load();
-  }
-
-  async function downloadExcel() {
-    if (!current) return;
-    setExportError("");
-    setExporting(true);
-    try {
-      await withTimeout(async () => {
-        const id = locked ? current.id : await save();
-        if (id) {
-          const { exportPi } = await import("../excel/exportPi");
-          await exportPi(id);
-        }
-      }, EXCEL_DOWNLOAD_TIMEOUT_MS);
-    } catch (err: any) {
-      setExportError(err.response?.data?.error ?? err.message ?? "Excel download failed.");
-    } finally {
-      setExporting(false);
-    }
-  }
+  useEffect(() => { loadProducts(); loadEnSetup(); loadZhSetup(); }, [language]);
 
   async function addProduct(productId: string) {
     const product = products.find((p) => p.id === productId);
     if (!product) return;
     const res = await api.get(`/products/${product.id}/fields?language=${language}`);
     const rule = language === "ZH" ? await loadModelRule(product.id, language) : null;
-    const fields: ProductField[] = res.data.map((f: any) => ({ ...f, options: JSON.parse(f.options || "[]") }));
+    const fields: ProductField[] = res.data.map(parseField);
     const meta = language === "EN" ? [{ label: "__currency", value: "USD", fieldType: "TEXT", sortOrder: -1 }] : [];
     const ruleFields = rule?.enabled ? modelRuleSeedFields(rule, language) : [];
     const nextItem = applyModelRule({
@@ -286,31 +109,7 @@ export function PiPage({ language }: { language: Language }) {
         }))
       ]
     }, language);
-    setItems([...items, nextItem]);
-  }
-
-  async function hydrateFieldOptions(itemsToHydrate: PiItem[]) {
-    return Promise.all(itemsToHydrate.map(async (item) => {
-      try {
-        const res = await api.get(`/products/${item.productId}/fields?language=${language}`);
-        const optionsByLabel = new Map<string, string[]>(
-          res.data.map((field: any) => [String(field.label), JSON.parse(field.options || "[]")])
-        );
-        const typeByLabel = new Map<string, string>(
-          res.data.map((field: any) => [String(field.label), String(field.fieldType)])
-        );
-        return {
-          ...item,
-          fieldValues: item.fieldValues.map((field) => ({
-            ...field,
-            fieldType: typeByLabel.get(field.label) ?? field.fieldType,
-            options: optionsByLabel.get(field.label) ?? field.options ?? []
-          }))
-        };
-      } catch {
-        return item;
-      }
-    }));
+    editor.setItems([...editor.items, nextItem]);
   }
 
   async function saveOptionSet(key: OptionKey, values: string[]) {
@@ -320,10 +119,13 @@ export function PiPage({ language }: { language: Language }) {
     await loadZhSetup();
   }
 
+  const setHeaderField = (patch: Record<string, any>) =>
+    editor.setHeader({ ...editor.header, ...patch });
+
   function renderPiCard(p: Pi) {
     return (
       <div key={p.id} className="relative">
-        <button className="choice-card w-full pr-16" onClick={() => selectPi(p.id)}>
+        <button className="choice-card w-full pr-16" onClick={() => editor.selectPi(p.id)}>
           {piDisplayName(p, language)}
           <br />
           <span className="text-xs text-slate-500">{piListSubtitle(p, language)}</span>
@@ -332,7 +134,7 @@ export function PiPage({ language }: { language: Language }) {
           <button
             type="button"
             className="btn-danger absolute right-2 top-2 px-2 py-1 text-xs"
-            onClick={() => deleteDraft(p)}
+            onClick={() => editor.deleteDraft(p)}
           >
             Delete
           </button>
@@ -348,43 +150,43 @@ export function PiPage({ language }: { language: Language }) {
         title={title}
         description={language === "EN" ? "Create a clear English proforma invoice with customer, sender and product details in one guided flow." : "Fill the Chinese PI draft, send it for review, and keep approved work ready for Excel export."}
         Icon={language === "EN" ? FileText : FileCheck2}
-        action={!linkedPiId ? <button className="btn-primary flex items-center gap-2" onClick={reset} type="button"><Plus size={16} />New</button> : null}
+        action={!linkedPiId ? <button className="btn-primary flex items-center gap-2" onClick={editor.reset} type="button"><Plus size={16} />New</button> : null}
       />
 
       {!linkedPiId && (
         <Section title={`${title} List`}>
-          {activePis.length === 0 ? (
+          {editor.activePis.length === 0 ? (
             <EmptyState title="Start with a fresh PI" description="Create a draft, add products, then save or send it when the details feel complete." />
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {activePis.map(renderPiCard)}
+              {editor.activePis.map(renderPiCard)}
             </div>
           )}
         </Section>
       )}
 
-      <form onSubmit={save} className="space-y-6">
-        <Section title={current ? piSectionTitle(current, language) : `New ${title}`}>
-          {current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{current.rejectionNote}</div>}
-          {locked && current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {current.status}.</div>}
-          {canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
+      <form onSubmit={editor.save} className="space-y-6">
+        <Section title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`}>
+          {editor.current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.current.rejectionNote}</div>}
+          {editor.locked && editor.current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {editor.current.status}.</div>}
+          {editor.canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {language === "EN" ? (
               <>
-                <Field label="PI No."><input disabled={locked} value={header.piNo ?? ""} onChange={(e) => setHeader({ ...header, piNo: e.target.value })} required /></Field>
-                <DateField label="Date" disabled={locked} value={header.date ?? today} onChange={(value) => setHeader({ ...header, date: value })} />
-                <DateField label="Valid Until" disabled={locked} value={header.validUntil ?? ""} onChange={(value) => setHeader({ ...header, validUntil: value })} />
-                <SelectWithManage label="Incoterm" value={header.incoterm ?? ""} options={incotermOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, incoterm: value })} onManage={() => setOptionEditor("incoterm")} />
-                <SelectWithManage label="Shipment Mode" value={header.shipmentMode ?? ""} options={shipmentOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, shipmentMode: value })} onManage={() => setOptionEditor("shipmentMode")} />
-                <Field label="Payment Term"><input disabled={locked} value={header.paymentTerm ?? ""} onChange={(e) => setHeader({ ...header, paymentTerm: e.target.value })} /></Field>
+                <Field label="PI No."><input disabled={editor.locked} value={editor.header.piNo ?? ""} onChange={(e) => setHeaderField({ piNo: e.target.value })} required /></Field>
+                <DateField label="Date" disabled={editor.locked} value={editor.header.date ?? today} onChange={(value) => setHeaderField({ date: value })} />
+                <DateField label="Valid Until" disabled={editor.locked} value={editor.header.validUntil ?? ""} onChange={(value) => setHeaderField({ validUntil: value })} />
+                <SelectWithManage label="Incoterm" value={editor.header.incoterm ?? ""} options={incotermOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ incoterm: value })} onManage={() => setOptionEditor("incoterm")} />
+                <SelectWithManage label="Shipment Mode" value={editor.header.shipmentMode ?? ""} options={shipmentOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ shipmentMode: value })} onManage={() => setOptionEditor("shipmentMode")} />
+                <Field label="Payment Term"><input disabled={editor.locked} value={editor.header.paymentTerm ?? ""} onChange={(e) => setHeaderField({ paymentTerm: e.target.value })} /></Field>
               </>
             ) : (
               <>
-                <Field label="Production Order No."><input disabled={locked} value={header.productionOrderNo ?? ""} onChange={(e) => setHeader({ ...header, productionOrderNo: e.target.value })} /></Field>
-                <SelectWithManage label="Customer Source" value={header.customerSource ?? ""} options={sourceOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, customerSource: value })} onManage={() => setOptionEditor("customerSource")} />
-                <SelectWithManage label="Customer Type" value={header.customerType ?? ""} options={typeOptions} disabled={locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeader({ ...header, customerType: value })} onManage={() => setOptionEditor("customerType")} />
-                <DateField label="Delivery Date" disabled={locked} value={header.deliveryDate ?? ""} onChange={(value) => setHeader({ ...header, deliveryDate: value })} />
+                <Field label="Production Order No."><input disabled={editor.locked} value={editor.header.productionOrderNo ?? ""} onChange={(e) => setHeaderField({ productionOrderNo: e.target.value })} /></Field>
+                <SelectWithManage label="Customer Source" value={editor.header.customerSource ?? ""} options={sourceOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerSource: value })} onManage={() => setOptionEditor("customerSource")} />
+                <SelectWithManage label="Customer Type" value={editor.header.customerType ?? ""} options={typeOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerType: value })} onManage={() => setOptionEditor("customerType")} />
+                <DateField label="Delivery Date" disabled={editor.locked} value={editor.header.deliveryDate ?? ""} onChange={(value) => setHeaderField({ deliveryDate: value })} />
               </>
             )}
           </div>
@@ -395,7 +197,7 @@ export function PiPage({ language }: { language: Language }) {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["senderCorp", "senderAddress", "senderFrom", "senderPhone", "senderEmail"].map((k) => (
                 <Field key={k} label={labelForSender(k)}>
-                  <input disabled={locked} value={header[k] ?? ""} onChange={(e) => setHeader({ ...header, [k]: e.target.value })} />
+                  <input disabled={editor.locked} value={editor.header[k] ?? ""} onChange={(e) => setHeaderField({ [k]: e.target.value })} />
                 </Field>
               ))}
             </div>
@@ -407,7 +209,7 @@ export function PiPage({ language }: { language: Language }) {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["customerCompany", "customerContact", "customerEmail", "customerPhone", "customerAddress"].map((k) => (
                 <Field key={k} label={labelForCustomer(k)}>
-                  <input disabled={locked} value={header[k] ?? ""} onChange={(e) => setHeader({ ...header, [k]: e.target.value })} required={k === "customerCompany"} />
+                  <input disabled={editor.locked} value={editor.header[k] ?? ""} onChange={(e) => setHeaderField({ [k]: e.target.value })} required={k === "customerCompany"} />
                 </Field>
               ))}
             </div>
@@ -416,7 +218,7 @@ export function PiPage({ language }: { language: Language }) {
 
         <Section
           title="Products / Line Items"
-          action={!locked && (
+          action={!editor.locked && (
             <select onChange={(e) => { addProduct(e.target.value); e.currentTarget.value = ""; }} defaultValue="">
               <option value="" disabled>Add Product</option>
               {products.map((p) => <option key={p.id} value={p.id}>{productOptionLabel(p, language)}</option>)}
@@ -424,77 +226,77 @@ export function PiPage({ language }: { language: Language }) {
           )}
         >
           <div className="space-y-3">
-            {items.length === 0 && !locked && <EmptyState title="Add the first product" description="Pick a product above and the page will open the fields needed for this invoice." />}
-            {items.map((it, idx) => (
+            {editor.items.length === 0 && !editor.locked && <EmptyState title="Add the first product" description="Pick a product above and the page will open the fields needed for this invoice." />}
+            {editor.items.map((it, idx) => (
               <LineItem
                 key={idx}
                 item={it}
                 product={products.find((p) => p.id === it.productId)}
                 language={language}
-                locked={locked}
-                onChange={(next) => setItems(items.map((x, i) => i === idx ? next : x))}
-                onRemove={() => setItems(items.filter((_, i) => i !== idx))}
+                locked={editor.locked}
+                onChange={(next) => editor.setItems(editor.items.map((x, i) => i === idx ? next : x))}
+                onRemove={() => editor.setItems(editor.items.filter((_, i) => i !== idx))}
               />
             ))}
           </div>
-          {language === "EN" && <div className="text-right font-semibold">Total: {formatCurrency(total, totalCurrency)}</div>}
+          {language === "EN" && <div className="text-right font-semibold">Total: {formatCurrency(editor.total, editor.totalCurrency)}</div>}
         </Section>
 
         <Section title="Other Requirements">
           <textarea
             className="w-full"
-            disabled={locked}
+            disabled={editor.locked}
             rows={5}
-            value={header.otherRequirements ?? ""}
-            onChange={(e) => setHeader({ ...header, otherRequirements: e.target.value })}
+            value={editor.header.otherRequirements ?? ""}
+            onChange={(e) => setHeaderField({ otherRequirements: e.target.value })}
           />
         </Section>
 
-        {events.length > 0 && (
+        {editor.events.length > 0 && (
           <Section title="Review History">
-            {events.map((e) => <div key={e.id} className="border-t py-2 text-sm">{e.action} by {e.actorName} - {e.note}</div>)}
+            {editor.events.map((e) => <div key={e.id} className="border-t py-2 text-sm">{e.action} by {e.actorName} - {e.note}</div>)}
           </Section>
         )}
 
-        {canConfirmReceivedZh && (
+        {editor.canConfirmReceivedZh && (
           <Section title="Reject this PI">
             <textarea
               className="w-full"
               rows={3}
               placeholder="Reason the submitter needs (required to reject)"
-              value={rejectNote}
-              onChange={(e) => setRejectNote(e.target.value)}
+              value={editor.rejectNote}
+              onChange={(e) => editor.setRejectNote(e.target.value)}
             />
           </Section>
         )}
 
         <div className="flex flex-wrap items-end gap-2">
-          {language === "ZH" && !locked && !canConfirmReceivedZh && (
+          {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && (
             <Field label="Send to">
-              <select value={assignedToId} onChange={(e) => setAssignedToId(e.target.value)}>
+              <select value={editor.assignedToId} onChange={(e) => editor.setAssignedToId(e.target.value)}>
                 {recipients.map((recipient) => <option key={recipient.id} value={recipient.id}>{recipient.displayName}</option>)}
               </select>
             </Field>
           )}
-          {!locked && !canConfirmReceivedZh && <button className="btn-primary">{language === "EN" ? "Save" : "Save Draft"}</button>}
-          {language === "ZH" && !locked && !canConfirmReceivedZh && <button type="button" className="btn-secondary" onClick={submit}>Send to Recipient</button>}
-          {canConfirmReceivedZh && (
+          {!editor.locked && !editor.canConfirmReceivedZh && <button className="btn-primary">{language === "EN" ? "Save" : "Save Draft"}</button>}
+          {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && <button type="button" className="btn-secondary" onClick={editor.submit}>Send to Recipient</button>}
+          {editor.canConfirmReceivedZh && (
             <>
-              <button type="button" className="btn-primary" disabled={confirming || rejecting} onClick={confirmReceivedPi}>
-                {confirming ? "Confirming..." : "Confirm"}
+              <button type="button" className="btn-primary" disabled={editor.confirming || editor.rejecting} onClick={editor.confirmReceivedPi}>
+                {editor.confirming ? "Confirming..." : "Confirm"}
               </button>
-              <button type="button" className="btn-danger" disabled={confirming || rejecting} onClick={rejectReview}>
-                {rejecting ? "Rejecting..." : "Reject"}
+              <button type="button" className="btn-danger" disabled={editor.confirming || editor.rejecting} onClick={editor.rejectReview}>
+                {editor.rejecting ? "Rejecting..." : "Reject"}
               </button>
             </>
           )}
-          {current && (language === "EN" || (language === "ZH" && user?.role === "ADMIN" && current.status === "APPROVED")) && (
-            <button type="button" className="btn-secondary" disabled={exporting} onClick={downloadExcel}>
-              {exporting ? "Generating..." : "Download Excel"}
+          {editor.current && (language === "EN" || (language === "ZH" && user?.role === "ADMIN" && editor.current.status === "APPROVED")) && (
+            <button type="button" className="btn-secondary" disabled={editor.exporting} onClick={editor.downloadExcel}>
+              {editor.exporting ? "Generating..." : "Download Excel"}
             </button>
           )}
         </div>
-        {exportError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{exportError}</div>}
+        {editor.exportError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.exportError}</div>}
       </form>
 
       {optionEditor && (
@@ -575,22 +377,5 @@ async function loadModelRule(productId: string, language: Language): Promise<Mod
     return rule.enabled ? rule : null;
   } catch {
     return null;
-  }
-}
-
-async function withTimeout<T>(task: () => Promise<T>, ms: number): Promise<T> {
-  let timeout: number | undefined;
-  try {
-    return await Promise.race([
-      task(),
-      new Promise<never>((_, reject) => {
-        timeout = window.setTimeout(
-          () => reject(new Error("Excel download took too long. Please refresh the page and try again.")),
-          ms
-        );
-      })
-    ]);
-  } finally {
-    if (timeout !== undefined) window.clearTimeout(timeout);
   }
 }

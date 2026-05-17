@@ -64,3 +64,15 @@ export function computePiDiff(canonical: PiSnapshot, edited: PiSnapshot): PiDiff
   if (empty) return null;
   return { header, items: { added, removed, modified } };
 }
+
+// Editor-dirty check used by the unsaved-changes guard. When no PI is loaded
+// (a brand-new draft), the editor is dirty if the customer field has been
+// typed into or any line item has been added. Otherwise it falls back to a
+// structural diff against the loaded snapshot.
+export function isPiDirty(canonical: PiSnapshot | null, edits: PiSnapshot): boolean {
+  if (!canonical) {
+    const customer = String(edits.header?.customerCompany ?? "").trim();
+    return Boolean(customer) || edits.items.length > 0;
+  }
+  return computePiDiff(canonical, edits) !== null;
+}
