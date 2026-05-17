@@ -94,3 +94,8 @@ export const piReviewEvents = sqliteTable("piReviewEvents", {
   note: text("note"),
   createdAt: text("createdAt").notNull()
 });
+
+export const piNumberSequences = sqliteTable("piNumberSequences", {
+  date: text("date").primaryKey(),
+  lastSeq: integer("lastSeq").notNull()
+});
