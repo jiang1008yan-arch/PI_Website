@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Clock3 } from "lucide-react";
 import { api } from "../api/client";
 import { EmptyState, PageHero, Section } from "../components/Form";
+import { parsePiItems } from "../pi/piItemCodec";
 
 const EXCEL_DOWNLOAD_TIMEOUT_MS = 45000;
 
@@ -16,7 +17,7 @@ export function ReviewPage() {
 
   async function open(id: string) {
     const res = await api.get(`/pi/${id}`);
-    setDetail(res.data);
+    setDetail({ ...res.data, items: parsePiItems(res.data.items) });
   }
 
   async function approve() {
@@ -85,7 +86,7 @@ export function ReviewPage() {
       <div className="space-y-2">
         {detail.items.map((it: any) => <div key={it.id} className="rounded-lg border border-[#e5edf9] bg-[#f8fbff] p-3 text-sm">
           <div className="font-medium">{it.nameZh} - {it.code} - Qty {it.quantity} - Price {it.unitPrice}</div>
-          <div className="mt-2 grid grid-cols-3 gap-2">{JSON.parse(it.fieldValues || "[]").map((f: any, idx: number) => <span key={idx}>{f.label}: {f.value}</span>)}</div>
+          <div className="mt-2 grid grid-cols-3 gap-2">{it.fieldValues.map((f: any, idx: number) => <span key={idx}>{f.label}: {f.value}</span>)}</div>
         </div>)}
       </div>
       <div className="space-y-2">

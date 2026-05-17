@@ -7,7 +7,7 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **PI** (Proforma Invoice) — the central document. Each PI is one of two **languages**: `EN` or `ZH`. EN PIs are customer-facing; ZH PIs flow through review and translation before the equivalent customer document is exported.
 - **Product** — catalog entry with bilingual names, per-language **dynamic fields**, and per-language Excel **sub-templates**.
 - **Product field** — a label/type/options definition attached to a product for one language. Drives the line-item field set on a PI.
-- **Line item** — one product on one PI, carrying quantity, unit price, discount, and a `fieldValues` array (product-field values + hidden `__`-prefixed meta fields like `__currency`).
+- **Line item** — one product on one PI, carrying quantity, unit price, discount, and a `fieldValues` array (product-field values + hidden `__`-prefixed meta fields like `__currency`). The wire format ships `fieldValues` as a JSON string; [`web/src/pi/piItemCodec.ts`](web/src/pi/piItemCodec.ts) is the sole parse seam on the client.
 - **Sender profile** — singleton (id=1) holding the company's default sender details for EN PIs.
 - **Excel template** — per-language workbook used to render approved PIs.
 
