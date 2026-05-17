@@ -68,6 +68,7 @@ export const pi = sqliteTable("pi", {
   deliveryDate: text("deliveryDate"),
   rejectionNote: text("rejectionNote"),
   assignedToId: text("assignedToId"),
+  submittedSnapshot: text("submittedSnapshot"),
   createdById: text("createdById").notNull(),
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
@@ -89,7 +90,7 @@ export const piReviewEvents = sqliteTable("piReviewEvents", {
   id: text("id").primaryKey(),
   piId: text("piId").notNull(),
   actorId: text("actorId").notNull(),
-  action: text("action", { enum: ["SUBMITTED", "APPROVED", "APPROVED_WITH_EDITS", "REJECTED"] }).notNull(),
+  action: text("action", { enum: ["SUBMITTED", "APPROVED", "REJECTED"] }).notNull(),
   note: text("note"),
   createdAt: text("createdAt").notNull()
 });

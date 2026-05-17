@@ -83,6 +83,7 @@ export type Pi = {
   otherRequirements?: string;
   rejectionNote?: string;
   assignedToId?: string | null;
+  submittedSnapshot?: string | null;
   createdById?: string;
   createdAt?: string;
   updatedAt?: string;
