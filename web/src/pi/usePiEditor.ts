@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { Language, Pi, PiItem, User } from "../types";
 import { getMeta } from "./fieldValues";
 import { isConfirmedReceivedPi, piDisplayName } from "./labels";
-import { computePiDiff, isPiDirty, type PiSnapshot } from "./piDiff";
+import { isPiDirty, type PiSnapshot } from "./piDiff";
 import { parsePiItems } from "./piItemCodec";
 import { parseField } from "../products/productFields";
 
@@ -178,12 +178,13 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setExportError("");
     setConfirming(true);
     try {
-      const diff = computePiDiff(canonical, snapshot());
-      const payload = diff
+      // Edits flow as `{pi, items}`. Approval with no edits sends `{}` — the
+      // server picks APPROVED either way and the "was it edited" question is
+      // answered by comparing pi.submittedSnapshot to the live row.
+      const payload = isDirty
         ? {
             pi: { ...header, customerCompany: header.customerCompany || "Chinese PI", language },
-            items,
-            diff
+            items
           }
         : {};
       await api.post(`/pi/${current.id}/approve`, payload);
@@ -205,11 +206,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setExportError("");
     setRejecting(true);
     try {
-      const diff = computePiDiff(canonical, snapshot());
-      await api.post(`/pi/${current.id}/reject`, {
-        note: rejectNote.trim(),
-        suggestedChanges: diff ?? undefined
-      });
+      await api.post(`/pi/${current.id}/reject`, { note: rejectNote.trim() });
       clearState();
       await reload();
     } catch (err: any) {

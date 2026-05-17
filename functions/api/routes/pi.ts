@@ -14,6 +14,15 @@ import {
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
 import type { Language } from "../../lib/types";
+import {
+  EDITABLE_HEADER_COLUMN_SET,
+  planApprove,
+  planDelete,
+  planReject,
+  planSubmit,
+  planSubmitForReview,
+  runTransition
+} from "../../lib/piWorkflow";
 import { admin, body, createApp } from "./_shared";
 import type { Context } from "hono";
 
@@ -28,6 +37,10 @@ type PiRowFull = PiRow & Record<string, any>;
 
 async function loadPi(c: Context): Promise<PiRowFull | null> {
   return await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", c.req.param("id"));
+}
+
+async function loadPiItems(db: D1Database, piId: string) {
+  return await all(db, "SELECT * FROM piItems WHERE piId=? ORDER BY sortOrder", piId);
 }
 
 piRoutes.get("/pi/review-queue", async (c) => {
@@ -61,7 +74,7 @@ piRoutes.delete("/pi/:id", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canDeletePi(c.get("user"), row));
   if (denied) return denied;
-  await deletePi(c.env.DB, row.id);
+  await runTransition(c.env.DB, row.id, planDelete(row), c.get("user").id);
   return c.json({ ok: true });
 });
 
@@ -94,14 +107,13 @@ piRoutes.post("/pi", async (c) => {
   if (duplicate) return c.json({ error: "PI No. already exists" }, 400);
   await c.env.DB.prepare(
     `INSERT INTO pi (id, language, piNo, seq, status, date, customerCompany, customerContact, customerEmail, customerPhone, customerCountry, customerAddress, validUntil, incoterm, shipmentMode, paymentTerm, productionOrderNo, customerSource, customerType, deliveryDate, senderCorp, senderAddress, senderFrom, senderPhone, senderEmail, otherRequirements, createdById)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       piId,
       language,
       piNo,
       seq,
-      d.status ?? "DRAFT",
       date,
       d.customerCompany || "Draft Customer",
       d.customerContact ?? "",
@@ -139,7 +151,9 @@ piRoutes.patch("/pi/:id", async (c) => {
   const piNo = String(d.piNo ?? row.piNo).trim() || row.piNo;
   const duplicate = await first(c.env.DB, "SELECT id FROM pi WHERE piNo=? AND id<>?", piNo, row.id);
   if (duplicate) return c.json({ error: "PI No. already exists" }, 400);
-  await updatePiHeader(c.env.DB, row, { ...d, piNo });
+  // PATCH only touches header columns. status, rejectionNote, assignedToId,
+  // submittedSnapshot are workflow-owned and silently ignored here.
+  await updatePiHeader(c.env.DB, row.id, { ...d, piNo });
   await replaceItems(c.env.DB, row.id, d.items ?? []);
   return c.json({ ok: true });
 });
@@ -149,7 +163,7 @@ piRoutes.post("/pi/:id/submit", async (c) => {
   if (!row) return c.json({ error: "English PI not found" }, 404);
   const denied = deny(c, canSubmitPi(c.get("user"), row));
   if (denied) return denied;
-  await c.env.DB.prepare("UPDATE pi SET status='SUBMITTED', updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(row.id).run();
+  await runTransition(c.env.DB, row.id, planSubmit(row), c.get("user").id);
   return c.json({ ok: true });
 });
 
@@ -159,16 +173,13 @@ piRoutes.post("/pi/:id/submit-for-review", async (c) => {
   if (!row) return c.json({ error: "Chinese PI not found" }, 404);
   const denied = deny(c, canSubmitForReview(c.get("user"), row));
   if (denied) return denied;
-  await c.env.DB.batch([
-    c.env.DB
-      .prepare(
-        "UPDATE pi SET status='PENDING_REVIEW', assignedToId=?, rejectionNote=NULL, updatedAt=CURRENT_TIMESTAMP WHERE id=?"
-      )
-      .bind(d.assignedToId ?? null, row.id),
-    c.env.DB
-      .prepare("INSERT INTO piReviewEvents (id, piId, actorId, action) VALUES (?, ?, ?, 'SUBMITTED')")
-      .bind(id("evt"), row.id, c.get("user").id)
-  ]);
+  const items = await loadPiItems(c.env.DB, row.id);
+  await runTransition(
+    c.env.DB,
+    row.id,
+    planSubmitForReview(row, items, { assignedToId: d.assignedToId ?? null }),
+    c.get("user").id
+  );
   return c.json({ ok: true });
 });
 
@@ -178,20 +189,12 @@ piRoutes.post("/pi/:id/approve", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canApprovePi(c.get("user"), row));
   if (denied) return denied;
-
-  const hasEdits = Boolean(d.pi || d.items || d.diff);
-  if (hasEdits && d.pi) await updatePiHeader(c.env.DB, row, d.pi);
-  if (hasEdits && Array.isArray(d.items)) await replaceItems(c.env.DB, row.id, d.items);
-
-  const action = hasEdits ? "APPROVED_WITH_EDITS" : "APPROVED";
-  const note = hasEdits && d.diff ? JSON.stringify(d.diff) : null;
-
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE pi SET status='APPROVED', updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(row.id),
-    c.env.DB
-      .prepare("INSERT INTO piReviewEvents (id, piId, actorId, action, note) VALUES (?, ?, ?, ?, ?)")
-      .bind(id("evt"), row.id, c.get("user").id, action, note)
-  ]);
+  await runTransition(
+    c.env.DB,
+    row.id,
+    planApprove(row, { pi: d.pi, items: d.items }),
+    c.get("user").id
+  );
   return c.json({ ok: true });
 });
 
@@ -201,21 +204,7 @@ piRoutes.post("/pi/:id/reject", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canRejectPi(c.get("user"), row));
   if (denied) return denied;
-
-  // The PI row is NOT updated on reject — suggestedChanges are advisory and
-  // travel only in the event note for the submitter to consult.
-  const note = d.suggestedChanges
-    ? JSON.stringify({ note: d.note ?? "", suggestedChanges: d.suggestedChanges })
-    : d.note ?? "";
-
-  await c.env.DB.batch([
-    c.env.DB
-      .prepare("UPDATE pi SET status='REJECTED', rejectionNote=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
-      .bind(d.note ?? "", row.id),
-    c.env.DB
-      .prepare("INSERT INTO piReviewEvents (id, piId, actorId, action, note) VALUES (?, ?, ?, 'REJECTED', ?)")
-      .bind(id("evt"), row.id, c.get("user").id, note)
-  ]);
+  await runTransition(c.env.DB, row.id, planReject(row, { note: d.note }), c.get("user").id);
   return c.json({ ok: true });
 });
 
@@ -248,39 +237,18 @@ piRoutes.get("/pi/:id/export-bundle", async (c) => {
   });
 });
 
-async function updatePiHeader(db: D1Database, row: PiRow & Record<string, any>, d: any) {
-  const piNo = String(d.piNo ?? row.piNo).trim() || row.piNo;
-  await db
-    .prepare(
-      `UPDATE pi SET piNo=?, status=?, date=?, customerCompany=?, customerContact=?, customerEmail=?, customerPhone=?, customerCountry=?, customerAddress=?, validUntil=?, incoterm=?, shipmentMode=?, paymentTerm=?, productionOrderNo=?, customerSource=?, customerType=?, deliveryDate=?, senderCorp=?, senderAddress=?, senderFrom=?, senderPhone=?, senderEmail=?, otherRequirements=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?`
-    )
-    .bind(
-      piNo,
-      d.status ?? row.status,
-      d.date ?? row.date,
-      d.customerCompany ?? row.customerCompany,
-      d.customerContact ?? "",
-      d.customerEmail ?? "",
-      d.customerPhone ?? "",
-      d.customerCountry ?? "",
-      d.customerAddress ?? "",
-      d.validUntil ?? "",
-      d.incoterm ?? "",
-      d.shipmentMode ?? "",
-      d.paymentTerm ?? "",
-      d.productionOrderNo ?? "",
-      d.customerSource ?? "",
-      d.customerType ?? "",
-      d.deliveryDate ?? "",
-      d.senderCorp ?? "",
-      d.senderAddress ?? "",
-      d.senderFrom ?? "",
-      d.senderPhone ?? "",
-      d.senderEmail ?? "",
-      d.otherRequirements ?? "",
-      row.id
-    )
-    .run();
+async function updatePiHeader(db: D1Database, piId: string, d: Record<string, unknown>) {
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  for (const key of Object.keys(d)) {
+    if (!EDITABLE_HEADER_COLUMN_SET.has(key)) continue;
+    sets.push(`${key}=?`);
+    binds.push(d[key] ?? "");
+  }
+  if (!sets.length) return;
+  sets.push("updatedAt=CURRENT_TIMESTAMP");
+  binds.push(piId);
+  await db.prepare(`UPDATE pi SET ${sets.join(", ")} WHERE id=?`).bind(...binds).run();
 }
 
 function itemInsertStatements(db: D1Database, piId: string, items: any[]) {
@@ -319,13 +287,7 @@ async function purgeExpiredDrafts(db: D1Database) {
     db,
     "SELECT id FROM pi WHERE status='DRAFT' AND updatedAt < datetime('now', '-3 days')"
   );
-  for (const row of rows) await deletePi(db, row.id);
-}
-
-async function deletePi(db: D1Database, piId: string) {
-  await db.batch([
-    db.prepare("DELETE FROM piItems WHERE piId=?").bind(piId),
-    db.prepare("DELETE FROM piReviewEvents WHERE piId=?").bind(piId),
-    db.prepare("DELETE FROM pi WHERE id=?").bind(piId)
-  ]);
+  for (const row of rows) {
+    await runTransition(db, row.id, planDelete({ id: row.id } as PiRow), "");
+  }
 }

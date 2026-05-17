@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Calendar, FileCheck2, FileText, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
@@ -26,6 +26,7 @@ import {
 } from "../pi/modelRule";
 import { parseField } from "../products/productFields";
 import { usePiEditor } from "../pi/usePiEditor";
+import { parsePiItems } from "../pi/piItemCodec";
 
 const today = new Date().toISOString().slice(0, 10);
 type OptionKey = "customerSource" | "customerType" | "incoterm" | "shipmentMode";
@@ -51,6 +52,28 @@ export function PiPage({ language }: { language: Language }) {
     senderDefaults,
     setSearchParams
   });
+
+  // Submitted-snapshot view. After approve-with-edits the live PI row diverges
+  // from what was originally submitted; the snapshot column lets the submitter
+  // (and the admin, for traceability) toggle back to the original submission.
+  const [snapshotView, setSnapshotView] = useState<"approved" | "submitted">("approved");
+  const parsedSnapshot = useMemo(() => {
+    const raw = editor.current?.submittedSnapshot;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { header: Record<string, any>; items: any[] };
+      return { header: parsed.header ?? {}, items: parsePiItems(parsed.items ?? []) };
+    } catch {
+      return null;
+    }
+  }, [editor.current?.submittedSnapshot]);
+  const canViewSnapshot = Boolean(
+    language === "ZH" && editor.current?.status === "APPROVED" && parsedSnapshot
+  );
+  useEffect(() => { setSnapshotView("approved"); }, [editor.current?.id]);
+  const showingSnapshot = canViewSnapshot && snapshotView === "submitted";
+  const viewHeader = showingSnapshot ? parsedSnapshot!.header : editor.header;
+  const viewItems = showingSnapshot ? parsedSnapshot!.items : editor.items;
 
   const loadProducts = async () => {
     const res = await api.get("/products");
@@ -170,23 +193,42 @@ export function PiPage({ language }: { language: Language }) {
           {editor.current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.current.rejectionNote}</div>}
           {editor.locked && editor.current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {editor.current.status}.</div>}
           {editor.canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
+          {canViewSnapshot && (
+            <div className="flex items-center gap-2 rounded-lg bg-[#f1f5fc] p-2 text-sm">
+              <span className="text-[#63749b]">View:</span>
+              <button
+                type="button"
+                className={snapshotView === "approved" ? "btn-primary px-3 py-1 text-xs" : "btn-secondary px-3 py-1 text-xs"}
+                onClick={() => setSnapshotView("approved")}
+              >
+                Approved version
+              </button>
+              <button
+                type="button"
+                className={snapshotView === "submitted" ? "btn-primary px-3 py-1 text-xs" : "btn-secondary px-3 py-1 text-xs"}
+                onClick={() => setSnapshotView("submitted")}
+              >
+                What I submitted
+              </button>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {language === "EN" ? (
               <>
-                <Field label="PI No."><input disabled={editor.locked} value={editor.header.piNo ?? ""} onChange={(e) => setHeaderField({ piNo: e.target.value })} required /></Field>
-                <DateField label="Date" disabled={editor.locked} value={editor.header.date ?? today} onChange={(value) => setHeaderField({ date: value })} />
-                <DateField label="Valid Until" disabled={editor.locked} value={editor.header.validUntil ?? ""} onChange={(value) => setHeaderField({ validUntil: value })} />
-                <SelectWithManage label="Incoterm" value={editor.header.incoterm ?? ""} options={incotermOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ incoterm: value })} onManage={() => setOptionEditor("incoterm")} />
-                <SelectWithManage label="Shipment Mode" value={editor.header.shipmentMode ?? ""} options={shipmentOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ shipmentMode: value })} onManage={() => setOptionEditor("shipmentMode")} />
-                <Field label="Payment Term"><input disabled={editor.locked} value={editor.header.paymentTerm ?? ""} onChange={(e) => setHeaderField({ paymentTerm: e.target.value })} /></Field>
+                <Field label="PI No."><input disabled={editor.locked} value={viewHeader.piNo ?? ""} onChange={(e) => setHeaderField({ piNo: e.target.value })} required /></Field>
+                <DateField label="Date" disabled={editor.locked} value={viewHeader.date ?? today} onChange={(value) => setHeaderField({ date: value })} />
+                <DateField label="Valid Until" disabled={editor.locked} value={viewHeader.validUntil ?? ""} onChange={(value) => setHeaderField({ validUntil: value })} />
+                <SelectWithManage label="Incoterm" value={viewHeader.incoterm ?? ""} options={incotermOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ incoterm: value })} onManage={() => setOptionEditor("incoterm")} />
+                <SelectWithManage label="Shipment Mode" value={viewHeader.shipmentMode ?? ""} options={shipmentOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ shipmentMode: value })} onManage={() => setOptionEditor("shipmentMode")} />
+                <Field label="Payment Term"><input disabled={editor.locked} value={viewHeader.paymentTerm ?? ""} onChange={(e) => setHeaderField({ paymentTerm: e.target.value })} /></Field>
               </>
             ) : (
               <>
-                <Field label="Production Order No."><input disabled={editor.locked} value={editor.header.productionOrderNo ?? ""} onChange={(e) => setHeaderField({ productionOrderNo: e.target.value })} /></Field>
-                <SelectWithManage label="Customer Source" value={editor.header.customerSource ?? ""} options={sourceOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerSource: value })} onManage={() => setOptionEditor("customerSource")} />
-                <SelectWithManage label="Customer Type" value={editor.header.customerType ?? ""} options={typeOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerType: value })} onManage={() => setOptionEditor("customerType")} />
-                <DateField label="Delivery Date" disabled={editor.locked} value={editor.header.deliveryDate ?? ""} onChange={(value) => setHeaderField({ deliveryDate: value })} />
+                <Field label="Production Order No."><input disabled={editor.locked} value={viewHeader.productionOrderNo ?? ""} onChange={(e) => setHeaderField({ productionOrderNo: e.target.value })} /></Field>
+                <SelectWithManage label="Customer Source" value={viewHeader.customerSource ?? ""} options={sourceOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerSource: value })} onManage={() => setOptionEditor("customerSource")} />
+                <SelectWithManage label="Customer Type" value={viewHeader.customerType ?? ""} options={typeOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerType: value })} onManage={() => setOptionEditor("customerType")} />
+                <DateField label="Delivery Date" disabled={editor.locked} value={viewHeader.deliveryDate ?? ""} onChange={(value) => setHeaderField({ deliveryDate: value })} />
               </>
             )}
           </div>
@@ -197,7 +239,7 @@ export function PiPage({ language }: { language: Language }) {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["senderCorp", "senderAddress", "senderFrom", "senderPhone", "senderEmail"].map((k) => (
                 <Field key={k} label={labelForSender(k)}>
-                  <input disabled={editor.locked} value={editor.header[k] ?? ""} onChange={(e) => setHeaderField({ [k]: e.target.value })} />
+                  <input disabled={editor.locked} value={viewHeader[k] ?? ""} onChange={(e) => setHeaderField({ [k]: e.target.value })} />
                 </Field>
               ))}
             </div>
@@ -209,7 +251,7 @@ export function PiPage({ language }: { language: Language }) {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["customerCompany", "customerContact", "customerEmail", "customerPhone", "customerAddress"].map((k) => (
                 <Field key={k} label={labelForCustomer(k)}>
-                  <input disabled={editor.locked} value={editor.header[k] ?? ""} onChange={(e) => setHeaderField({ [k]: e.target.value })} required={k === "customerCompany"} />
+                  <input disabled={editor.locked} value={viewHeader[k] ?? ""} onChange={(e) => setHeaderField({ [k]: e.target.value })} required={k === "customerCompany"} />
                 </Field>
               ))}
             </div>
@@ -226,14 +268,14 @@ export function PiPage({ language }: { language: Language }) {
           )}
         >
           <div className="space-y-3">
-            {editor.items.length === 0 && !editor.locked && <EmptyState title="Add the first product" description="Pick a product above and the page will open the fields needed for this invoice." />}
-            {editor.items.map((it, idx) => (
+            {viewItems.length === 0 && !editor.locked && <EmptyState title="Add the first product" description="Pick a product above and the page will open the fields needed for this invoice." />}
+            {viewItems.map((it, idx) => (
               <LineItem
                 key={idx}
                 item={it}
                 product={products.find((p) => p.id === it.productId)}
                 language={language}
-                locked={editor.locked}
+                locked={editor.locked || showingSnapshot}
                 onChange={(next) => editor.setItems(editor.items.map((x, i) => i === idx ? next : x))}
                 onRemove={() => editor.setItems(editor.items.filter((_, i) => i !== idx))}
               />
@@ -247,7 +289,7 @@ export function PiPage({ language }: { language: Language }) {
             className="w-full"
             disabled={editor.locked}
             rows={5}
-            value={editor.header.otherRequirements ?? ""}
+            value={viewHeader.otherRequirements ?? ""}
             onChange={(e) => setHeaderField({ otherRequirements: e.target.value })}
           />
         </Section>
