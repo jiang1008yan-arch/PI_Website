@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { api } from "../api/client";
+import { api, getStoredToken } from "../api/client";
 import { parsePiItems } from "../pi/piItemCodec";
 import {
   currencyFormat,
@@ -397,7 +397,7 @@ async function loadWorkbook(url: string, label: string) {
   let res: Response;
   try {
     res = await fetch(absolute, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("token") ?? ""}` },
+      headers: { Authorization: `Bearer ${getStoredToken() ?? ""}` },
       signal: controller.signal
     });
   } catch (err: any) {

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field } from "../components/Form";
@@ -7,18 +7,7 @@ export function LoginPage() {
   const { user, login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [allowInput, setAllowInput] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    setUsername("");
-    setPassword("");
-    const timer = window.setTimeout(() => {
-      setUsername("");
-      setPassword("");
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, []);
 
   if (user) return <Navigate to="/" replace />;
 
@@ -47,9 +36,7 @@ export function LoginPage() {
           <input
             name="pi-portal-username"
             autoComplete="off"
-            readOnly={!allowInput}
             value={username}
-            onFocus={() => setAllowInput(true)}
             onChange={(e) => setUsername(e.target.value)}
           />
         </Field>
@@ -57,10 +44,8 @@ export function LoginPage() {
           <input
             name="pi-portal-password"
             autoComplete="new-password"
-            readOnly={!allowInput}
             type="password"
             value={password}
-            onFocus={() => setAllowInput(true)}
             onChange={(e) => setPassword(e.target.value)}
           />
         </Field>
