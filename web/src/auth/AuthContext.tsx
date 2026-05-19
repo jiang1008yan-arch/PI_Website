@@ -1,5 +1,5 @@
-import { createContext, useContext, useMemo, useState } from "react";
-import { api } from "../api/client";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { api, AUTH_LOGOUT_EVENT, clearStoredSession, getStoredUser, storeSession } from "../api/client";
 import type { User } from "../types";
 
 type AuthContextValue = {
@@ -11,22 +11,23 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => {
-    const raw = localStorage.getItem("user");
-    return raw ? JSON.parse(raw) : null;
-  });
+  const [user, setUser] = useState<User | null>(() => getStoredUser());
+
+  useEffect(() => {
+    const syncLogout = () => setUser(null);
+    window.addEventListener(AUTH_LOGOUT_EVENT, syncLogout);
+    return () => window.removeEventListener(AUTH_LOGOUT_EVENT, syncLogout);
+  }, []);
 
   const value = useMemo<AuthContextValue>(() => ({
     user,
     async login(username, password) {
       const res = await api.post("/auth/login", { username, password });
-      localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user", JSON.stringify(res.data.user));
+      storeSession(res.data.token, res.data.user);
       setUser(res.data.user);
     },
     logout() {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
+      clearStoredSession();
       setUser(null);
     }
   }), [user]);
