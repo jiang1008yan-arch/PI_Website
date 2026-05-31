@@ -8,6 +8,7 @@ import { isConfirmedReceivedPi, piDisplayName } from "./labels";
 import { isPiDirty, type PiSnapshot } from "./piDiff";
 import { parsePiItems } from "./piItemCodec";
 import { parseField } from "../products/productFields";
+import { canSyncLinkedZh, type LinkedZhState } from "./linkedZhSync";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const EXCEL_DOWNLOAD_TIMEOUT_MS = 45000;
@@ -35,10 +36,10 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [rejecting, setRejecting] = useState(false);
   const [exportError, setExportError] = useState("");
   // 需求1 — linked ZH draft state for the EN editor (resync target + notices).
-  const [linkedZh, setLinkedZh] = useState<{ id: string; piNo: string; status: string } | null>(null);
+  const [linkedZh, setLinkedZh] = useState<LinkedZhState>(null);
   const [linkedNotice, setLinkedNotice] = useState("");
   const [resyncing, setResyncing] = useState(false);
-  const canResyncZh = Boolean(linkedZh && (linkedZh.status === "DRAFT" || linkedZh.status === "REJECTED"));
+  const canResyncZh = canSyncLinkedZh(language, current, linkedZh);
 
   const canEditPendingZh = Boolean(user && current && isReviewerEditMode(user.role, language, current.status));
   const canConfirmReceivedZh = canEditPendingZh;
@@ -193,8 +194,12 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setLinkedNotice("");
     setResyncing(true);
     try {
-      await api.post(`/pi/${current.id}/resync-zh`);
-      setLinkedNotice("Chinese draft re-synced from the latest English data.");
+      const res = await api.post(`/pi/${current.id}/resync-zh`);
+      setLinkedNotice(
+        res.data.created
+          ? `Linked Chinese draft ${res.data.linkedZhPiNo} created. Open the Chinese workspace to review it.`
+          : "Chinese draft re-synced from the latest English data."
+      );
       await open(current.id);
     } catch (err: any) {
       setExportError(err.response?.data?.error ?? err.message ?? "Re-sync failed.");

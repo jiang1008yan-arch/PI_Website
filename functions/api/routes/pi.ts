@@ -208,6 +208,16 @@ async function createLinkedZhDraft(c: Context, enPiId: string, date: string, d: 
   return { id: zhId, piNo };
 }
 
+function linkedDraftInputFromPi(row: PiRowFull, items: any[]) {
+  return {
+    ...row,
+    items: items.map((it) => ({
+      ...it,
+      fieldValues: parseFieldValues(it.fieldValues)
+    }))
+  };
+}
+
 piRoutes.patch("/pi/:id", async (c) => {
   const d = await body<any>(c);
   const row = await loadPi(c);
@@ -283,7 +293,11 @@ piRoutes.post("/pi/:id/resync-zh", async (c) => {
   if (row.language !== "EN") return c.json({ error: "English PI not found" }, 404);
   const denied = deny(c, canPatchPi(c.get("user"), row));
   if (denied) return denied;
-  if (!row.linkedPiId) return c.json({ error: "No linked Chinese draft" }, 400);
+  const enItems = await loadPiItems(c.env.DB, row.id);
+  if (!row.linkedPiId) {
+    const linked = await createLinkedZhDraft(c, row.id, row.date, linkedDraftInputFromPi(row, enItems));
+    return c.json({ ok: true, created: true, linkedZhId: linked.id, linkedZhPiNo: linked.piNo });
+  }
   const zh = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId);
   if (!zh) return c.json({ error: "Linked Chinese draft not found" }, 404);
   if (zh.status !== "DRAFT" && zh.status !== "REJECTED") {
@@ -292,14 +306,14 @@ piRoutes.post("/pi/:id/resync-zh", async (c) => {
   // Rebuild only the product rows from the latest EN data; the ZH-specific
   // header fields (production order no, customer source/type, delivery date)
   // the salesperson filled in are left untouched.
-  const enItems = (await loadPiItems(c.env.DB, row.id)).map((it: any) => ({
+  const parsedEnItems = enItems.map((it: any) => ({
     ...it,
     fieldValues: parseFieldValues(it.fieldValues)
   }));
-  const zhItems = await buildLinkedZhItems(c.env.DB, enItems);
+  const zhItems = await buildLinkedZhItems(c.env.DB, parsedEnItems);
   await replaceItems(c.env.DB, zh.id, zhItems);
   await c.env.DB.prepare("UPDATE pi SET updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(zh.id).run();
-  return c.json({ ok: true, linkedZhId: zh.id });
+  return c.json({ ok: true, created: false, linkedZhId: zh.id, linkedZhPiNo: zh.piNo });
 });
 
 piRoutes.get("/pi/:id/export-bundle", async (c) => {

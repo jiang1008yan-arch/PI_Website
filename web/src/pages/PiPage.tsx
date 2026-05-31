@@ -28,6 +28,7 @@ import { parseField } from "../products/productFields";
 import { usePiEditor } from "../pi/usePiEditor";
 import { parsePiItems } from "../pi/piItemCodec";
 import { setMetaValue } from "../pi/lineItemFields";
+import { shouldShowLinkedZhSyncButton } from "../pi/linkedZhSync";
 
 const today = new Date().toISOString().slice(0, 10);
 type OptionKey = "customerSource" | "customerType" | "incoterm" | "shipmentMode";
@@ -387,15 +388,21 @@ export function PiPage({ language }: { language: Language }) {
               {editor.exporting ? "Generating..." : "Download Excel"}
             </button>
           )}
-          {language === "EN" && editor.current && editor.linkedZh && (
+          {shouldShowLinkedZhSyncButton(language, editor.current) && (
             <button
               type="button"
               className="btn-secondary"
               disabled={editor.resyncing || !editor.canResyncZh}
-              title={editor.canResyncZh ? "Rebuild the linked Chinese draft from the latest English data" : "Chinese draft is locked (already submitted or approved)"}
+              title={
+                editor.canResyncZh
+                  ? editor.linkedZh
+                    ? "Rebuild the linked Chinese draft from the latest English data"
+                    : "Create a linked Chinese draft from this English PI"
+                  : "Chinese draft is locked (already submitted or approved)"
+              }
               onClick={editor.resyncZh}
             >
-              {editor.resyncing ? "Re-syncing..." : "Re-sync to Chinese draft"}
+              {editor.resyncing ? "Syncing..." : editor.linkedZh ? "Re-sync to Chinese draft" : "Sync to Chinese draft"}
             </button>
           )}
         </div>
