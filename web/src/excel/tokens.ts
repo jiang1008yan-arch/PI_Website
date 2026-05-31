@@ -1,4 +1,6 @@
 import type ExcelJS from "exceljs";
+import { getMetaValue, visibleFieldValues } from "../pi/lineItemFields";
+import { generatedModelFor } from "../pi/modelRule";
 
 export type FieldRecord = { label: string; value: string };
 
@@ -14,7 +16,7 @@ export type ExportBundle = {
 export function tokensFor(data: ExportBundle): Record<string, string> {
   const pi = data.pi;
   const sender = data.sender ?? {};
-  const totalCurrency = data.items[0] ? meta(data.items[0].fieldValues, "currency") || "USD" : "USD";
+  const totalCurrency = data.items[0] ? getMetaValue(data.items[0].fieldValues, "currency") || "USD" : "USD";
   const totalAmount = data.items.reduce((sum, item) => {
     return sum + Number(item.quantity) * Number(item.unitPrice) * (1 - Number(item.discountPct) / 100);
   }, 0);
@@ -48,15 +50,13 @@ export function tokensFor(data: ExportBundle): Record<string, string> {
 
 export function fieldTokens(fields: FieldRecord[]) {
   return Object.fromEntries(
-    fields
-      .filter((f) => !f.label.startsWith("__"))
-      .map((f) => [`\${field.${f.label}}`, f.value ?? ""])
+    visibleFieldValues(fields).map((f) => [`\${field.${f.label}}`, f.value ?? ""])
   );
 }
 
 export function itemTokens(item: any, fields: FieldRecord[]) {
-  const currency = meta(fields, "currency") || "USD";
-  const generated = generatedModel(fields);
+  const currency = getMetaValue(fields, "currency") || "USD";
+  const generated = generatedModelFor(item);
   const model = fieldValue(fields, ["Model", "型号"]) || generated.model;
   const amount = Number(item.quantity) * Number(item.unitPrice) * (1 - Number(item.discountPct) / 100);
   return {
@@ -75,49 +75,9 @@ export function itemTokens(item: any, fields: FieldRecord[]) {
   };
 }
 
-export function meta(fields: FieldRecord[], key: string) {
-  return fields.find((field) => field.label === `__${key}`)?.value ?? "";
-}
-
 export function fieldValue(fields: FieldRecord[], labels: string[]) {
   const wanted = labels.map((label) => label.toLowerCase());
   return fields.find((field) => wanted.includes(String(field.label).trim().toLowerCase()))?.value ?? "";
-}
-
-export function generatedModel(fields: FieldRecord[]) {
-  const raw = meta(fields, "modelRule");
-  if (!raw) return { model: "", modelLines: "", meaning: "" };
-  try {
-    const rule = JSON.parse(raw);
-    const segments = Array.isArray(rule.segments) ? rule.segments : [];
-    const selected = segments.map((segment: any) => {
-      const key = `modelSegment:${segment.id || segment.label}`;
-      const code = meta(fields, key);
-      const option = Array.isArray(segment.options)
-        ? segment.options.find((item: any) => String(item.code) === code)
-        : null;
-      return { code, description: option?.description ?? "" };
-    });
-    const codes = selected.map((entry: any) => entry.code).join("");
-    const prefix = meta(fields, "modelPrefix") || String(rule.prefixOptions?.[0]?.code ?? rule.prefix ?? "");
-    const separator = String(rule.separator ?? "-");
-    return {
-      model: [prefix, codes].filter(Boolean).join(separator),
-      modelLines: [
-        prefix,
-        prefix && codes ? separator : "",
-        ...selected.map((entry: any) => entry.code).filter(Boolean)
-      ]
-        .filter((line) => line !== "")
-        .join("\n"),
-      meaning: selected
-        .filter((entry: any) => entry.code)
-        .map((entry: any) => `${entry.code}: ${entry.description}`)
-        .join("\n")
-    };
-  } catch {
-    return { model: "", modelLines: "", meaning: "" };
-  }
 }
 
 export function currencyFormat(currency: string) {

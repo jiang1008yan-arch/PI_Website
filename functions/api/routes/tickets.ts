@@ -1,5 +1,12 @@
 import { all, first, id } from "../../lib/db";
-import { canChangeStatus, canWriteNote, isValidTransition, type TicketStatus } from "../../lib/ticketAccess";
+import {
+  canAssignSalesSide,
+  canAssignServiceSide,
+  canChangeStatus,
+  canWriteNote,
+  isValidTransition,
+  type TicketStatus
+} from "../../lib/ticketAccess";
 import { validateAnswers, type TicketFieldRow } from "../../lib/ticketAnswers";
 import { nextTicketNumber } from "../../lib/ticketNumber";
 import { body, createApp } from "./_shared";
@@ -167,11 +174,11 @@ ticketRoutes.patch("/tickets/:id/assign", async (c) => {
   if (!ticket) return c.json({ error: "Not found" }, 404);
   const sets: string[] = [];
   const binds: unknown[] = [];
-  if (d.assignedSalesId !== undefined && (user.role === "ADMIN" || user.role === "SALES")) {
+  if (d.assignedSalesId !== undefined && canAssignSalesSide(user)) {
     sets.push("assignedSalesId=?");
     binds.push(d.assignedSalesId || null);
   }
-  if (d.assignedServiceId !== undefined && (user.role === "ADMIN" || user.role === "SERVICE")) {
+  if (d.assignedServiceId !== undefined && canAssignServiceSide(user)) {
     sets.push("assignedServiceId=?");
     binds.push(d.assignedServiceId || null);
   }

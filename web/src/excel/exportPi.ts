@@ -1,14 +1,14 @@
 import ExcelJS from "exceljs";
 import { api, getStoredToken } from "../api/client";
 import { parsePiItems } from "../pi/piItemCodec";
+import { getMetaValue } from "../pi/lineItemFields";
+import { generatedModelFor } from "../pi/modelRule";
 import {
   currencyFormat,
   ExportBundle,
   fieldTokens,
   fieldValue,
-  generatedModel,
   itemTokens,
-  meta,
   replaceTokens,
   replaceValue,
   tokensFor
@@ -94,8 +94,8 @@ async function writeLineItem(
 
   const template = snapshotRow(sheet.getRow(rowNo), Math.max(sheet.columnCount, 7));
   const values = { ...fieldTokens(fields), ...itemTokens(item, fields) };
-  const currency = meta(fields, "currency") || "USD";
-  const generated = generatedModel(fields);
+  const currency = getMetaValue(fields, "currency") || "USD";
+  const generated = generatedModelFor(item);
   const productCode =
     fieldValue(fields, ["Product Code", "Code", "产品代码"]) || generated.model || item.code;
   const model = fieldValue(fields, ["Model", "型号"]) || generated.model;
@@ -368,7 +368,7 @@ function writeTotalsRow(
 ) {
   const totalRow = rowNo + 1;
   const firstFields = data.items[0]?.fieldValues ?? [];
-  const currency = meta(firstFields, "currency") || "USD";
+  const currency = getMetaValue(firstFields, "currency") || "USD";
   sheet.getCell(`F${totalRow}`).value = "Total";
   sheet.getCell(`G${totalRow}`).value = {
     formula: amountRows.length ? `SUM(${amountRows.map((r) => `G${r}`).join(",")})` : "0"

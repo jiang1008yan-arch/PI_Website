@@ -1,4 +1,9 @@
 import type { AppUser, Language } from "./types";
+import {
+  canDeletePiByStatus,
+  canEditPiDirectly,
+  isReviewerEditMode as reviewerEditModeByStatus
+} from "../../shared/piCapabilities";
 
 export type PiStatus = "DRAFT" | "SUBMITTED" | "PENDING_REVIEW" | "APPROVED" | "REJECTED";
 
@@ -27,7 +32,7 @@ export function canReadPi(user: AppUser, pi: PiRow): Verdict {
 }
 
 export function canDeletePi(user: AppUser, pi: PiRow): Verdict {
-  if (pi.language === "ZH" && pi.status !== "DRAFT") {
+  if (!canDeletePiByStatus(pi.language, pi.status)) {
     return deny("Only draft Chinese PIs can be deleted", 400);
   }
   if (!ownerOrAdmin(user, pi)) return deny("Forbidden", 403);
@@ -36,8 +41,7 @@ export function canDeletePi(user: AppUser, pi: PiRow): Verdict {
 
 export function canPatchPi(user: AppUser, pi: PiRow): Verdict {
   if (!ownerOrAdmin(user, pi)) return deny("Forbidden", 403);
-  if (pi.language === "EN") return ALLOW;
-  if (pi.status === "DRAFT" || pi.status === "REJECTED") return ALLOW;
+  if (canEditPiDirectly(pi.language, pi.status)) return ALLOW;
   return deny("PI is locked", 400);
 }
 
@@ -76,5 +80,5 @@ export function canExportPi(user: AppUser, pi: PiRow): Verdict {
 }
 
 export function isReviewerEditMode(user: AppUser, pi: PiRow): boolean {
-  return isAdmin(user) && pi.language === "ZH" && pi.status === "PENDING_REVIEW";
+  return reviewerEditModeByStatus(user.role, pi.language, pi.status);
 }

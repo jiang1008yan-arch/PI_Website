@@ -14,6 +14,7 @@ import {
   type Verdict
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
+import { piItemInsertStatements, piItemReplaceStatements } from "../../lib/piItems";
 import type { Language } from "../../lib/types";
 import {
   EDITABLE_HEADER_COLUMN_SET,
@@ -344,35 +345,13 @@ async function updatePiHeader(db: D1Database, piId: string, d: Record<string, un
   await db.prepare(`UPDATE pi SET ${sets.join(", ")} WHERE id=?`).bind(...binds).run();
 }
 
-function itemInsertStatements(db: D1Database, piId: string, items: any[]) {
-  if (!items.length) return [];
-  const insert = db.prepare(
-    "INSERT INTO piItems (id, piId, productId, quantity, unitPrice, discountPct, fieldValues, sortOrder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  );
-  return items.map((it: any, i: number) =>
-    insert.bind(
-      id("itm"),
-      piId,
-      it.productId,
-      Number(it.quantity ?? 1),
-      Number(it.unitPrice ?? 0),
-      Number(it.discountPct ?? 0),
-      JSON.stringify(it.fieldValues ?? []),
-      i
-    )
-  );
-}
-
 async function saveItems(db: D1Database, piId: string, items: any[]) {
-  const stmts = itemInsertStatements(db, piId, items);
+  const stmts = piItemInsertStatements(db, piId, items);
   if (stmts.length) await db.batch(stmts);
 }
 
 async function replaceItems(db: D1Database, piId: string, items: any[]) {
-  await db.batch([
-    db.prepare("DELETE FROM piItems WHERE piId=?").bind(piId),
-    ...itemInsertStatements(db, piId, items)
-  ]);
+  await db.batch(piItemReplaceStatements(db, piId, items));
 }
 
 async function purgeExpiredDrafts(db: D1Database) {
