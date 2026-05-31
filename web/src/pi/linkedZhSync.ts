@@ -6,6 +6,10 @@ export function shouldShowLinkedZhSyncButton(language: Language, current: Pi | n
   return language === "EN" && current != null;
 }
 
+export function shouldShowSaveAndSyncButton(language: Language, current: Pi | null): boolean {
+  return language === "EN" && current == null;
+}
+
 export function canSyncLinkedZh(language: Language, current: Pi | null, linkedZh: LinkedZhState): boolean {
   return Boolean(
     shouldShowLinkedZhSyncButton(language, current) &&

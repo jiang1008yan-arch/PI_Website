@@ -18,6 +18,7 @@ export function LineItem({
   product,
   language,
   locked,
+  tone = 0,
   onChange,
   onRemove
 }: {
@@ -25,6 +26,7 @@ export function LineItem({
   product?: Product;
   language: Language;
   locked: boolean;
+  tone?: number;
   onChange: (it: PiItem) => void;
   onRemove: () => void;
 }) {
@@ -39,9 +41,11 @@ export function LineItem({
     language === "ZH" && !rule
       ? fields.filter((field) => !isModelField(field) && !isOrderMeaningField(field))
       : fields;
+  const style = productTone(tone);
 
   return (
-    <div className="relative rounded-lg border border-[#e3ebf8] bg-white/60 p-3 shadow-[0_10px_24px_rgba(8,36,107,0.045)]">
+    <div className={`relative rounded-lg border p-3 shadow-[0_10px_24px_rgba(8,36,107,0.045)] ${style.card}`}>
+      <div className={`absolute left-0 top-0 h-full w-1 rounded-l-lg ${style.rail}`} />
       {!locked && (
         <button
           type="button"
@@ -53,7 +57,7 @@ export function LineItem({
       )}
       <div className="mb-3 pr-20">
         <Field label="Product Name">
-          <div className="rounded-lg bg-white px-3 py-2 text-sm font-medium">
+          <div className={`rounded-lg px-3 py-2 text-sm font-medium ${style.name}`}>
             {productName(product, language)}
           </div>
         </Field>
@@ -107,13 +111,15 @@ export function LineItem({
         )}
       </div>
       {rule && generated && (
-        <ModelBuilder
-          rule={rule}
-          item={item}
-          locked={locked}
-          generated={generated}
-          onChange={(next) => onChange(applyModelRule(next, language))}
-        />
+        <div className={style.model}>
+          <ModelBuilder
+            rule={rule}
+            item={item}
+            locked={locked}
+            generated={generated}
+            onChange={(next) => onChange(applyModelRule(next, language))}
+          />
+        </div>
       )}
       {language === "ZH" ? (
         <div className="mt-3 space-y-3">
@@ -171,6 +177,36 @@ export function LineItem({
       )}
     </div>
   );
+}
+
+function productTone(index: number) {
+  const tones = [
+    {
+      card: "border-[#cfe0ff] bg-[#f7faff]",
+      rail: "bg-[#3b7be8]",
+      name: "bg-white text-[#173b8f]",
+      model: "[&>div]:border-[#cfe0ff] [&>div]:bg-[#eef5ff]"
+    },
+    {
+      card: "border-[#cdebdc] bg-[#f6fcf9]",
+      rail: "bg-[#2c9f6b]",
+      name: "bg-white text-[#176044]",
+      model: "[&>div]:border-[#cdebdc] [&>div]:bg-[#effaf4]"
+    },
+    {
+      card: "border-[#f3d9b8] bg-[#fffaf2]",
+      rail: "bg-[#d88a24]",
+      name: "bg-white text-[#7a4a0c]",
+      model: "[&>div]:border-[#f3d9b8] [&>div]:bg-[#fff4e4]"
+    },
+    {
+      card: "border-[#dfd5f3] bg-[#fbf8ff]",
+      rail: "bg-[#7b61b5]",
+      name: "bg-white text-[#4d3783]",
+      model: "[&>div]:border-[#dfd5f3] [&>div]:bg-[#f5efff]"
+    }
+  ];
+  return tones[index % tones.length];
 }
 
 function FieldValueInput({

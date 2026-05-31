@@ -112,10 +112,18 @@ piRoutes.get("/pi/:id", async (c) => {
     "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY createdAt",
     row.id
   );
-  const linkedPiNo = row.linkedPiId
-    ? (await first<{ piNo: string }>(c.env.DB, "SELECT piNo FROM pi WHERE id=?", row.linkedPiId))?.piNo ?? null
+  const linked = row.linkedPiId
+    ? await first<{ piNo: string; status: string }>(c.env.DB, "SELECT piNo, status FROM pi WHERE id=?", row.linkedPiId)
     : null;
-  return c.json({ pi: { ...row, linkedPiNo }, items, events });
+  return c.json({
+    pi: {
+      ...row,
+      linkedPiNo: linked?.piNo ?? null,
+      linkedPiStatus: linked?.status ?? null
+    },
+    items,
+    events
+  });
 });
 
 piRoutes.post("/pi", async (c) => {

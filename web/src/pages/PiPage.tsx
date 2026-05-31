@@ -28,7 +28,7 @@ import { parseField } from "../products/productFields";
 import { usePiEditor } from "../pi/usePiEditor";
 import { parsePiItems } from "../pi/piItemCodec";
 import { setMetaValue } from "../pi/lineItemFields";
-import { shouldShowLinkedZhSyncButton } from "../pi/linkedZhSync";
+import { shouldShowLinkedZhSyncButton, shouldShowSaveAndSyncButton } from "../pi/linkedZhSync";
 
 const today = new Date().toISOString().slice(0, 10);
 type OptionKey = "customerSource" | "customerType" | "incoterm" | "shipmentMode";
@@ -240,7 +240,7 @@ export function PiPage({ language }: { language: Language }) {
 
       {inEditor && (
       <form onSubmit={editor.save} className="space-y-6">
-        <Section title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`}>
+        <PiEditorSection title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`} tone="blue">
           {editor.current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.current.rejectionNote}</div>}
           {editor.locked && editor.current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {editor.current.status}.</div>}
           {editor.canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
@@ -283,10 +283,10 @@ export function PiPage({ language }: { language: Language }) {
               </>
             )}
           </div>
-        </Section>
+        </PiEditorSection>
 
         {language === "EN" && (
-          <Section title="Sender Information">
+          <PiEditorSection title="Sender Information" tone="green">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["senderCorp", "senderAddress", "senderFrom", "senderPhone", "senderEmail"].map((k) => (
                 <Field key={k} label={labelForSender(k)}>
@@ -294,11 +294,11 @@ export function PiPage({ language }: { language: Language }) {
                 </Field>
               ))}
             </div>
-          </Section>
+          </PiEditorSection>
         )}
 
         {language === "EN" && (
-          <Section title="Customer Information">
+          <PiEditorSection title="Customer Information" tone="amber">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["customerCompany", "customerContact", "customerEmail", "customerPhone", "customerAddress"].map((k) => (
                 <Field key={k} label={labelForCustomer(k)}>
@@ -306,11 +306,12 @@ export function PiPage({ language }: { language: Language }) {
                 </Field>
               ))}
             </div>
-          </Section>
+          </PiEditorSection>
         )}
 
-        <Section
+        <PiEditorSection
           title="Products / Line Items"
+          tone="purple"
           action={!editor.locked && (
             <select onChange={(e) => { addProduct(e.target.value); e.currentTarget.value = ""; }} defaultValue="">
               <option value="" disabled>Add Product</option>
@@ -327,15 +328,16 @@ export function PiPage({ language }: { language: Language }) {
                 product={products.find((p) => p.id === it.productId)}
                 language={language}
                 locked={editor.locked || showingSnapshot}
+                tone={idx}
                 onChange={(next) => editor.setItems(editor.items.map((x, i) => i === idx ? next : x))}
                 onRemove={() => editor.setItems(editor.items.filter((_, i) => i !== idx))}
               />
             ))}
           </div>
           {language === "EN" && <div className="text-right font-semibold">Total: {formatCurrency(editor.total, editor.totalCurrency)}</div>}
-        </Section>
+        </PiEditorSection>
 
-        <Section title="Other Requirements">
+        <PiEditorSection title="Other Requirements" tone="slate">
           <textarea
             className="w-full"
             disabled={editor.locked}
@@ -343,7 +345,7 @@ export function PiPage({ language }: { language: Language }) {
             value={viewHeader.otherRequirements ?? ""}
             onChange={(e) => setHeaderField({ otherRequirements: e.target.value })}
           />
-        </Section>
+        </PiEditorSection>
 
         {editor.events.length > 0 && (
           <Section title="Review History">
@@ -371,7 +373,15 @@ export function PiPage({ language }: { language: Language }) {
               </select>
             </Field>
           )}
-          {!editor.locked && !editor.canConfirmReceivedZh && <button className="btn-primary">{language === "EN" ? "Save" : "Save Draft"}</button>}
+          {!editor.locked && !editor.canConfirmReceivedZh && (
+            <button className="btn-primary" disabled={editor.saving}>
+              {editor.saving
+                ? "Saving..."
+                : shouldShowSaveAndSyncButton(language, editor.current)
+                  ? "Save & Sync to Chinese draft"
+                  : language === "EN" ? "Save" : "Save Draft"}
+            </button>
+          )}
           {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && <button type="button" className="btn-secondary" onClick={editor.submit}>Send to Recipient</button>}
           {editor.canConfirmReceivedZh && (
             <>
@@ -392,7 +402,7 @@ export function PiPage({ language }: { language: Language }) {
             <button
               type="button"
               className="btn-secondary"
-              disabled={editor.resyncing || !editor.canResyncZh}
+              disabled={editor.saving || editor.resyncing || !editor.canResyncZh}
               title={
                 editor.canResyncZh
                   ? editor.linkedZh
@@ -402,7 +412,7 @@ export function PiPage({ language }: { language: Language }) {
               }
               onClick={editor.resyncZh}
             >
-              {editor.resyncing ? "Syncing..." : editor.linkedZh ? "Re-sync to Chinese draft" : "Sync to Chinese draft"}
+              {editor.saving || editor.resyncing ? "Syncing..." : editor.linkedZh ? "Re-sync to Chinese draft" : "Sync to Chinese draft"}
             </button>
           )}
         </div>
@@ -483,6 +493,69 @@ function piListSubtitle(pi: Pi, language: Language) {
 function piSectionTitle(pi: Pi, language: Language) {
   if (language === "EN") return piDisplayName(pi, language);
   return `${piDisplayName(pi, language)} - ${pi.status}`;
+}
+
+type PiEditorTone = "blue" | "green" | "amber" | "purple" | "slate";
+
+function PiEditorSection({
+  title,
+  children,
+  action,
+  tone
+}: {
+  title: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+  tone: PiEditorTone;
+}) {
+  const style = sectionTone(tone);
+  return (
+    <section className={`space-y-4 rounded-lg border p-5 shadow-[0_12px_32px_rgba(8,36,107,0.055)] ${style.card}`}>
+      <div className={`flex flex-wrap items-center justify-between gap-3 border-b pb-4 ${style.border}`}>
+        <div className="flex items-center gap-3">
+          <span className={`h-8 w-1.5 rounded-full ${style.rail}`} />
+          <h2 className={`text-lg font-semibold tracking-tight ${style.title}`}>{title}</h2>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function sectionTone(tone: PiEditorTone) {
+  return {
+    blue: {
+      card: "border-[#cfe0ff] bg-gradient-to-br from-white to-[#f4f8ff]",
+      border: "border-[#dce8ff]",
+      rail: "bg-[#3b7be8]",
+      title: "text-[#123b8f]"
+    },
+    green: {
+      card: "border-[#cdebdc] bg-gradient-to-br from-white to-[#f3fbf7]",
+      border: "border-[#d9efe4]",
+      rail: "bg-[#2c9f6b]",
+      title: "text-[#176044]"
+    },
+    amber: {
+      card: "border-[#f3d9b8] bg-gradient-to-br from-white to-[#fff8ed]",
+      border: "border-[#f6e3c8]",
+      rail: "bg-[#d88a24]",
+      title: "text-[#7a4a0c]"
+    },
+    purple: {
+      card: "border-[#dfd5f3] bg-gradient-to-br from-white to-[#faf7ff]",
+      border: "border-[#e6ddf7]",
+      rail: "bg-[#7b61b5]",
+      title: "text-[#4d3783]"
+    },
+    slate: {
+      card: "border-[#d7e0ee] bg-gradient-to-br from-white to-[#f6f8fc]",
+      border: "border-[#e2e8f2]",
+      rail: "bg-[#63749b]",
+      title: "text-[#263653]"
+    }
+  }[tone];
 }
 
 async function loadModelRule(productId: string, language: Language): Promise<ModelRule | null> {

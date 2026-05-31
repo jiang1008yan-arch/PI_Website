@@ -91,6 +91,7 @@ export type Pi = {
   archivedAt?: string | null;
   linkedPiId?: string | null;
   linkedPiNo?: string | null;
+  linkedPiStatus?: string | null;
 };
 
 export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
