@@ -1,7 +1,9 @@
 import type { Language, Pi, Product } from "../types";
 
 export function piDisplayName(pi: Pi, language: Language) {
-  if (language === "ZH") return pi.productionOrderNo || pi.piNo;
+  // A linked Chinese draft is named after its English PI No. (需求1); standalone
+  // Chinese PIs fall back to their production order number, then their own piNo.
+  if (language === "ZH") return pi.linkedPiNo || pi.productionOrderNo || pi.piNo;
   return pi.piNo;
 }
 

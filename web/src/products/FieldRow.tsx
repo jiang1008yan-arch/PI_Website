@@ -11,7 +11,8 @@ export function FieldRow({
   onMoveUp,
   onMoveDown,
   canMoveUp,
-  canMoveDown
+  canMoveDown,
+  enFields
 }: {
   field: ProductField;
   onSave: (f: ProductField) => void;
@@ -20,6 +21,7 @@ export function FieldRow({
   onMoveDown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  enFields?: { id: string; label: string }[];
 }) {
   const [draft, setDraft] = useState<any>({ ...field, options: field.options ?? [] });
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -28,7 +30,8 @@ export function FieldRow({
   const isText = draft.fieldType === "TEXT";
 
   return (
-    <div className="grid grid-cols-[1.2fr_140px_1fr_170px_auto] gap-3 rounded-lg bg-slate-50 p-3">
+    <div className="space-y-3 rounded-lg bg-slate-50 p-3">
+    <div className="grid grid-cols-[1.2fr_140px_1fr_170px_auto] gap-3">
       <Field label="Field label">
         <input
           value={draft.label}
@@ -90,6 +93,22 @@ export function FieldRow({
           </button>
         )}
       </div>
+      </div>
+      {enFields && (
+        <Field label="Mapped English field (for EN→ZH generation)">
+          <select
+            value={draft.mapKey ?? ""}
+            onChange={(e) => setDraft({ ...draft, mapKey: e.target.value || null })}
+          >
+            <option value="">None</option>
+            {enFields.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
       {optionsOpen && (
         <OptionsModal
           options={draft.options ?? []}

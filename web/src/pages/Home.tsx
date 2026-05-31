@@ -1,5 +1,7 @@
-import { ChevronRight, Clock3, FileCheck2, FileText, Folder, LayoutGrid, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { ChevronRight, ClipboardList, Clock3, FileCheck2, FileText, Folder, LayoutGrid, LifeBuoy, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
 type HomeModule = {
@@ -9,28 +11,58 @@ type HomeModule = {
   Icon: LucideIcon;
   tone: ModuleTone;
   art: "document" | "temple" | "folder" | "stamp" | "blocks" | "people" | "grid" | "shield";
+  badge?: number;
 };
 
 type ModuleTone = "blue" | "green" | "cyan" | "violet" | "orange" | "indigo" | "teal" | "emerald";
 
+type HomeSection = { id: string; title: string; subtitle: string; modules: HomeModule[] };
+
 export function HomePage() {
   const { user } = useAuth();
-  const adminModules: HomeModule[] = [
-    { to: "/reviews", title: "Pending Reviews", desc: "Approve Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp" },
-    { to: "/products", title: "Product Management", desc: "Products, fields and sub-templates", Icon: Package, tone: "indigo", art: "blocks" },
-    { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
-    { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" }
-  ];
-  const modules: HomeModule[] = [
+  const role = user?.role;
+  const [newTickets, setNewTickets] = useState(0);
+
+  // Surface a red dot on the After-Sales card when there are unhandled (NEW) tickets.
+  useEffect(() => {
+    api
+      .get("/tickets/stats")
+      .then((res) => setNewTickets(res.data.byStatus?.find((r: { status: string }) => r.status === "NEW")?.n ?? 0))
+      .catch(() => setNewTickets(0));
+  }, []);
+
+  const piModules: HomeModule[] = [
     { to: "/pi/en", title: "English PI", desc: "Create English proforma invoices", Icon: FileText, tone: "blue", art: "document" },
     { to: "/pi/zh", title: "Chinese PI", desc: "Create Chinese PIs for admin approval", Icon: FileCheck2, tone: "green", art: "temple" },
     { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "View approved received Chinese PIs", Icon: ShieldCheck, tone: "cyan", art: "shield" },
-    { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" },
-    ...(user?.role === "ADMIN" ? adminModules : [])
+    { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
+  ];
+  const ticketModules: HomeModule[] = [
+    { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests, links and statistics", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
+    // The questionnaire shapes the after-sales form; ADMIN and SERVICE can configure it.
+    ...(role === "ADMIN" || role === "SERVICE"
+      ? [{ to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Configure the customer submission form", Icon: ClipboardList, tone: "violet", art: "grid" } as HomeModule]
+      : [])
+  ];
+  const adminModules: HomeModule[] = [
+    { to: "/reviews", title: "Pending Reviews", desc: "Approve Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp" },
+    { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
+    { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
+    { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" }
   ];
 
+  // SERVICE agents only handle after-sales tickets; everything else is hidden.
+  const sections: HomeSection[] = [];
+  if (role !== "SERVICE") {
+    sections.push({ id: "pi", title: "Proforma Invoices", subtitle: "Create, review and export PIs", modules: piModules });
+  }
+  sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
+  if (role === "ADMIN") {
+    sections.push({ id: "admin", title: "Administration", subtitle: "Products, reviews and access control", modules: adminModules });
+  }
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       <div className="relative overflow-hidden rounded-lg border border-[#dbe6fb] bg-gradient-to-br from-white via-[#f9fbff] to-[#dbe7ff] px-8 py-12 shadow-[0_24px_70px_rgba(8,36,107,0.09)]">
         <div className="absolute -right-10 -top-20 h-72 w-72 rounded-full bg-[#adc4fb]/45 blur-sm" />
         <div className="absolute right-10 top-8 hidden h-48 w-36 rotate-6 rounded-[2rem] border border-white/70 bg-white/60 shadow-2xl shadow-[#6f8fd9]/25 backdrop-blur-md md:block" />
@@ -45,29 +77,50 @@ export function HomePage() {
           <div className="mt-6 h-1 w-14 rounded-full bg-primary" />
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-        {modules.map(({ to, title, desc, Icon, tone, art }) => {
-          const theme = moduleThemes[tone];
-          return (
-          <Link key={title} to={to} className={`group relative min-h-36 overflow-hidden rounded-lg border bg-gradient-to-br p-5 shadow-[0_18px_42px_rgba(8,36,107,0.07)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(8,36,107,0.13)] ${theme.card}`}>
-            <div className="relative z-10 flex max-w-[68%] items-start gap-4">
-              <span className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-white shadow-lg ${theme.icon}`}>
-                <Icon size={24} strokeWidth={1.9} />
-              </span>
-              <span className="min-w-0">
-                <span className="block font-semibold text-[#07183f]">{title}</span>
-                <span className="mt-1 block text-sm leading-5 text-[#63749b]">{desc}</span>
-              </span>
+      {sections.map((section) => (
+        <section key={section.id} className="space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="shrink-0">
+              <h2 className="text-lg font-semibold tracking-tight text-[#07183f]">{section.title}</h2>
+              <p className="text-sm text-[#8595b6]">{section.subtitle}</p>
             </div>
-            <DecorativeArt art={art} className={theme.art} />
-            <span className="absolute bottom-4 right-4 z-10 grid h-9 w-9 place-items-center rounded-full bg-white/75 text-[#294477] shadow-[0_8px_20px_rgba(8,36,107,0.09)] ring-1 ring-white/80 transition group-hover:translate-x-1 group-hover:text-primary">
-              <ChevronRight size={18} />
-            </span>
-          </Link>
-        );
-        })}
-      </div>
+            <div className="h-px flex-1 bg-gradient-to-r from-[#cdddf8] to-transparent" />
+          </div>
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            {section.modules.map((module) => (
+              <ModuleCard key={module.title} module={module} />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
+  );
+}
+
+function ModuleCard({ module }: { module: HomeModule }) {
+  const { to, title, desc, Icon, tone, art, badge } = module;
+  const theme = moduleThemes[tone];
+  return (
+    <Link to={to} className={`group relative min-h-36 overflow-hidden rounded-lg border bg-gradient-to-br p-5 shadow-[0_18px_42px_rgba(8,36,107,0.07)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(8,36,107,0.13)] ${theme.card}`}>
+      <div className="relative z-10 flex max-w-[68%] items-start gap-4">
+        <span className={`relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-white shadow-lg ${theme.icon}`}>
+          <Icon size={24} strokeWidth={1.9} />
+          {badge ? (
+            <span className="absolute -right-1.5 -top-1.5 grid h-6 min-w-[1.5rem] place-items-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white shadow-md ring-2 ring-white">
+              {badge > 99 ? "99+" : badge}
+            </span>
+          ) : null}
+        </span>
+        <span className="min-w-0">
+          <span className="block font-semibold text-[#07183f]">{title}</span>
+          <span className="mt-1 block text-sm leading-5 text-[#63749b]">{desc}</span>
+        </span>
+      </div>
+      <DecorativeArt art={art} className={theme.art} />
+      <span className="absolute bottom-4 right-4 z-10 grid h-9 w-9 place-items-center rounded-full bg-white/75 text-[#294477] shadow-[0_8px_20px_rgba(8,36,107,0.09)] ring-1 ring-white/80 transition group-hover:translate-x-1 group-hover:text-primary">
+        <ChevronRight size={18} />
+      </span>
+    </Link>
   );
 }
 

@@ -8,7 +8,8 @@ export const blankField = (language: Language): ProductField => ({
   fieldType: "TEXT",
   options: [],
   defaultValue: "",
-  sortOrder: 0
+  sortOrder: 0,
+  mapKey: null
 });
 
 export function parseField(field: any): ProductField {
@@ -26,7 +27,8 @@ export function normalizeField(field: any, language: Language): ProductField {
       ? field.options.map((item: unknown) => String(item).trim()).filter(Boolean)
       : [],
     defaultValue: field.defaultValue ?? "",
-    sortOrder: Number(field.sortOrder ?? 0)
+    sortOrder: Number(field.sortOrder ?? 0),
+    mapKey: language === "ZH" && field.mapKey ? String(field.mapKey) : null
   };
 }
 
@@ -52,11 +54,13 @@ export function sameField(a: any, b: any) {
         : []
     );
   const normalizeType = (value: unknown) => (value === "DROPDOWN" ? "DROPDOWN" : "TEXT");
+  const normalizeMapKey = (value: unknown) => (value ? String(value) : "");
   return (
     String(a.label ?? "").trim() === String(b.label ?? "").trim() &&
     normalizeType(a.fieldType) === normalizeType(b.fieldType) &&
     String(a.defaultValue ?? "") === String(b.defaultValue ?? "") &&
-    normalizeOptions(a.options) === normalizeOptions(b.options)
+    normalizeOptions(a.options) === normalizeOptions(b.options) &&
+    normalizeMapKey(a.mapKey) === normalizeMapKey(b.mapKey)
   );
 }
 

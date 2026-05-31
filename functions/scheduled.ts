@@ -63,5 +63,12 @@ export const onScheduled: PagesFunction<Env> = async ({ env }) => {
         AND archivedAt IS NOT NULL
     `)
   ]);
+
+  // 需求4 (方案A) — integrationOutbox consumer is intentionally not implemented
+  // this phase. When the company backend contract is ready, read PENDING rows
+  // here, POST to env.INTERNAL_PUSH_URL with env.INTERNAL_PUSH_KEY, and mark
+  // each row SENT / FAILED (incrementing attempts + lastError). See lib/outbox.ts.
+  // TODO: drain integrationOutbox.
+
   return new Response("ok");
 };

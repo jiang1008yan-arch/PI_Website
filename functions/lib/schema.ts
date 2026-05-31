@@ -5,7 +5,7 @@ export const users = sqliteTable("users", {
   username: text("username").notNull().unique(),
   passwordHash: text("passwordHash").notNull(),
   displayName: text("displayName").notNull(),
-  role: text("role", { enum: ["ADMIN", "USER"] }).notNull(),
+  role: text("role", { enum: ["ADMIN", "SALES", "SERVICE"] }).notNull(),
   createdAt: text("createdAt").notNull()
 });
 
@@ -42,7 +42,8 @@ export const productFields = sqliteTable("productFields", {
   fieldType: text("fieldType", { enum: ["TEXT", "DROPDOWN"] }).notNull(),
   options: text("options"),
   defaultValue: text("defaultValue"),
-  sortOrder: integer("sortOrder").notNull()
+  sortOrder: integer("sortOrder").notNull(),
+  mapKey: text("mapKey")
 });
 
 export const pi = sqliteTable("pi", {
@@ -72,7 +73,8 @@ export const pi = sqliteTable("pi", {
   createdById: text("createdById").notNull(),
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
-  archivedAt: text("archivedAt")
+  archivedAt: text("archivedAt"),
+  linkedPiId: text("linkedPiId")
 });
 
 export const piItems = sqliteTable("piItems", {
@@ -98,4 +100,74 @@ export const piReviewEvents = sqliteTable("piReviewEvents", {
 export const piNumberSequences = sqliteTable("piNumberSequences", {
   date: text("date").primaryKey(),
   lastSeq: integer("lastSeq").notNull()
+});
+
+export const tickets = sqliteTable("tickets", {
+  id: text("id").primaryKey(),
+  ticketNo: text("ticketNo").notNull().unique(),
+  seq: integer("seq").notNull(),
+  status: text("status", { enum: ["NEW", "IN_PROGRESS", "RESOLVED", "CLOSED"] }).notNull(),
+  customerCompany: text("customerCompany").notNull(),
+  orderNo: text("orderNo").notNull(),
+  contactName: text("contactName").notNull(),
+  contactInfo: text("contactInfo").notNull(),
+  productId: text("productId"),
+  answers: text("answers").notNull(),
+  assignedSalesId: text("assignedSalesId"),
+  assignedServiceId: text("assignedServiceId"),
+  linkId: text("linkId"),
+  createdAt: text("createdAt").notNull(),
+  updatedAt: text("updatedAt").notNull()
+});
+
+export const ticketUpdates = sqliteTable("ticketUpdates", {
+  id: text("id").primaryKey(),
+  ticketId: text("ticketId").notNull(),
+  actorId: text("actorId").notNull(),
+  kind: text("kind", { enum: ["STATUS", "NOTE"] }).notNull(),
+  statusFrom: text("statusFrom"),
+  statusTo: text("statusTo"),
+  note: text("note"),
+  createdAt: text("createdAt").notNull()
+});
+
+export const ticketLinks = sqliteTable("ticketLinks", {
+  id: text("id").primaryKey(),
+  token: text("token").notNull().unique(),
+  customerCompany: text("customerCompany").notNull(),
+  orderNo: text("orderNo").notNull(),
+  createdById: text("createdById").notNull(),
+  createdByRole: text("createdByRole").notNull(),
+  assignedSalesId: text("assignedSalesId"),
+  assignedServiceId: text("assignedServiceId"),
+  expiresAt: text("expiresAt").notNull(),
+  revokedAt: text("revokedAt"),
+  createdAt: text("createdAt").notNull()
+});
+
+export const ticketFields = sqliteTable("ticketFields", {
+  id: text("id").primaryKey(),
+  label: text("label").notNull(),
+  fieldType: text("fieldType", { enum: ["TEXT", "DROPDOWN"] }).notNull(),
+  options: text("options"),
+  required: integer("required").notNull(),
+  sortOrder: integer("sortOrder").notNull()
+});
+
+export const ticketNumberSequences = sqliteTable("ticketNumberSequences", {
+  date: text("date").primaryKey(),
+  lastSeq: integer("lastSeq").notNull()
+});
+
+// 需求4 reservation only — see functions/lib/outbox.ts. Nothing writes here yet.
+export const integrationOutbox = sqliteTable("integrationOutbox", {
+  id: text("id").primaryKey(),
+  eventType: text("eventType", { enum: ["TICKET", "PI_ZH"] }).notNull(),
+  refId: text("refId").notNull(),
+  payload: text("payload").notNull(),
+  status: text("status", { enum: ["PENDING", "SENT", "FAILED"] }).notNull(),
+  attempts: integer("attempts").notNull(),
+  createdAt: text("createdAt").notNull(),
+  sentAt: text("sentAt"),
+  lastError: text("lastError")
 });

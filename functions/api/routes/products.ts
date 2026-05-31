@@ -4,6 +4,11 @@ import { registerCrud } from "./crud";
 
 export const productRoutes = createApp();
 
+// 需求1: mapKey only applies to ZH fields (links to an EN field for one-time
+// line-item seeding). EN fields and blank values normalize to null.
+const mapKeyOf = (language: string, raw: unknown): string | null =>
+  language === "ZH" && typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+
 registerCrud(productRoutes, "categories", ["code", "nameEn", "nameZh"]);
 registerCrud(productRoutes, "products", ["code", "nameEn", "nameZh", "categoryId", "status"]);
 
@@ -23,18 +28,20 @@ productRoutes.post("/products/:id/fields", async (c) => {
   admin(c);
   const d = await body<any>(c);
   const fieldId = id("fld");
+  const language = d.language === "ZH" ? "ZH" : "EN";
   await c.env.DB.prepare(
-    "INSERT INTO productFields (id, productId, language, label, fieldType, options, defaultValue, sortOrder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO productFields (id, productId, language, label, fieldType, options, defaultValue, sortOrder, mapKey) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
   )
     .bind(
       fieldId,
       c.req.param("id"),
-      d.language === "ZH" ? "ZH" : "EN",
+      language,
       d.label,
       d.fieldType === "DROPDOWN" ? "DROPDOWN" : "TEXT",
       JSON.stringify(d.options ?? []),
       d.defaultValue ?? "",
-      Number(d.sortOrder ?? 0)
+      Number(d.sortOrder ?? 0),
+      mapKeyOf(language, d.mapKey)
     )
     .run();
   return c.json({ id: fieldId });
@@ -47,21 +54,23 @@ productRoutes.post("/products/:id/fields-bulk", async (c) => {
   if (!fields.length) return c.json({ ids: [] });
   const productId = c.req.param("id");
   const insert = c.env.DB.prepare(
-    "INSERT INTO productFields (id, productId, language, label, fieldType, options, defaultValue, sortOrder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO productFields (id, productId, language, label, fieldType, options, defaultValue, sortOrder, mapKey) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   const ids: string[] = [];
   const stmts = fields.map((f) => {
     const fieldId = id("fld");
     ids.push(fieldId);
+    const language = f.language === "ZH" ? "ZH" : "EN";
     return insert.bind(
       fieldId,
       productId,
-      f.language === "ZH" ? "ZH" : "EN",
+      language,
       f.label,
       f.fieldType === "DROPDOWN" ? "DROPDOWN" : "TEXT",
       JSON.stringify(f.options ?? []),
       f.defaultValue ?? "",
-      Number(f.sortOrder ?? 0)
+      Number(f.sortOrder ?? 0),
+      mapKeyOf(language, f.mapKey)
     );
   });
   await c.env.DB.batch(stmts);
@@ -71,8 +80,9 @@ productRoutes.post("/products/:id/fields-bulk", async (c) => {
 productRoutes.patch("/products/:productId/fields/:id", async (c) => {
   admin(c);
   const d = await body<any>(c);
+  const language = d.language === "ZH" ? "ZH" : "EN";
   await c.env.DB.prepare(
-    "UPDATE productFields SET label=?, fieldType=?, options=?, defaultValue=?, sortOrder=? WHERE id=?"
+    "UPDATE productFields SET label=?, fieldType=?, options=?, defaultValue=?, sortOrder=?, mapKey=? WHERE id=?"
   )
     .bind(
       d.label,
@@ -80,6 +90,7 @@ productRoutes.patch("/products/:productId/fields/:id", async (c) => {
       JSON.stringify(d.options ?? []),
       d.defaultValue ?? "",
       Number(d.sortOrder ?? 0),
+      mapKeyOf(language, d.mapKey),
       c.req.param("id")
     )
     .run();
