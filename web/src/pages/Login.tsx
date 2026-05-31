@@ -27,9 +27,7 @@ export function LoginPage() {
       <div className="absolute left-10 top-16 h-20 w-20 rotate-45 rounded-lg bg-gradient-to-br from-[#dbe6fb] to-[#8ca5e2] opacity-70 shadow-xl shadow-primary/10" />
       <form onSubmit={submit} className="card relative w-full max-w-md space-y-5 p-8" autoComplete="off">
         <div>
-          <div className="mb-5 grid h-12 w-12 place-items-center rounded-full bg-primary text-lg font-bold text-white shadow-lg shadow-primary/20">PI</div>
           <h1 className="text-3xl font-semibold tracking-tight text-[#07183f]">Welcome back</h1>
-          <p className="mt-2 text-sm text-[#63749b]">Sign in to create and review PIs.</p>
         </div>
         <ErrorText message={error} />
         <Field label="Username">

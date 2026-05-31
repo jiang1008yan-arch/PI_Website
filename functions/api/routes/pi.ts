@@ -1,5 +1,6 @@
 import { all, first, id } from "../../lib/db";
 import { nextPiNumber } from "../../lib/piNumber";
+import { buildLinkedZhItems } from "../../lib/piLink";
 import {
   canApprovePi,
   canDeletePi,
@@ -43,6 +44,16 @@ async function loadPiItems(db: D1Database, piId: string) {
   return await all(db, "SELECT * FROM piItems WHERE piId=? ORDER BY sortOrder", piId);
 }
 
+function parseFieldValues(raw: string | null | undefined): any[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 piRoutes.get("/pi/review-queue", async (c) => {
   admin(c);
   return c.json(
@@ -58,14 +69,21 @@ piRoutes.get("/pi", async (c) => {
   await purgeExpiredDrafts(c.env.DB);
   const user = c.get("user");
   const includeArchived = c.req.query("includeArchived") === "1" && user.role === "ADMIN";
-  const where = [includeArchived ? "1=1" : "archivedAt IS NULL"];
+  const where = [includeArchived ? "1=1" : "pi.archivedAt IS NULL"];
   const params: unknown[] = [];
   if (user.role !== "ADMIN") {
-    where.push("createdById = ?");
+    where.push("pi.createdById = ?");
     params.push(user.id);
   }
+  // Expose the linked counterpart's PI No so a linked ZH draft can display the
+  // English PI No as its name (需求1).
   return c.json(
-    await all(c.env.DB, `SELECT * FROM pi WHERE ${where.join(" AND ")} ORDER BY updatedAt DESC`, ...params)
+    await all(
+      c.env.DB,
+      `SELECT pi.*, linked.piNo AS linkedPiNo FROM pi LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+       WHERE ${where.join(" AND ")} ORDER BY pi.updatedAt DESC`,
+      ...params
+    )
   );
 });
 
@@ -93,7 +111,10 @@ piRoutes.get("/pi/:id", async (c) => {
     "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY createdAt",
     row.id
   );
-  return c.json({ pi: row, items, events });
+  const linkedPiNo = row.linkedPiId
+    ? (await first<{ piNo: string }>(c.env.DB, "SELECT piNo FROM pi WHERE id=?", row.linkedPiId))?.piNo ?? null
+    : null;
+  return c.json({ pi: { ...row, linkedPiNo }, items, events });
 });
 
 piRoutes.post("/pi", async (c) => {
@@ -139,8 +160,52 @@ piRoutes.post("/pi", async (c) => {
     )
     .run();
   await saveItems(c.env.DB, piId, d.items ?? []);
+
+  // 需求1 — first creation of a standalone EN PI also spins up a linked ZH
+  // DRAFT (one-time generation, not continuous sync). Idempotent: an EN PI that
+  // already carries a linkedPiId is not re-linked.
+  if (language === "EN" && !d.linkedPiId) {
+    const linked = await createLinkedZhDraft(c, piId, date, d);
+    return c.json({ id: piId, piNo, linkedZhId: linked.id, linkedZhPiNo: linked.piNo });
+  }
+
   return c.json({ id: piId, piNo });
 });
+
+const SHARED_HEADER_COLUMNS = [
+  "customerCompany",
+  "customerContact",
+  "customerEmail",
+  "customerPhone",
+  "customerCountry",
+  "customerAddress",
+  "validUntil",
+  "incoterm",
+  "shipmentMode",
+  "paymentTerm",
+  "senderCorp",
+  "senderAddress",
+  "senderFrom",
+  "senderPhone",
+  "senderEmail",
+  "otherRequirements"
+] as const;
+
+async function createLinkedZhDraft(c: Context, enPiId: string, date: string, d: any) {
+  const zhId = id("pi");
+  const { seq, piNo } = await nextPiNumber(c.env, "ZH", date);
+  const shared = SHARED_HEADER_COLUMNS.map((col) => (col === "customerCompany" ? d[col] || "Draft Customer" : d[col] ?? ""));
+  await c.env.DB.prepare(
+    `INSERT INTO pi (id, language, piNo, seq, status, date, ${SHARED_HEADER_COLUMNS.join(", ")}, createdById, linkedPiId)
+    VALUES (?, 'ZH', ?, ?, 'DRAFT', ?, ${SHARED_HEADER_COLUMNS.map(() => "?").join(", ")}, ?, ?)`
+  )
+    .bind(zhId, piNo, seq, date, ...shared, c.get("user").id, enPiId)
+    .run();
+  const zhItems = await buildLinkedZhItems(c.env.DB, d.items ?? []);
+  await saveItems(c.env.DB, zhId, zhItems);
+  await c.env.DB.prepare("UPDATE pi SET linkedPiId=? WHERE id=?").bind(zhId, enPiId).run();
+  return { id: zhId, piNo };
+}
 
 piRoutes.patch("/pi/:id", async (c) => {
   const d = await body<any>(c);
@@ -195,6 +260,9 @@ piRoutes.post("/pi/:id/approve", async (c) => {
     planApprove(row, { pi: d.pi, items: d.items }),
     c.get("user").id
   );
+  // 需求4 (方案A) hook point — when the company backend contract is ready,
+  // enqueue the approved ZH PI here: enqueueOutbox(c.env.DB, "PI_ZH", row.id, {...}).
+  // TODO: enqueueOutbox(...).
   return c.json({ ok: true });
 });
 
@@ -206,6 +274,31 @@ piRoutes.post("/pi/:id/reject", async (c) => {
   if (denied) return denied;
   await runTransition(c.env.DB, row.id, planReject(row, { note: d.note }), c.get("user").id);
   return c.json({ ok: true });
+});
+
+piRoutes.post("/pi/:id/resync-zh", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "English PI not found" }, 404);
+  if (row.language !== "EN") return c.json({ error: "English PI not found" }, 404);
+  const denied = deny(c, canPatchPi(c.get("user"), row));
+  if (denied) return denied;
+  if (!row.linkedPiId) return c.json({ error: "No linked Chinese draft" }, 400);
+  const zh = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId);
+  if (!zh) return c.json({ error: "Linked Chinese draft not found" }, 404);
+  if (zh.status !== "DRAFT" && zh.status !== "REJECTED") {
+    return c.json({ error: "Chinese draft is locked (already submitted or approved)" }, 400);
+  }
+  // Rebuild only the product rows from the latest EN data; the ZH-specific
+  // header fields (production order no, customer source/type, delivery date)
+  // the salesperson filled in are left untouched.
+  const enItems = (await loadPiItems(c.env.DB, row.id)).map((it: any) => ({
+    ...it,
+    fieldValues: parseFieldValues(it.fieldValues)
+  }));
+  const zhItems = await buildLinkedZhItems(c.env.DB, enItems);
+  await replaceItems(c.env.DB, zh.id, zhItems);
+  await c.env.DB.prepare("UPDATE pi SET updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(zh.id).run();
+  return c.json({ ok: true, linkedZhId: zh.id });
 });
 
 piRoutes.get("/pi/:id/export-bundle", async (c) => {

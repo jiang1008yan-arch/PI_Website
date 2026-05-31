@@ -1,6 +1,9 @@
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
-import type { AppUser, Env } from "./types";
+import type { AppUser, Env, Role } from "./types";
+
+const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE"];
+const asRole = (value: unknown): Role => (ROLES.includes(value as Role) ? (value as Role) : "SALES");
 
 const encoder = new TextEncoder();
 
@@ -26,12 +29,18 @@ export async function verifyJwt(env: Env, token: string): Promise<AppUser> {
     id: String(payload.id),
     username: String(payload.username),
     displayName: String(payload.displayName),
-    role: payload.role === "ADMIN" ? "ADMIN" : "USER"
+    role: asRole(payload.role)
   };
 }
 
 export function requireAdmin(user: AppUser) {
   if (user.role !== "ADMIN") {
     throw new Response(JSON.stringify({ error: "Admin access required" }), { status: 403 });
+  }
+}
+
+export function requireRole(user: AppUser, roles: Role[]) {
+  if (!roles.includes(user.role)) {
+    throw new Response(JSON.stringify({ error: "Forbidden" }), { status: 403 });
   }
 }

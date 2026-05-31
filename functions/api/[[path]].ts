@@ -11,6 +11,10 @@ import { templateRoutes } from "./routes/templates";
 import { fileRoutes } from "./routes/files";
 import { senderProfileRoutes } from "./routes/senderProfile";
 import { piRoutes } from "./routes/pi";
+import { ticketRoutes } from "./routes/tickets";
+import { ticketLinkRoutes } from "./routes/ticketLinks";
+import { ticketFieldRoutes } from "./routes/ticketFields";
+import { publicTicketRoutes } from "./routes/publicTickets";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
 
@@ -28,6 +32,9 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   if (c.req.path === "/api/auth/login") return next();
+  // 需求2 — public ticket form endpoints are open (token + Turnstile gated
+  // inside the handlers), mirroring the login whitelist.
+  if (c.req.path.startsWith("/api/public/")) return next();
   if (c.req.method === "GET" && c.req.path.startsWith("/api/files/")) return next();
   const token = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return c.json({ error: "Authentication required" }, 401);
@@ -47,5 +54,9 @@ app.route("/", templateRoutes);
 app.route("/", fileRoutes);
 app.route("/", senderProfileRoutes);
 app.route("/", piRoutes);
+app.route("/", ticketRoutes);
+app.route("/", ticketLinkRoutes);
+app.route("/", ticketFieldRoutes);
+app.route("/", publicTicketRoutes);
 
 export const onRequest: PagesFunction<Env> = (context) => app.fetch(context.request, context.env);

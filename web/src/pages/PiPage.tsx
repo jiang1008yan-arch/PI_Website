@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Calendar, FileCheck2, FileText, Plus } from "lucide-react";
+import { Calendar, ChevronLeft, FileCheck2, FileText, Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -52,6 +52,25 @@ export function PiPage({ language }: { language: Language }) {
     senderDefaults,
     setSearchParams
   });
+
+  // The list and the editor are separate views of the same workspace: the page
+  // opens on the list and only swaps to the editor when you create or open a PI.
+  const [editing, setEditing] = useState(false);
+  const inEditor = editing || Boolean(editor.current) || Boolean(linkedPiId);
+  useEffect(() => { setEditing(false); }, [language]);
+  function startNew() {
+    editor.reset();
+    setEditing(true);
+  }
+  function openPi(id: string) {
+    editor.selectPi(id);
+    setEditing(true);
+  }
+  function backToList() {
+    if (editor.isDirty && !window.confirm("You have unsaved changes. Discard them?")) return;
+    editor.clearState();
+    setEditing(false);
+  }
 
   // Submitted-snapshot view. After approve-with-edits the live PI row diverges
   // from what was originally submitted; the snapshot column lets the submitter
@@ -148,7 +167,7 @@ export function PiPage({ language }: { language: Language }) {
   function renderPiCard(p: Pi) {
     return (
       <div key={p.id} className="relative">
-        <button className="choice-card w-full pr-16" onClick={() => editor.selectPi(p.id)}>
+        <button className="choice-card w-full pr-16" onClick={() => openPi(p.id)}>
           {piDisplayName(p, language)}
           <br />
           <span className="text-xs text-slate-500">{piListSubtitle(p, language)}</span>
@@ -166,6 +185,19 @@ export function PiPage({ language }: { language: Language }) {
     );
   }
 
+  // Keep drafts in one consistent place at the top, then everything else.
+  function renderPiGroup(label: string, list: Pi[]) {
+    if (list.length === 0) return null;
+    return (
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#8595b6]">
+          {label} <span className="text-[#a9b6d4]">({list.length})</span>
+        </h3>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{list.map(renderPiCard)}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHero
@@ -173,21 +205,38 @@ export function PiPage({ language }: { language: Language }) {
         title={title}
         description={language === "EN" ? "Create a clear English proforma invoice with customer, sender and product details in one guided flow." : "Fill the Chinese PI draft, send it for review, and keep approved work ready for Excel export."}
         Icon={language === "EN" ? FileText : FileCheck2}
-        action={!linkedPiId ? <button className="btn-primary flex items-center gap-2" onClick={editor.reset} type="button"><Plus size={16} />New</button> : null}
+        action={
+          inEditor && !linkedPiId ? (
+            <button className="btn-secondary flex items-center gap-2" onClick={backToList} type="button">
+              <ChevronLeft size={16} />
+              Back to list
+            </button>
+          ) : !inEditor ? (
+            <button className="btn-primary flex items-center gap-2" onClick={startNew} type="button">
+              <Plus size={16} />
+              New
+            </button>
+          ) : null
+        }
       />
 
-      {!linkedPiId && (
+      {!inEditor && (
         <Section title={`${title} List`}>
           {editor.activePis.length === 0 ? (
             <EmptyState title="Start with a fresh PI" description="Create a draft, add products, then save or send it when the details feel complete." />
           ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {editor.activePis.map(renderPiCard)}
+            <div className="space-y-6">
+              {renderPiGroup("Drafts", editor.activePis.filter((p) => p.status === "DRAFT"))}
+              {renderPiGroup(
+                language === "EN" ? "Submitted" : "Sent for review",
+                editor.activePis.filter((p) => p.status !== "DRAFT")
+              )}
             </div>
           )}
         </Section>
       )}
 
+      {inEditor && (
       <form onSubmit={editor.save} className="space-y-6">
         <Section title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`}>
           {editor.current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.current.rejectionNote}</div>}
@@ -337,9 +386,27 @@ export function PiPage({ language }: { language: Language }) {
               {editor.exporting ? "Generating..." : "Download Excel"}
             </button>
           )}
+          {language === "EN" && editor.current && editor.linkedZh && (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={editor.resyncing || !editor.canResyncZh}
+              title={editor.canResyncZh ? "Rebuild the linked Chinese draft from the latest English data" : "Chinese draft is locked (already submitted or approved)"}
+              onClick={editor.resyncZh}
+            >
+              {editor.resyncing ? "Re-syncing..." : "Re-sync to Chinese draft"}
+            </button>
+          )}
         </div>
+        {editor.linkedNotice && (
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-green-50 p-3 text-sm text-green-700">
+            <span>{editor.linkedNotice}</span>
+            <button type="button" className="text-green-700 underline" onClick={() => editor.setLinkedNotice("")}>Dismiss</button>
+          </div>
+        )}
         {editor.exportError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.exportError}</div>}
       </form>
+      )}
 
       {optionEditor && (
         <OptionSetModal

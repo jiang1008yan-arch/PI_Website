@@ -16,8 +16,8 @@ import {
 import type { AppUser, Language } from "./types";
 
 const ADMIN: AppUser = { id: "admin-1", username: "admin", displayName: "Admin", role: "ADMIN" };
-const OWNER: AppUser = { id: "user-1", username: "alice", displayName: "Alice", role: "USER" };
-const STRANGER: AppUser = { id: "user-2", username: "bob", displayName: "Bob", role: "USER" };
+const OWNER: AppUser = { id: "user-1", username: "alice", displayName: "Alice", role: "SALES" };
+const STRANGER: AppUser = { id: "user-2", username: "bob", displayName: "Bob", role: "SALES" };
 
 const pi = (overrides: Partial<PiRow> = {}): PiRow => ({
   id: "pi-1",

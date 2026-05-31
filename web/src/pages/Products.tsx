@@ -29,6 +29,10 @@ export function ProductsPage() {
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const enFieldOptions = fieldsByLang.EN
+    .filter((f) => f.id && !f.id.startsWith("draft-") && f.label.trim())
+    .map((f) => ({ id: f.id as string, label: f.label }));
+
   const loadProducts = async () => {
     const res = await api.get("/products");
     setProducts(res.data);
@@ -262,6 +266,13 @@ export function ProductsPage() {
             <button className={lang === "EN" ? "btn-primary" : "btn-secondary"} onClick={() => setLang("EN")}>English Fields</button>
             <button className={lang === "ZH" ? "btn-primary" : "btn-secondary"} onClick={() => setLang("ZH")}>Chinese Fields</button>
           </div>
+          {lang === "ZH" && (
+            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Map each Chinese field to its English counterpart so EN→ZH PI generation can pre-fill values.
+              Keep dropdown options in the same order across languages (Red/Green/Blue ↔ 红/绿/蓝) — values are
+              carried over by option position.
+            </p>
+          )}
           <div className="space-y-3">
             {fieldsByLang[lang].map((field, index) => (
               <FieldRow
@@ -273,9 +284,15 @@ export function ProductsPage() {
                 onMoveDown={() => moveField(index, 1)}
                 canMoveUp={index > 0}
                 canMoveDown={index < fieldsByLang[lang].length - 1}
+                enFields={lang === "ZH" ? enFieldOptions : undefined}
               />
             ))}
-            <FieldRow key={`new-${lang}-${fieldsByLang[lang].length}`} field={blankField(lang)} onSave={saveField} />
+            <FieldRow
+              key={`new-${lang}-${fieldsByLang[lang].length}`}
+              field={blankField(lang)}
+              onSave={saveField}
+              enFields={lang === "ZH" ? enFieldOptions : undefined}
+            />
           </div>
         </div>
 

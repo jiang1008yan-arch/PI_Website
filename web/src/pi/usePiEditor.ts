@@ -33,6 +33,11 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [confirming, setConfirming] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [exportError, setExportError] = useState("");
+  // 需求1 — linked ZH draft state for the EN editor (resync target + notices).
+  const [linkedZh, setLinkedZh] = useState<{ id: string; piNo: string; status: string } | null>(null);
+  const [linkedNotice, setLinkedNotice] = useState("");
+  const [resyncing, setResyncing] = useState(false);
+  const canResyncZh = Boolean(linkedZh && (linkedZh.status === "DRAFT" || linkedZh.status === "REJECTED"));
 
   const canEditPendingZh = language === "ZH" && current?.status === "PENDING_REVIEW" && user?.role === "ADMIN";
   const canConfirmReceivedZh = canEditPendingZh;
@@ -119,6 +124,16 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setEvents(res.data.events ?? []);
     setCanonical({ header: { ...res.data.pi }, items: hydrated });
     setRejectNote("");
+    if (language === "EN" && res.data.pi.linkedPiId) {
+      try {
+        const linked = await api.get(`/pi/${res.data.pi.linkedPiId}`);
+        setLinkedZh({ id: linked.data.pi.id, piNo: linked.data.pi.piNo, status: linked.data.pi.status });
+      } catch {
+        setLinkedZh(null);
+      }
+    } else {
+      setLinkedZh(null);
+    }
   }
 
   function clearState() {
@@ -129,6 +144,8 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setEvents([]);
     setCanonical(null);
     setRejectNote("");
+    setLinkedZh(null);
+    setLinkedNotice("");
   }
 
   function reset() {
@@ -157,9 +174,32 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
       return current.id;
     }
     const res = await api.post("/pi", payload);
+    if (language === "EN" && res.data.linkedZhPiNo) {
+      setLinkedNotice(`Linked Chinese draft ${res.data.linkedZhPiNo} created. Open the Chinese workspace to review it.`);
+    }
     await open(res.data.id);
     await reload();
     return res.data.id as string;
+  }
+
+  async function resyncZh() {
+    if (!current) return;
+    if (!window.confirm(
+      "Rebuild the linked Chinese draft's product rows from the latest English data? " +
+      "Chinese-only header fields (production order no, customer source/type, delivery date) are kept."
+    )) return;
+    setExportError("");
+    setLinkedNotice("");
+    setResyncing(true);
+    try {
+      await api.post(`/pi/${current.id}/resync-zh`);
+      setLinkedNotice("Chinese draft re-synced from the latest English data.");
+      await open(current.id);
+    } catch (err: any) {
+      setExportError(err.response?.data?.error ?? err.message ?? "Re-sync failed.");
+    } finally {
+      setResyncing(false);
+    }
   }
 
   async function submit() {
@@ -250,15 +290,17 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     // Current PI state
     current, header, items, events, canonical, assignedToId, rejectNote,
     // UI flags
-    exporting, confirming, rejecting, exportError,
+    exporting, confirming, rejecting, exportError, resyncing,
+    // Linked ZH (需求1)
+    linkedZh, linkedNotice, canResyncZh,
     // Derived
     locked, canEditPendingZh, canConfirmReceivedZh, hasBufferedEdits, isDirty,
     total, totalCurrency,
     // Setters
-    setHeader, setItems, setAssignedToId, setRejectNote, setExportError,
+    setHeader, setItems, setAssignedToId, setRejectNote, setExportError, setLinkedNotice,
     // Actions
     reload, open, reset, clearState, selectPi, save, submit,
-    confirmReceivedPi, rejectReview, deleteDraft, downloadExcel
+    confirmReceivedPi, rejectReview, deleteDraft, downloadExcel, resyncZh
   };
 }
 

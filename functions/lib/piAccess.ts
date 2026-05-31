@@ -7,6 +7,7 @@ export type PiRow = {
   language: Language;
   status: PiStatus;
   createdById: string;
+  linkedPiId?: string | null;
 };
 
 export type Verdict =
