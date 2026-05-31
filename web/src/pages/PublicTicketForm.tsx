@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { CheckCircle2, LifeBuoy } from "lucide-react";
 import { api } from "../api/client";
 import { Turnstile, turnstileConfigured } from "../tickets/Turnstile";
+import { ticketProductOptionLabel } from "../tickets/productOptionLabel";
 import type { PublicProduct, TicketField } from "../types";
 
 type FormConfig = {
@@ -150,8 +151,7 @@ export function PublicTicketForm() {
                 <option value="">Select a product…</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.nameEn}
-                    {p.nameZh ? ` / ${p.nameZh}` : ""}
+                    {ticketProductOptionLabel(p)}
                   </option>
                 ))}
               </select>

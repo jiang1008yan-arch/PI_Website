@@ -1,4 +1,4 @@
-import { all } from "./db";
+import { all, first } from "./db";
 
 // 需求1 — one-time EN->ZH line-item seeding.
 //
@@ -37,6 +37,16 @@ type ZhFieldRow = {
 };
 
 type EnFieldRow = { id: string; label: string };
+type ModelOption = { code: string; description: string };
+type ModelSegment = { id: string; label: string; options: ModelOption[] };
+type ModelRule = {
+  enabled: boolean;
+  prefix: string;
+  prefixOptions: ModelOption[];
+  separator: string;
+  segments: ModelSegment[];
+};
+type OptionRow = { value: string };
 
 function parseOptions(raw: string | null): string[] {
   if (!raw) return [];
@@ -48,10 +58,87 @@ function parseOptions(raw: string | null): string[] {
   }
 }
 
+function normalizeModelRule(rule: any): ModelRule {
+  return {
+    enabled: Boolean(rule?.enabled),
+    prefix: String(rule?.prefix ?? ""),
+    prefixOptions: Array.isArray(rule?.prefixOptions)
+      ? rule.prefixOptions
+          .map((option: any) => ({
+            code: String(option.code ?? ""),
+            description: String(option.description ?? "")
+          }))
+          .filter((option: ModelOption) => option.code)
+      : rule?.prefix
+        ? [{ code: String(rule.prefix), description: "" }]
+        : [],
+    separator: String(rule?.separator ?? "-"),
+    segments: Array.isArray(rule?.segments)
+      ? rule.segments.map((segment: any) => ({
+          id: String(segment.id ?? ""),
+          label: String(segment.label ?? ""),
+          options: Array.isArray(segment.options)
+            ? segment.options
+                .map((option: any) => ({
+                  code: String(option.code ?? ""),
+                  description: String(option.description ?? "")
+                }))
+                .filter((option: ModelOption) => option.code)
+            : []
+        }))
+      : []
+  };
+}
+
+function parseModelRule(raw: string | null | undefined): ModelRule | null {
+  if (!raw) return null;
+  try {
+    const rule = normalizeModelRule(JSON.parse(raw));
+    return rule.enabled ? rule : null;
+  } catch {
+    return null;
+  }
+}
+
+function modelPrefix(rule: ModelRule) {
+  return rule.prefixOptions[0]?.code ?? rule.prefix ?? "";
+}
+
+function modelSegmentKey(segment: ModelSegment) {
+  return `__modelSegment:${segment.id || segment.label}`;
+}
+
+function seedZhModelRuleFields(rule: ModelRule): FieldValue[] {
+  const prefix = modelPrefix(rule);
+  return [
+    { label: "__modelRule", value: JSON.stringify(rule), fieldType: "TEXT", sortOrder: -10 },
+    { label: "__modelPrefix", value: prefix, fieldType: "TEXT", sortOrder: -10 },
+    ...rule.segments.map((segment, index) => ({
+      label: modelSegmentKey(segment),
+      value: "",
+      fieldType: "TEXT",
+      sortOrder: -9 + index
+    })),
+    { label: "\u578b\u53f7", value: prefix, fieldType: "TEXT", sortOrder: -5 },
+    { label: "Model Lines", value: prefix, fieldType: "TEXT", sortOrder: -4 },
+    { label: "\u8ba2\u8d27\u53f7\u91ca\u4e49", value: "", fieldType: "TEXT", sortOrder: -3 }
+  ];
+}
+
+async function loadZhModelRule(db: D1Database, productId: string): Promise<ModelRule | null> {
+  const row = await first<OptionRow>(
+    db,
+    "SELECT value FROM appOptions WHERE optionKey=? ORDER BY sortOrder, value LIMIT 1",
+    `productModelRule:${productId}:ZH`
+  );
+  return parseModelRule(row?.value);
+}
+
 export async function buildLinkedZhItems(db: D1Database, enItems: EnItem[]): Promise<any[]> {
   // Cache productFields lookups so repeated products don't re-query.
   const zhFieldsCache = new Map<string, ZhFieldRow[]>();
   const enFieldsCache = new Map<string, Map<string, string>>(); // productId -> (enFieldId -> label)
+  const zhModelRuleCache = new Map<string, ModelRule | null>();
 
   const zhItems: any[] = [];
   for (const enItem of enItems) {
@@ -74,14 +161,18 @@ export async function buildLinkedZhItems(db: D1Database, enItems: EnItem[]): Pro
       );
       enFieldsCache.set(productId, new Map(rows.map((r) => [r.id, r.label])));
     }
+    if (!zhModelRuleCache.has(productId)) {
+      zhModelRuleCache.set(productId, await loadZhModelRule(db, productId));
+    }
 
     const zhFields = zhFieldsCache.get(productId)!;
     const enFieldLabelById = enFieldsCache.get(productId)!;
+    const zhModelRule = zhModelRuleCache.get(productId);
     const enValuesByLabel = new Map<string, FieldValue>(
       (enItem.fieldValues ?? []).map((fv) => [fv.label, fv])
     );
 
-    const fieldValues: FieldValue[] = zhFields.map((zf) => {
+    const mappedFieldValues: FieldValue[] = zhFields.map((zf) => {
       const zhOptions = parseOptions(zf.options);
       let value = zf.defaultValue ?? "";
       if (zf.mapKey) {
@@ -104,13 +195,14 @@ export async function buildLinkedZhItems(db: D1Database, enItems: EnItem[]): Pro
         sortOrder: zf.sortOrder
       };
     });
+    const modelRuleFields = zhModelRule ? seedZhModelRuleFields(zhModelRule) : [];
 
     zhItems.push({
       productId,
       quantity: Number(enItem.quantity ?? 1),
       unitPrice: Number(enItem.unitPrice ?? 0),
       discountPct: Number(enItem.discountPct ?? 0),
-      fieldValues
+      fieldValues: [...modelRuleFields, ...mappedFieldValues]
     });
   }
   return zhItems;

@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
+import { ticketProductOptionLabel } from "../tickets/productOptionLabel";
 import type { PublicProduct, TicketField, User } from "../types";
 
 function parseFields(raw: any[]): TicketField[] {
@@ -123,8 +124,7 @@ export function CreateTicketPage() {
                 <option value="">Select a product…</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.nameEn}
-                    {p.nameZh ? ` / ${p.nameZh}` : ""}
+                    {ticketProductOptionLabel(p)}
                   </option>
                 ))}
               </select>
