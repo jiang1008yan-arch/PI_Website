@@ -2,7 +2,8 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { SetURLSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Language, Pi, PiItem, User } from "../types";
-import { getMeta } from "./fieldValues";
+import { getMeta } from "./lineItemFields";
+import { canDeletePiByStatus, canEditPiDirectly, isReviewerEditMode } from "../../../shared/piCapabilities";
 import { isConfirmedReceivedPi, piDisplayName } from "./labels";
 import { isPiDirty, type PiSnapshot } from "./piDiff";
 import { parsePiItems } from "./piItemCodec";
@@ -39,9 +40,9 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [resyncing, setResyncing] = useState(false);
   const canResyncZh = Boolean(linkedZh && (linkedZh.status === "DRAFT" || linkedZh.status === "REJECTED"));
 
-  const canEditPendingZh = language === "ZH" && current?.status === "PENDING_REVIEW" && user?.role === "ADMIN";
+  const canEditPendingZh = Boolean(user && current && isReviewerEditMode(user.role, language, current.status));
   const canConfirmReceivedZh = canEditPendingZh;
-  const locked = Boolean(language === "ZH" && current && !["DRAFT", "REJECTED"].includes(current.status) && !canEditPendingZh);
+  const locked = Boolean(language === "ZH" && current && !canEditPiDirectly(language, current.status) && !canEditPendingZh);
   const activePis = language === "ZH"
     ? pis.filter((p) => p.status !== "APPROVED" && !isConfirmedReceivedPi(p, user?.id))
     : pis;
@@ -257,7 +258,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   }
 
   async function deleteDraft(pi: Pi) {
-    if (language === "ZH" && pi.status !== "DRAFT") return;
+    if (!canDeletePiByStatus(language, pi.status)) return;
     const ok = window.confirm(`Delete ${language === "EN" ? "PI" : "draft"} ${piDisplayName(pi, language)}?`);
     if (!ok) return;
     await api.delete(`/pi/${pi.id}`);

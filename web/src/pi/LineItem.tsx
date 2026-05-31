@@ -1,6 +1,6 @@
 import { Field } from "../components/Form";
 import type { Language, PiItem, Product } from "../types";
-import { getMeta, setMeta, visibleFieldValues } from "./fieldValues";
+import { getMeta, setMeta, visibleItemFields } from "./lineItemFields";
 import {
   applyModelRule,
   buildGeneratedModel,
@@ -32,7 +32,7 @@ export function LineItem({
   const amount = item.quantity * item.unitPrice * (1 - item.discountPct / 100);
   const rule = language === "ZH" ? getModelRule(item) : null;
   const generated = rule ? buildGeneratedModel(rule, item) : null;
-  const fields = visibleFieldValues(item).filter((field) => !rule || !isGeneratedModelField(field));
+  const fields = visibleItemFields(item).filter((field) => !rule || !isGeneratedModelField(field));
   const modelFields = language === "ZH" && !rule ? fields.filter(isModelField) : [];
   const orderMeaningFields = language === "ZH" && !rule ? fields.filter(isOrderMeaningField) : [];
   const remainingFields =

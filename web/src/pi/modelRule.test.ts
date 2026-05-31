@@ -4,6 +4,7 @@ import {
   applyModelRule,
   blankRule,
   buildGeneratedModel,
+  generatedModelFor,
   getModelPrefix,
   getModelRule,
   getSegmentKey,
@@ -391,6 +392,29 @@ describe("upsertField", () => {
     item = upsertField(item, "B", "2");
     item = upsertField(item, "A", "1-changed");
     expect(item.fieldValues.map((f) => f.label)).toEqual(["A", "B"]);
+  });
+});
+
+describe("generatedModelFor — the unified editor/export entry", () => {
+  it("returns empties when the item carries no rule", () => {
+    expect(generatedModelFor(baseItem())).toEqual({ model: "", modelLines: "", meaning: "" });
+  });
+
+  it("matches buildGeneratedModel for a seeded item", () => {
+    const item = seededItem(ruleAB, { [getSegmentKey(ruleAB.segments[0])]: "S" });
+    const rule = getModelRule(item)!;
+    expect(generatedModelFor(item)).toEqual(buildGeneratedModel(rule, item));
+  });
+
+  // Regression: the Excel exporter used to fall back to prefixOptions[0] when
+  // __modelPrefix was empty (|| ), diverging from the editor (?? ). The unified
+  // path keeps an explicitly-empty prefix empty.
+  it("keeps an explicitly empty __modelPrefix empty (no fallback to prefixOptions[0])", () => {
+    const item = seededItem(ruleAB, {
+      __modelPrefix: "",
+      [getSegmentKey(ruleAB.segments[0])]: "S"
+    });
+    expect(generatedModelFor(item).model).toBe("S");
   });
 });
 

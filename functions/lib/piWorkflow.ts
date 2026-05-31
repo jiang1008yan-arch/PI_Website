@@ -1,15 +1,12 @@
 import { id } from "./db";
 import type { PiRow, PiStatus } from "./piAccess";
+import { piItemReplaceStatements, type PiItemInput } from "./piItems";
 
 export type WorkflowAction = "SUBMITTED" | "APPROVED" | "REJECTED";
 
-export type PiItemInput = {
-  productId: string;
-  quantity: number | string;
-  unitPrice: number | string;
-  discountPct: number | string;
-  fieldValues: unknown[];
-};
+// PiItemInput now lives with the piItems writer that consumes it; re-exported
+// so existing importers of it from this module keep working.
+export type { PiItemInput };
 
 export type SubmittedSnapshot = {
   header: Record<string, unknown>;
@@ -142,24 +139,7 @@ export async function runTransition(
   if (updateStmt) stmts.push(updateStmt);
 
   if (plan.itemsReplace !== undefined) {
-    stmts.push(db.prepare("DELETE FROM piItems WHERE piId=?").bind(piId));
-    const insert = db.prepare(
-      "INSERT INTO piItems (id, piId, productId, quantity, unitPrice, discountPct, fieldValues, sortOrder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    );
-    plan.itemsReplace.forEach((it, i) => {
-      stmts.push(
-        insert.bind(
-          id("itm"),
-          piId,
-          it.productId,
-          Number(it.quantity ?? 1),
-          Number(it.unitPrice ?? 0),
-          Number(it.discountPct ?? 0),
-          JSON.stringify(it.fieldValues ?? []),
-          i
-        )
-      );
-    });
+    stmts.push(...piItemReplaceStatements(db, piId, plan.itemsReplace));
   }
 
   if (plan.event) {

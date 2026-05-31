@@ -11,5 +11,5 @@
     "esModuleInterop": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["functions/**/*.ts", "drizzle.config.ts"]
+  "include": ["functions/**/*.ts", "shared/**/*.ts", "drizzle.config.ts"]
 }

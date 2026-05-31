@@ -27,6 +27,7 @@ import {
 import { parseField } from "../products/productFields";
 import { usePiEditor } from "../pi/usePiEditor";
 import { parsePiItems } from "../pi/piItemCodec";
+import { setMetaValue } from "../pi/lineItemFields";
 
 const today = new Date().toISOString().slice(0, 10);
 type OptionKey = "customerSource" | "customerType" | "incoterm" | "shipmentMode";
@@ -132,7 +133,7 @@ export function PiPage({ language }: { language: Language }) {
     const res = await api.get(`/products/${product.id}/fields?language=${language}`);
     const rule = language === "ZH" ? await loadModelRule(product.id, language) : null;
     const fields: ProductField[] = res.data.map(parseField);
-    const meta = language === "EN" ? [{ label: "__currency", value: "USD", fieldType: "TEXT", sortOrder: -1 }] : [];
+    const meta = language === "EN" ? setMetaValue([], "currency", "USD") : [];
     const ruleFields = rule?.enabled ? modelRuleSeedFields(rule, language) : [];
     const nextItem = applyModelRule({
       productId,

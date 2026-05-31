@@ -1,4 +1,10 @@
 import type { Language, PiItem } from "../types";
+import { upsertField } from "./lineItemFields";
+
+// upsertField now lives in lineItemFields (it is the generic field-set
+// primitive, not model-specific). Re-exported so existing importers — including
+// modelRule.test.ts — keep their import path.
+export { upsertField };
 
 export type ModelOption = { code: string; description: string };
 export type ModelSegment = { id: string; label: string; options: ModelOption[] };
@@ -163,14 +169,13 @@ export function applyModelRule(item: PiItem, language: Language): PiItem {
   );
 }
 
-export function upsertField(item: PiItem, label: string, value: string): PiItem {
-  const exists = item.fieldValues.some((field) => field.label === label);
-  return {
-    ...item,
-    fieldValues: exists
-      ? item.fieldValues.map((field) => (field.label === label ? { ...field, value } : field))
-      : [...item.fieldValues, { label, value, fieldType: "TEXT", sortOrder: -1 }]
-  };
+// Single entry point for "the generated model for this item" — resolves the
+// item's embedded rule and runs the one tested generator, or returns empties
+// when the item carries no rule. Both the editor and the Excel exporter use
+// this so they cannot drift.
+export function generatedModelFor(item: PiItem) {
+  const rule = getModelRule(item);
+  return rule ? buildGeneratedModel(rule, item) : { model: "", modelLines: "", meaning: "" };
 }
 
 export function isModelField(field: { label: string }) {
