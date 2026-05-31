@@ -91,6 +91,7 @@ export type Pi = {
   archivedAt?: string | null;
   linkedPiId?: string | null;
   linkedPiNo?: string | null;
+  linkedPiNoSnapshot?: string | null;
   linkedPiStatus?: string | null;
 };
 

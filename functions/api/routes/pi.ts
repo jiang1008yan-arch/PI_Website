@@ -81,7 +81,8 @@ piRoutes.get("/pi", async (c) => {
   return c.json(
     await all(
       c.env.DB,
-      `SELECT pi.*, linked.piNo AS linkedPiNo FROM pi LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+      `SELECT pi.*, COALESCE(linked.piNo, NULLIF(pi.linkedPiNoSnapshot, '')) AS linkedPiNo
+       FROM pi LEFT JOIN pi linked ON linked.id = pi.linkedPiId
        WHERE ${where.join(" AND ")} ORDER BY pi.updatedAt DESC`,
       ...params
     )
@@ -115,10 +116,11 @@ piRoutes.get("/pi/:id", async (c) => {
   const linked = row.linkedPiId
     ? await first<{ piNo: string; status: string }>(c.env.DB, "SELECT piNo, status FROM pi WHERE id=?", row.linkedPiId)
     : null;
+  const linkedPiNoSnapshot = String(row.linkedPiNoSnapshot ?? "").trim() || null;
   return c.json({
     pi: {
       ...row,
-      linkedPiNo: linked?.piNo ?? null,
+      linkedPiNo: linked?.piNo ?? linkedPiNoSnapshot,
       linkedPiStatus: linked?.status ?? null
     },
     items,
@@ -174,7 +176,7 @@ piRoutes.post("/pi", async (c) => {
   // DRAFT (one-time generation, not continuous sync). Idempotent: an EN PI that
   // already carries a linkedPiId is not re-linked.
   if (language === "EN" && !d.linkedPiId) {
-    const linked = await createLinkedZhDraft(c, piId, date, d);
+    const linked = await createLinkedZhDraft(c, piId, date, { ...d, piNo });
     return c.json({ id: piId, piNo, linkedZhId: linked.id, linkedZhPiNo: linked.piNo });
   }
 
@@ -204,11 +206,12 @@ async function createLinkedZhDraft(c: Context, enPiId: string, date: string, d: 
   const zhId = id("pi");
   const { seq, piNo } = await nextPiNumber(c.env, "ZH", date);
   const shared = SHARED_HEADER_COLUMNS.map((col) => (col === "customerCompany" ? d[col] || "Draft Customer" : d[col] ?? ""));
+  const linkedPiNoSnapshot = String(d.piNo ?? "").trim() || null;
   await c.env.DB.prepare(
-    `INSERT INTO pi (id, language, piNo, seq, status, date, ${SHARED_HEADER_COLUMNS.join(", ")}, createdById, linkedPiId)
-    VALUES (?, 'ZH', ?, ?, 'DRAFT', ?, ${SHARED_HEADER_COLUMNS.map(() => "?").join(", ")}, ?, ?)`
+    `INSERT INTO pi (id, language, piNo, seq, status, date, ${SHARED_HEADER_COLUMNS.join(", ")}, createdById, linkedPiId, linkedPiNoSnapshot)
+    VALUES (?, 'ZH', ?, ?, 'DRAFT', ?, ${SHARED_HEADER_COLUMNS.map(() => "?").join(", ")}, ?, ?, ?)`
   )
-    .bind(zhId, piNo, seq, date, ...shared, c.get("user").id, enPiId)
+    .bind(zhId, piNo, seq, date, ...shared, c.get("user").id, enPiId, linkedPiNoSnapshot)
     .run();
   const zhItems = await buildLinkedZhItems(c.env.DB, d.items ?? []);
   await saveItems(c.env.DB, zhId, zhItems);

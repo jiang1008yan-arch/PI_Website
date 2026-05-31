@@ -74,7 +74,8 @@ export const pi = sqliteTable("pi", {
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
   archivedAt: text("archivedAt"),
-  linkedPiId: text("linkedPiId")
+  linkedPiId: text("linkedPiId"),
+  linkedPiNoSnapshot: text("linkedPiNoSnapshot")
 });
 
 export const piItems = sqliteTable("piItems", {

@@ -5,6 +5,7 @@ import {
   planReject,
   planSubmit,
   planSubmitForReview,
+  runTransition,
   type SubmittedSnapshot
 } from "./piWorkflow";
 import type { PiRow } from "./piAccess";
@@ -140,5 +141,27 @@ describe("planDelete", () => {
     expect(plan.delete).toBe(true);
     expect(plan.piUpdate).toBeUndefined();
     expect(plan.event).toBeUndefined();
+  });
+
+  it("unlinks linked PIs while preserving the deleted PI number snapshot", async () => {
+    const stmts: Array<{ sql: string; binds: unknown[] }> = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...binds: unknown[]) {
+            return { sql, binds };
+          }
+        };
+      },
+      async batch(batchStmts: Array<{ sql: string; binds: unknown[] }>) {
+        stmts.push(...batchStmts);
+      }
+    } as unknown as D1Database;
+
+    await runTransition(db, "pi-en-1", planDelete(row({ id: "pi-en-1" })), "user-1");
+
+    expect(stmts[0].sql).toContain("linkedPiNoSnapshot");
+    expect(stmts[0].sql).toContain("linkedPiId = NULL");
+    expect(stmts[0].binds).toEqual(["pi-en-1", "pi-en-1"]);
   });
 });
