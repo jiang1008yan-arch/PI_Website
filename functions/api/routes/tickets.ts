@@ -83,32 +83,41 @@ ticketRoutes.post("/tickets", async (c) => {
 // Lightweight stats: by status, by problem-type (first DROPDOWN questionnaire
 // field), by product. Visible to all three roles.
 ticketRoutes.get("/tickets/stats", async (c) => {
-  const byStatus = await all<{ status: string; n: number }>(
-    c.env.DB,
-    "SELECT status, COUNT(*) AS n FROM tickets GROUP BY status"
-  );
-  const byProduct = await all<{ productId: string; name: string; n: number }>(
-    c.env.DB,
-    `SELECT t.productId AS productId, COALESCE(p.nameEn, '(none)') AS name, COUNT(*) AS n
-     FROM tickets t LEFT JOIN products p ON p.id = t.productId GROUP BY t.productId`
-  );
-  const problemField = await first<{ id: string; label: string; options: string | null }>(
-    c.env.DB,
-    "SELECT id, label, options FROM ticketFields WHERE fieldType='DROPDOWN' ORDER BY sortOrder, label LIMIT 1"
-  );
+  // The three aggregates are independent — run them in one parallel wave instead
+  // of four serial round-trips (this endpoint is hit on every Home load).
+  const [byStatus, byProduct, problemField] = await Promise.all([
+    all<{ status: string; n: number }>(
+      c.env.DB,
+      "SELECT status, COUNT(*) AS n FROM tickets GROUP BY status"
+    ),
+    all<{ productId: string; name: string; n: number }>(
+      c.env.DB,
+      `SELECT t.productId AS productId, COALESCE(p.nameEn, '(none)') AS name, COUNT(*) AS n
+       FROM tickets t LEFT JOIN products p ON p.id = t.productId GROUP BY t.productId`
+    ),
+    first<{ id: string; label: string; options: string | null }>(
+      c.env.DB,
+      "SELECT id, label, options FROM ticketFields WHERE fieldType='DROPDOWN' ORDER BY sortOrder, label LIMIT 1"
+    )
+  ]);
   let problemType: { label: string; counts: Record<string, number> } | null = null;
   if (problemField) {
-    const rows = await all<{ answers: string }>(c.env.DB, "SELECT answers FROM tickets");
+    // Aggregate the chosen problem field in SQL (json_extract) instead of pulling
+    // every ticket's answers blob into the worker and counting in JS. json_valid
+    // guards against any malformed rows so one bad blob can't fail the query.
+    const path = `$.${problemField.id}`;
+    const rows = await all<{ v: string; n: number }>(
+      c.env.DB,
+      `SELECT json_extract(answers, ?) AS v, COUNT(*) AS n
+       FROM tickets
+       WHERE json_valid(answers) = 1 AND json_extract(answers, ?) IS NOT NULL AND json_extract(answers, ?) <> ''
+       GROUP BY v`,
+      path,
+      path,
+      path
+    );
     const counts: Record<string, number> = {};
-    for (const r of rows) {
-      try {
-        const a = JSON.parse(r.answers) as Record<string, string>;
-        const v = a[problemField.id];
-        if (v) counts[v] = (counts[v] ?? 0) + 1;
-      } catch {
-        /* ignore malformed */
-      }
-    }
+    for (const r of rows) counts[r.v] = r.n;
     problemType = { label: problemField.label, counts };
   }
   return c.json({ byStatus, byProduct, problemType });
