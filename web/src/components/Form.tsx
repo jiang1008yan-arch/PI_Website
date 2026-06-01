@@ -18,7 +18,7 @@ export function PageHero({
 }: {
   title: string;
   eyebrow?: string;
-  description: string;
+  description?: string;
   Icon?: LucideIcon;
   action?: React.ReactNode;
 }) {
@@ -36,7 +36,7 @@ export function PageHero({
           <div>
             {eyebrow && <div className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{eyebrow}</div>}
             <h1 className="mt-1 text-3xl font-semibold tracking-tight text-[#07183f]">{title}</h1>
-            <p className="mt-2 text-sm leading-6 text-[#63749b]">{description}</p>
+            {description && <p className="mt-2 text-sm leading-6 text-[#63749b]">{description}</p>}
             <div className="mt-5 h-1 w-14 rounded-full bg-primary" />
           </div>
         </div>

@@ -146,7 +146,9 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   async function reload() {
     setListLoading(true);
     try {
-      const res = await api.get("/pi");
+      // Fetch only this workspace's language; the server now filters, and we
+      // keep the client filter as a cheap guard against a stale response.
+      const res = await api.get(`/pi?language=${language}`);
       const forLanguage = res.data.filter((x: Pi) => x.language === language);
       listCache.current.set(language, forLanguage);
       setPis(forLanguage);

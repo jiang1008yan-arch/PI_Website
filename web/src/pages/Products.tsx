@@ -196,7 +196,6 @@ export function ProductsPage() {
         <PageHero
           eyebrow="Admin setup"
           title="Product Management"
-          description="Shape each product once, then let PI creators fill consistent fields with fewer decisions and fewer mistakes."
           Icon={Package}
           action={<button className="btn-primary flex items-center gap-2" onClick={startNewProduct}><Plus size={16} />Add Product</button>}
         />
@@ -229,7 +228,6 @@ export function ProductsPage() {
       <PageHero
         eyebrow="Product details"
         title={selected ? `Edit ${selected.nameEn || selected.nameZh}` : "Add Product"}
-        description="Keep names, status, language fields and templates together so future invoices are faster to complete."
         Icon={Package}
       />
       <Section

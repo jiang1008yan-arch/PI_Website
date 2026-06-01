@@ -205,7 +205,6 @@ export function PiPage({ language }: { language: Language }) {
       <PageHero
         eyebrow="PI workspace"
         title={title}
-        description={language === "EN" ? "Create a clear English proforma invoice with customer, sender and product details in one guided flow." : "Fill the Chinese PI draft, send it for review, and keep approved work ready for Excel export."}
         Icon={language === "EN" ? FileText : FileCheck2}
         action={
           inEditor && !linkedPiId ? (
