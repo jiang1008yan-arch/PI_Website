@@ -78,7 +78,6 @@ export function TicketFieldsConfigPage() {
       <PageHero
         eyebrow="After-Sales"
         title="Ticket Questionnaire"
-        description="Define the questions shown on the public after-sales form. Drag-free ordering with Up/Down; dropdown options become the customer's choices."
         Icon={ClipboardList}
         action={
           <Link

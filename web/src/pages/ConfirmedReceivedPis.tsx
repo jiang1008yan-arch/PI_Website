@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, PageHero, Section } from "../components/Form";
 import { isUserApprovedChinesePi, piDisplayName } from "../pi/labels";
+import { markAllSeen } from "../pi/notifications";
 import type { Pi } from "../types";
 
 export function ConfirmedReceivedPisPage() {
@@ -14,7 +15,10 @@ export function ConfirmedReceivedPisPage() {
   useEffect(() => {
     async function loadConfirmedReceivedPis() {
       const res = await api.get("/pi?language=ZH");
-      setPis(res.data.filter((pi: Pi) => isUserApprovedChinesePi(pi, user?.id)));
+      const list = res.data.filter((pi: Pi) => isUserApprovedChinesePi(pi, user?.id));
+      setPis(list);
+      // Opening this page counts as seeing these PIs — clear the home badge.
+      markAllSeen("confirmedReceived", user?.id, list.map((pi: Pi) => pi.id));
     }
 
     void loadConfirmedReceivedPis();

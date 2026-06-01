@@ -29,7 +29,6 @@ export function ContractsPage() {
     <PageHero
       eyebrow="Shared files"
       title="Contract Templates"
-      description="Keep approved contract files close to the PI workflow so teams can download the right version quickly."
       Icon={Folder}
     />
     {user?.role === "ADMIN" && <Section title="Upload Contract">

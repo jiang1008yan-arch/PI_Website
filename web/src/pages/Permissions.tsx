@@ -45,7 +45,6 @@ export function PermissionsPage() {
     <PageHero
       eyebrow="Admin access"
       title="Permission Management"
-      description="Invite teammates with the right role so sales work can move from drafting to review without handoffs getting lost."
       Icon={UsersRound}
     />
     <Section title="Add User">

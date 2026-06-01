@@ -28,7 +28,6 @@ export function ChangePasswordPage() {
     <PageHero
       eyebrow="Account"
       title="Change Password"
-      description="Update your sign-in password. You'll keep using the same username."
       Icon={KeyRound}
     />
     <Section title="New Password">
