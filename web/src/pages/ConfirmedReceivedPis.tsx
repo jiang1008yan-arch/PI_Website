@@ -13,7 +13,7 @@ export function ConfirmedReceivedPisPage() {
 
   useEffect(() => {
     async function loadConfirmedReceivedPis() {
-      const res = await api.get("/pi");
+      const res = await api.get("/pi?language=ZH");
       setPis(res.data.filter((pi: Pi) => isUserApprovedChinesePi(pi, user?.id)));
     }
 
@@ -25,7 +25,6 @@ export function ConfirmedReceivedPisPage() {
       <PageHero
         eyebrow="Approved archive"
         title="Confirmed Received PIs"
-        description="Reopen approved received Chinese PIs whenever you need to verify details or download the final Excel file."
         Icon={ShieldCheck}
       />
       <Section title="Confirmed Received PIs">

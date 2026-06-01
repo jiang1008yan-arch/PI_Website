@@ -66,22 +66,49 @@ piRoutes.get("/pi/review-queue", async (c) => {
   );
 });
 
+// The list view only needs the columns used to render a PI card and to gate
+// filtering/ownership — never the heavy ones (submittedSnapshot, the full
+// sender/customer detail set). Projecting just these keeps the list payload
+// small so the workspace paints quickly (需求1). Line items stay click-to-load
+// via GET /pi/:id.
+const PI_LIST_COLUMNS = [
+  "id",
+  "language",
+  "status",
+  "piNo",
+  "productionOrderNo",
+  "customerCompany",
+  "createdById",
+  "assignedToId",
+  "linkedPiId",
+  "linkedPiNoSnapshot",
+  "updatedAt"
+] as const;
+
 piRoutes.get("/pi", async (c) => {
   await purgeExpiredDrafts(c.env.DB);
   const user = c.get("user");
   const includeArchived = c.req.query("includeArchived") === "1" && user.role === "ADMIN";
   const where = [includeArchived ? "1=1" : "pi.archivedAt IS NULL"];
   const params: unknown[] = [];
+  // Filter by language server-side so each workspace only fetches its own half
+  // of the list instead of pulling both and discarding one on the client (需求1).
+  const language = c.req.query("language");
+  if (language === "EN" || language === "ZH") {
+    where.push("pi.language = ?");
+    params.push(language);
+  }
   if (user.role !== "ADMIN") {
     where.push("pi.createdById = ?");
     params.push(user.id);
   }
   // Expose the linked counterpart's PI No so a linked ZH draft can display the
   // English PI No as its name (需求1).
+  const cols = PI_LIST_COLUMNS.map((col) => `pi.${col}`).join(", ");
   return c.json(
     await all(
       c.env.DB,
-      `SELECT pi.*, COALESCE(linked.piNo, NULLIF(pi.linkedPiNoSnapshot, '')) AS linkedPiNo
+      `SELECT ${cols}, COALESCE(linked.piNo, NULLIF(pi.linkedPiNoSnapshot, '')) AS linkedPiNo
        FROM pi LEFT JOIN pi linked ON linked.id = pi.linkedPiId
        WHERE ${where.join(" AND ")} ORDER BY pi.updatedAt DESC`,
       ...params

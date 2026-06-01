@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { isUserApprovedChinesePi } from "../pi/labels";
+import type { Pi } from "../types";
 
 type HomeModule = {
   to: string;
@@ -22,6 +24,8 @@ export function HomePage() {
   const { user } = useAuth();
   const role = user?.role;
   const [newTickets, setNewTickets] = useState(0);
+  const [pendingReviews, setPendingReviews] = useState(0);
+  const [confirmedReceived, setConfirmedReceived] = useState(0);
 
   // Surface a red dot on the After-Sales card when there are unhandled (NEW) tickets.
   useEffect(() => {
@@ -31,10 +35,30 @@ export function HomePage() {
       .catch(() => setNewTickets(0));
   }, []);
 
+  // Badge the "Pending Reviews" card so admins see at a glance that Chinese PIs
+  // are waiting for them (需求3).
+  useEffect(() => {
+    if (role !== "ADMIN") return;
+    api
+      .get("/pi/review-queue")
+      .then((res) => setPendingReviews(Array.isArray(res.data) ? res.data.length : 0))
+      .catch(() => setPendingReviews(0));
+  }, [role]);
+
+  // Badge the "Confirmed Received PIs" card so salespeople notice when an
+  // approved Chinese PI has come back to them (需求4).
+  useEffect(() => {
+    if (role === "SERVICE") return;
+    api
+      .get("/pi?language=ZH")
+      .then((res) => setConfirmedReceived((res.data as Pi[]).filter((pi) => isUserApprovedChinesePi(pi, user?.id)).length))
+      .catch(() => setConfirmedReceived(0));
+  }, [role, user?.id]);
+
   const piModules: HomeModule[] = [
     { to: "/pi/en", title: "English PI", desc: "Create English proforma invoices", Icon: FileText, tone: "blue", art: "document" },
     { to: "/pi/zh", title: "Chinese PI", desc: "Create Chinese PIs for admin approval", Icon: FileCheck2, tone: "green", art: "temple" },
-    { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "View approved received Chinese PIs", Icon: ShieldCheck, tone: "cyan", art: "shield" },
+    { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "View approved received Chinese PIs", Icon: ShieldCheck, tone: "cyan", art: "shield", badge: confirmedReceived },
     { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
   ];
   const ticketModules: HomeModule[] = [
@@ -45,7 +69,7 @@ export function HomePage() {
       : [])
   ];
   const adminModules: HomeModule[] = [
-    { to: "/reviews", title: "Pending Reviews", desc: "Approve Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp" },
+    { to: "/reviews", title: "Pending Reviews", desc: "Approve Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
     { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
     { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
     { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" }
@@ -80,10 +104,7 @@ export function HomePage() {
       {sections.map((section) => (
         <section key={section.id} className="space-y-4">
           <div className="flex items-center gap-4">
-            <div className="shrink-0">
-              <h2 className="text-lg font-semibold tracking-tight text-[#07183f]">{section.title}</h2>
-              <p className="text-sm text-[#8595b6]">{section.subtitle}</p>
-            </div>
+            <h2 className="shrink-0 text-lg font-semibold tracking-tight text-[#07183f]">{section.title}</h2>
             <div className="h-px flex-1 bg-gradient-to-r from-[#cdddf8] to-transparent" />
           </div>
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -98,7 +119,7 @@ export function HomePage() {
 }
 
 function ModuleCard({ module }: { module: HomeModule }) {
-  const { to, title, desc, Icon, tone, art, badge } = module;
+  const { to, title, Icon, tone, art, badge } = module;
   const theme = moduleThemes[tone];
   return (
     <Link to={to} className={`group relative min-h-36 overflow-hidden rounded-lg border bg-gradient-to-br p-5 shadow-[0_18px_42px_rgba(8,36,107,0.07)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(8,36,107,0.13)] ${theme.card}`}>
@@ -113,7 +134,6 @@ function ModuleCard({ module }: { module: HomeModule }) {
         </span>
         <span className="min-w-0">
           <span className="block font-semibold text-[#07183f]">{title}</span>
-          <span className="mt-1 block text-sm leading-5 text-[#63749b]">{desc}</span>
         </span>
       </div>
       <DecorativeArt art={art} className={theme.art} />
