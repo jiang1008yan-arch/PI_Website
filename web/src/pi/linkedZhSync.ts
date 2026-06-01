@@ -2,17 +2,17 @@ import type { Language, Pi } from "../types";
 
 export type LinkedZhState = { id: string; piNo: string; status: string } | null;
 
-export function shouldShowLinkedZhSyncButton(language: Language, current: Pi | null): boolean {
-  return language === "EN" && current != null;
-}
-
-export function shouldShowSaveAndSyncButton(language: Language, current: Pi | null): boolean {
-  return language === "EN" && current == null;
+// The Sync button is always visible on the English workspace so users know the
+// feature exists; it is only *enabled* once the PI is saved and the linked
+// Chinese draft is still editable (see canSyncLinkedZh).
+export function shouldShowLinkedZhSyncButton(language: Language): boolean {
+  return language === "EN";
 }
 
 export function canSyncLinkedZh(language: Language, current: Pi | null, linkedZh: LinkedZhState): boolean {
   return Boolean(
-    shouldShowLinkedZhSyncButton(language, current) &&
+    language === "EN" &&
+    current != null &&
     (!linkedZh || linkedZh.status === "DRAFT" || linkedZh.status === "REJECTED")
   );
 }

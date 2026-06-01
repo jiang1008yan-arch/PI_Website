@@ -1,25 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { Pi } from "../types";
-import { canSyncLinkedZh, shouldShowLinkedZhSyncButton, shouldShowSaveAndSyncButton } from "./linkedZhSync";
+import { canSyncLinkedZh, shouldShowLinkedZhSyncButton } from "./linkedZhSync";
 
 const enPi = { id: "pi-1", language: "EN", status: "DRAFT" } as Pi;
-const zhPi = { id: "pi-2", language: "ZH", status: "DRAFT" } as Pi;
 
 describe("linked ZH sync button", () => {
-  it("shows for an opened English PI even before a linked Chinese draft exists", () => {
-    expect(shouldShowLinkedZhSyncButton("EN", enPi)).toBe(true);
+  it("is always visible on the English workspace, including a brand-new PI", () => {
+    expect(shouldShowLinkedZhSyncButton("EN")).toBe(true);
+  });
+
+  it("is hidden on the Chinese workspace", () => {
+    expect(shouldShowLinkedZhSyncButton("ZH")).toBe(false);
+  });
+
+  it("can only sync once an English PI is saved", () => {
+    expect(canSyncLinkedZh("EN", null, null)).toBe(false);
     expect(canSyncLinkedZh("EN", enPi, null)).toBe(true);
-  });
-
-  it("does not show without an opened PI or on the Chinese workspace", () => {
-    expect(shouldShowLinkedZhSyncButton("EN", null)).toBe(false);
-    expect(shouldShowLinkedZhSyncButton("ZH", zhPi)).toBe(false);
-  });
-
-  it("shows a save-and-sync action for a new unsaved English PI", () => {
-    expect(shouldShowSaveAndSyncButton("EN", null)).toBe(true);
-    expect(shouldShowSaveAndSyncButton("EN", enPi)).toBe(false);
-    expect(shouldShowSaveAndSyncButton("ZH", null)).toBe(false);
+    expect(canSyncLinkedZh("ZH", enPi, null)).toBe(false);
   });
 
   it("keeps existing linked Chinese drafts syncable only while editable", () => {
