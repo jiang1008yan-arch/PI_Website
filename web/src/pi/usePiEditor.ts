@@ -9,6 +9,7 @@ import { isPiDirty, type PiSnapshot } from "./piDiff";
 import { parsePiItems } from "./piItemCodec";
 import { parseField } from "../products/productFields";
 import { canSyncLinkedZh, type LinkedZhState } from "./linkedZhSync";
+import { getCachedList, setCachedList } from "./piListCache";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const EXCEL_DOWNLOAD_TIMEOUT_MS = 45000;
@@ -23,11 +24,10 @@ export type UsePiEditorParams = {
 };
 
 export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSearchParams }: UsePiEditorParams) {
-  const [pis, setPis] = useState<Pi[]>([]);
+  // Seed from the persistent cache so re-entering the page paints the last-known
+  // list immediately (no cold skeleton), then revalidate in the background.
+  const [pis, setPis] = useState<Pi[]>(() => getCachedList(user?.id, language) ?? []);
   const [listLoading, setListLoading] = useState(false);
-  // Per-language cache so toggling EN/ZH paints the previously loaded list
-  // instantly while we revalidate in the background (stale-while-revalidate).
-  const listCache = useRef<Map<Language, Pi[]>>(new Map());
   const [current, setCurrent] = useState<Pi | null>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [items, setItems] = useState<PiItem[]>([]);
@@ -85,7 +85,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   useEffect(() => {
     // Show the cached list for this language immediately (if any) so the switch
     // feels instant, then revalidate.
-    setPis(listCache.current.get(language) ?? []);
+    setPis(getCachedList(user?.id, language) ?? []);
     void reload();
   }, [language]);
 
@@ -150,7 +150,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
       // keep the client filter as a cheap guard against a stale response.
       const res = await api.get(`/pi?language=${language}`);
       const forLanguage = res.data.filter((x: Pi) => x.language === language);
-      listCache.current.set(language, forLanguage);
+      setCachedList(user?.id, language, forLanguage);
       setPis(forLanguage);
     } finally {
       setListLoading(false);

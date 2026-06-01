@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { isUserApprovedChinesePi } from "../pi/labels";
 import { getCachedCount, setCachedCount, unseenCount } from "../pi/notifications";
+import { prefetchPiList, setCachedList } from "../pi/piListCache";
 import type { Pi } from "../types";
 
 type HomeModule = {
@@ -60,12 +61,22 @@ export function HomePage() {
     api
       .get("/pi?language=ZH")
       .then((res) => {
-        const ids = (res.data as Pi[]).filter((pi) => isUserApprovedChinesePi(pi, user?.id)).map((pi) => pi.id);
+        const zh = (res.data as Pi[]).filter((pi) => pi.language === "ZH");
+        // Double as a cache warm so opening Chinese PI from here is instant.
+        setCachedList(user?.id, "ZH", zh);
+        const ids = zh.filter((pi) => isUserApprovedChinesePi(pi, user?.id)).map((pi) => pi.id);
         const n = unseenCount("confirmedReceived", user?.id, ids);
         setConfirmedReceived(n);
         setCachedCount("confirmedReceived", user?.id, n);
       })
       .catch(() => setConfirmedReceived(0));
+  }, [role, user?.id]);
+
+  // Warm the English PI list too (the ZH effect above already caches Chinese),
+  // so the first jump from home into either PI workspace paints instantly.
+  useEffect(() => {
+    if (role !== "ADMIN" && role !== "SALES") return;
+    void prefetchPiList(user?.id, "EN");
   }, [role, user?.id]);
 
   const piModules: HomeModule[] = [
