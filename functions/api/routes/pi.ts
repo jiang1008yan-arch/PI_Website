@@ -172,14 +172,9 @@ piRoutes.post("/pi", async (c) => {
     .run();
   await saveItems(c.env.DB, piId, d.items ?? []);
 
-  // 需求1 — first creation of a standalone EN PI also spins up a linked ZH
-  // DRAFT (one-time generation, not continuous sync). Idempotent: an EN PI that
-  // already carries a linkedPiId is not re-linked.
-  if (language === "EN" && !d.linkedPiId) {
-    const linked = await createLinkedZhDraft(c, piId, date, { ...d, piNo });
-    return c.json({ id: piId, piNo, linkedZhId: linked.id, linkedZhPiNo: linked.piNo });
-  }
-
+  // The linked ZH draft is created explicitly via POST /pi/:id/resync-zh (the
+  // "Sync to Chinese draft" button), never as a side effect of saving — so Save
+  // and Sync stay two distinct actions.
   return c.json({ id: piId, piNo });
 });
 

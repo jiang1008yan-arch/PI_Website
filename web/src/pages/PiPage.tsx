@@ -28,7 +28,7 @@ import { parseField } from "../products/productFields";
 import { usePiEditor } from "../pi/usePiEditor";
 import { parsePiItems } from "../pi/piItemCodec";
 import { setMetaValue } from "../pi/lineItemFields";
-import { shouldShowLinkedZhSyncButton, shouldShowSaveAndSyncButton } from "../pi/linkedZhSync";
+import { shouldShowLinkedZhSyncButton } from "../pi/linkedZhSync";
 
 const today = new Date().toISOString().slice(0, 10);
 type OptionKey = "customerSource" | "customerType" | "incoterm" | "shipmentMode";
@@ -224,7 +224,9 @@ export function PiPage({ language }: { language: Language }) {
 
       {!inEditor && (
         <Section title={`${title} List`}>
-          {editor.activePis.length === 0 ? (
+          {editor.activePis.length === 0 && editor.listLoading ? (
+            <PiListSkeleton />
+          ) : editor.activePis.length === 0 ? (
             <EmptyState title="Start with a fresh PI" description="Create a draft, add products, then save or send it when the details feel complete." />
           ) : (
             <div className="space-y-6">
@@ -240,7 +242,7 @@ export function PiPage({ language }: { language: Language }) {
 
       {inEditor && (
       <form onSubmit={editor.save} className="space-y-6">
-        <PiEditorSection title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`} tone="blue">
+        <PiEditorSection title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`}>
           {editor.current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.current.rejectionNote}</div>}
           {editor.locked && editor.current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {editor.current.status}.</div>}
           {editor.canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
@@ -286,7 +288,7 @@ export function PiPage({ language }: { language: Language }) {
         </PiEditorSection>
 
         {language === "EN" && (
-          <PiEditorSection title="Sender Information" tone="green">
+          <PiEditorSection title="Sender Information">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["senderCorp", "senderAddress", "senderFrom", "senderPhone", "senderEmail"].map((k) => (
                 <Field key={k} label={labelForSender(k)}>
@@ -298,7 +300,7 @@ export function PiPage({ language }: { language: Language }) {
         )}
 
         {language === "EN" && (
-          <PiEditorSection title="Customer Information" tone="amber">
+          <PiEditorSection title="Customer Information">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {["customerCompany", "customerContact", "customerEmail", "customerPhone", "customerAddress"].map((k) => (
                 <Field key={k} label={labelForCustomer(k)}>
@@ -311,7 +313,6 @@ export function PiPage({ language }: { language: Language }) {
 
         <PiEditorSection
           title="Products / Line Items"
-          tone="purple"
           action={!editor.locked && (
             <select onChange={(e) => { addProduct(e.target.value); e.currentTarget.value = ""; }} defaultValue="">
               <option value="" disabled>Add Product</option>
@@ -328,7 +329,6 @@ export function PiPage({ language }: { language: Language }) {
                 product={products.find((p) => p.id === it.productId)}
                 language={language}
                 locked={editor.locked || showingSnapshot}
-                tone={idx}
                 onChange={(next) => editor.setItems(editor.items.map((x, i) => i === idx ? next : x))}
                 onRemove={() => editor.setItems(editor.items.filter((_, i) => i !== idx))}
               />
@@ -337,7 +337,7 @@ export function PiPage({ language }: { language: Language }) {
           {language === "EN" && <div className="text-right font-semibold">Total: {formatCurrency(editor.total, editor.totalCurrency)}</div>}
         </PiEditorSection>
 
-        <PiEditorSection title="Other Requirements" tone="slate">
+        <PiEditorSection title="Other Requirements">
           <textarea
             className="w-full"
             disabled={editor.locked}
@@ -375,11 +375,7 @@ export function PiPage({ language }: { language: Language }) {
           )}
           {!editor.locked && !editor.canConfirmReceivedZh && (
             <button className="btn-primary" disabled={editor.saving}>
-              {editor.saving
-                ? "Saving..."
-                : shouldShowSaveAndSyncButton(language, editor.current)
-                  ? "Save & Sync to Chinese draft"
-                  : language === "EN" ? "Save" : "Save Draft"}
+              {editor.saving ? "Saving..." : language === "EN" ? "Save" : "Save Draft"}
             </button>
           )}
           {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && <button type="button" className="btn-secondary" onClick={editor.submit}>Send to Recipient</button>}
@@ -393,22 +389,30 @@ export function PiPage({ language }: { language: Language }) {
               </button>
             </>
           )}
-          {editor.current && (language === "EN" || (language === "ZH" && user?.role === "ADMIN" && editor.current.status === "APPROVED")) && (
-            <button type="button" className="btn-secondary" disabled={editor.exporting} onClick={editor.downloadExcel}>
+          {(language === "EN" || (language === "ZH" && user?.role === "ADMIN" && editor.current?.status === "APPROVED")) && (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={editor.exporting || !editor.current}
+              title={editor.current ? "Download this PI as an Excel file" : "Save the PI first to download Excel"}
+              onClick={editor.downloadExcel}
+            >
               {editor.exporting ? "Generating..." : "Download Excel"}
             </button>
           )}
-          {shouldShowLinkedZhSyncButton(language, editor.current) && (
+          {shouldShowLinkedZhSyncButton(language) && (
             <button
               type="button"
               className="btn-secondary"
               disabled={editor.saving || editor.resyncing || !editor.canResyncZh}
               title={
-                editor.canResyncZh
-                  ? editor.linkedZh
-                    ? "Rebuild the linked Chinese draft from the latest English data"
-                    : "Create a linked Chinese draft from this English PI"
-                  : "Chinese draft is locked (already submitted or approved)"
+                !editor.current
+                  ? "Save the PI first to sync it to a Chinese draft"
+                  : editor.canResyncZh
+                    ? editor.linkedZh
+                      ? "Rebuild the linked Chinese draft from the latest English data"
+                      : "Create a linked Chinese draft from this English PI"
+                    : "Chinese draft is locked (already submitted or approved)"
               }
               onClick={editor.resyncZh}
             >
@@ -495,20 +499,35 @@ function piSectionTitle(pi: Pi, language: Language) {
   return `${piDisplayName(pi, language)} - ${pi.status}`;
 }
 
-type PiEditorTone = "blue" | "green" | "amber" | "purple" | "slate";
+function PiListSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="h-[72px] animate-pulse rounded-lg border border-[#e3ecff] bg-[#f5f9ff]" />
+      ))}
+    </div>
+  );
+}
+
+// All PI sections share one calm blue palette so the workspace reads as a single
+// coherent surface instead of a multi-colour patchwork.
+const SECTION_STYLE = {
+  card: "border-[#d5e3ff] bg-gradient-to-br from-white to-[#f5f9ff]",
+  border: "border-[#e3ecff]",
+  rail: "bg-[#2f6bd8]",
+  title: "text-[#143a86]"
+};
 
 function PiEditorSection({
   title,
   children,
-  action,
-  tone
+  action
 }: {
   title: string;
   children: React.ReactNode;
   action?: React.ReactNode;
-  tone: PiEditorTone;
 }) {
-  const style = sectionTone(tone);
+  const style = SECTION_STYLE;
   return (
     <section className={`space-y-4 rounded-lg border p-5 shadow-[0_12px_32px_rgba(8,36,107,0.055)] ${style.card}`}>
       <div className={`flex flex-wrap items-center justify-between gap-3 border-b pb-4 ${style.border}`}>
@@ -521,41 +540,6 @@ function PiEditorSection({
       {children}
     </section>
   );
-}
-
-function sectionTone(tone: PiEditorTone) {
-  return {
-    blue: {
-      card: "border-[#cfe0ff] bg-gradient-to-br from-white to-[#f4f8ff]",
-      border: "border-[#dce8ff]",
-      rail: "bg-[#3b7be8]",
-      title: "text-[#123b8f]"
-    },
-    green: {
-      card: "border-[#cdebdc] bg-gradient-to-br from-white to-[#f3fbf7]",
-      border: "border-[#d9efe4]",
-      rail: "bg-[#2c9f6b]",
-      title: "text-[#176044]"
-    },
-    amber: {
-      card: "border-[#f3d9b8] bg-gradient-to-br from-white to-[#fff8ed]",
-      border: "border-[#f6e3c8]",
-      rail: "bg-[#d88a24]",
-      title: "text-[#7a4a0c]"
-    },
-    purple: {
-      card: "border-[#dfd5f3] bg-gradient-to-br from-white to-[#faf7ff]",
-      border: "border-[#e6ddf7]",
-      rail: "bg-[#7b61b5]",
-      title: "text-[#4d3783]"
-    },
-    slate: {
-      card: "border-[#d7e0ee] bg-gradient-to-br from-white to-[#f6f8fc]",
-      border: "border-[#e2e8f2]",
-      rail: "bg-[#63749b]",
-      title: "text-[#263653]"
-    }
-  }[tone];
 }
 
 async function loadModelRule(productId: string, language: Language): Promise<ModelRule | null> {

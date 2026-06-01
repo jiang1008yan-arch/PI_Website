@@ -24,6 +24,10 @@ export type UsePiEditorParams = {
 
 export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSearchParams }: UsePiEditorParams) {
   const [pis, setPis] = useState<Pi[]>([]);
+  const [listLoading, setListLoading] = useState(false);
+  // Per-language cache so toggling EN/ZH paints the previously loaded list
+  // instantly while we revalidate in the background (stale-while-revalidate).
+  const listCache = useRef<Map<Language, Pi[]>>(new Map());
   const [current, setCurrent] = useState<Pi | null>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [items, setItems] = useState<PiItem[]>([]);
@@ -79,6 +83,9 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   }, [hasBufferedEdits]);
 
   useEffect(() => {
+    // Show the cached list for this language immediately (if any) so the switch
+    // feels instant, then revalidate.
+    setPis(listCache.current.get(language) ?? []);
     void reload();
   }, [language]);
 
@@ -137,8 +144,15 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   }
 
   async function reload() {
-    const res = await api.get("/pi");
-    setPis(res.data.filter((x: Pi) => x.language === language));
+    setListLoading(true);
+    try {
+      const res = await api.get("/pi");
+      const forLanguage = res.data.filter((x: Pi) => x.language === language);
+      listCache.current.set(language, forLanguage);
+      setPis(forLanguage);
+    } finally {
+      setListLoading(false);
+    }
   }
 
   async function open(id: string) {
@@ -202,16 +216,11 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     try {
       if (current) {
         await api.patch(`/pi/${current.id}`, payload);
-        await open(current.id);
-        await reload();
+        await Promise.all([open(current.id), reload()]);
         return current.id;
       }
       const res = await api.post("/pi", payload);
-      if (language === "EN" && res.data.linkedZhPiNo) {
-        setLinkedNotice(`Linked Chinese draft ${res.data.linkedZhPiNo} created. Open the Chinese workspace to review it.`);
-      }
-      await open(res.data.id);
-      await reload();
+      await Promise.all([open(res.data.id), reload()]);
       return res.data.id as string;
     } finally {
       setSaving(false);
@@ -331,7 +340,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
 
   return {
     // PI list
-    pis, activePis,
+    pis, activePis, listLoading,
     // Current PI state
     current, header, items, events, canonical, assignedToId, rejectNote,
     // UI flags
