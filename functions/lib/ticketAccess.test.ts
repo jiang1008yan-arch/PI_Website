@@ -5,6 +5,7 @@ import {
   canAssignServiceSide,
   canChangeStatus,
   canGenerateLink,
+  canUseTickets,
   canWriteNote,
   isValidTransition,
   type TicketStatus
@@ -20,8 +21,14 @@ const user = (role: AppUser["role"]): AppUser => ({
 const ADMIN = user("ADMIN");
 const SALES = user("SALES");
 const SERVICE = user("SERVICE");
+const COMMERCE = user("COMMERCE");
 
 describe("role predicates", () => {
+  it("tickets are closed to commerce, and commerce can do nothing on them", () => {
+    expect([canUseTickets(ADMIN), canUseTickets(SALES), canUseTickets(SERVICE), canUseTickets(COMMERCE)]).toEqual([true, true, true, false]);
+    expect([canChangeStatus(COMMERCE), canWriteNote(COMMERCE), canGenerateLink(COMMERCE)]).toEqual([false, false, false]);
+  });
+
   it("status changes and notes: ADMIN and SERVICE only", () => {
     expect([canChangeStatus(ADMIN), canChangeStatus(SERVICE), canChangeStatus(SALES)]).toEqual([true, true, false]);
     expect([canWriteNote(ADMIN), canWriteNote(SERVICE), canWriteNote(SALES)]).toEqual([true, true, false]);

@@ -3,6 +3,7 @@ import {
   canAssignSalesSide,
   canAssignServiceSide,
   canChangeStatus,
+  canUseTickets,
   canWriteNote,
   isValidTransition,
   type TicketStatus
@@ -12,6 +13,14 @@ import { nextTicketNumber } from "../../lib/ticketNumber";
 import { body, createApp } from "./_shared";
 
 export const ticketRoutes = createApp();
+
+// Commerce works on PIs only; the after-sales module is closed to them.
+for (const path of ["/tickets", "/tickets/*"]) {
+  ticketRoutes.use(path, async (c, next) => {
+    if (!canUseTickets(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
+    await next();
+  });
+}
 
 const TICKET_SELECT = `
   SELECT t.*, p.code AS productCode, p.nameEn AS productNameEn, p.nameZh AS productNameZh,

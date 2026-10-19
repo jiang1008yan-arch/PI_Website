@@ -7,7 +7,7 @@
 // home badge paints instantly from storage instead of popping in after the
 // network round-trip (fixes the delayed-dot flicker).
 
-export type BadgeCategory = "confirmedReceived" | "pendingReviews";
+export type BadgeCategory = "confirmedReceived" | "pendingReviews" | "pendingCommerce";
 
 const seenKey = (category: BadgeCategory, userId: string | undefined) =>
   `pi-badge-seen:${category}:${userId ?? "anon"}`;

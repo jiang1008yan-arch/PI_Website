@@ -4,7 +4,7 @@ import type { Role } from "../../lib/types";
 import { admin, body, createApp } from "./_shared";
 import { passwordError } from "./auth";
 
-const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE"];
+const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE"];
 const normalizeRole = (value: unknown): Role => (ROLES.includes(value as Role) ? (value as Role) : "SALES");
 
 export const userRoutes = createApp();

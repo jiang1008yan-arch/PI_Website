@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Calendar, ChevronLeft, FileCheck2, FileText, Plus } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, Field, PageHero, Section } from "../components/Form";
-import type { Language, Pi, Product, ProductField, User } from "../types";
+import type { Language, Pi, PiReviewEvent, Product, ProductField, User } from "../types";
 import { LineItem } from "../pi/LineItem";
 import { OptionSetModal } from "../pi/OptionSetModal";
 import { SelectWithManage } from "../pi/SelectWithManage";
@@ -13,9 +13,13 @@ import {
   labelForCustomer,
   labelForSender,
   piDisplayName,
+  piStatusLabel,
   productOptionLabel,
+  reviewEventLabel,
+  revisionLabel,
   senderDefaultsFrom
 } from "../pi/labels";
+import { revisionChanges } from "../pi/piDiff";
 import {
   applyModelRule,
   modelRuleSeedFields,
@@ -96,6 +100,45 @@ export function PiPage({ language }: { language: Language }) {
   const viewHeader = showingSnapshot ? parsedSnapshot!.header : editor.header;
   const viewItems = showingSnapshot ? parsedSnapshot!.items : editor.items;
 
+  // While a revision is in progress, highlight what differs from the effective
+  // (approved) Chinese version frozen on the PI.
+  const revising = Boolean(language === "ZH" && editor.current?.revisionInProgress);
+  const effectiveZh = useMemo(() => {
+    if (!revising || !editor.current?.effectiveSnapshot) return null;
+    try {
+      const parsed = JSON.parse(editor.current.effectiveSnapshot);
+      // Frozen items already carry fieldValues as arrays (not wire JSON strings).
+      return parsed?.zh ? { header: parsed.zh.header ?? {}, items: (parsed.zh.items ?? []) as any[] } : null;
+    } catch {
+      return null;
+    }
+  }, [revising, editor.current?.effectiveSnapshot]);
+  const changes = useMemo(
+    () => revisionChanges(effectiveZh, { header: viewHeader, items: viewItems }),
+    [effectiveZh, viewHeader, viewItems]
+  );
+  const canStartRevision = Boolean(
+    language === "ZH" &&
+      editor.current?.status === "APPROVED" &&
+      !editor.current.revisionInProgress &&
+      (user?.role === "ADMIN" || editor.current.createdById === user?.id)
+  );
+  const canAbandonRevision = Boolean(
+    revising &&
+      (editor.current?.status === "DRAFT" || editor.current?.status === "REJECTED") &&
+      (user?.role === "ADMIN" || editor.current?.createdById === user?.id)
+  );
+  const [revisionReason, setRevisionReason] = useState("");
+  const [revisionFormOpen, setRevisionFormOpen] = useState(false);
+  useEffect(() => { setRevisionFormOpen(false); setRevisionReason(""); }, [editor.current?.id]);
+  async function submitRevision() {
+    if (!revisionReason.trim()) {
+      editor.setExportError("Please give a reason for the change.");
+      return;
+    }
+    if (await editor.startRevision(revisionReason.trim())) setRevisionFormOpen(false);
+  }
+
   const loadProducts = async () => {
     const res = await api.get("/products");
     setProducts(res.data.filter((x: Product) => x.status === "ACTIVE"));
@@ -171,10 +214,11 @@ export function PiPage({ language }: { language: Language }) {
       <div key={p.id} className="relative">
         <button className="choice-card w-full pr-16" onClick={() => openPi(p.id)}>
           {piDisplayName(p, language)}
+          {Boolean(p.revisionInProgress) && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">Revision</span>}
           <br />
           <span className="text-xs text-slate-500">{piListSubtitle(p, language)}</span>
         </button>
-        {(language === "EN" || p.status === "DRAFT") && (
+        {(language === "EN" || (p.status === "DRAFT" && !p.revisionInProgress)) && (
           <button
             type="button"
             className="btn-danger absolute right-2 top-2 px-2 py-1 text-xs"
@@ -226,13 +270,21 @@ export function PiPage({ language }: { language: Language }) {
           {editor.activePis.length === 0 && editor.listLoading ? (
             <PiListSkeleton />
           ) : editor.activePis.length === 0 ? (
-            <EmptyState title="Start with a fresh PI" description="Create a draft, add products, then save or send it when the details feel complete." />
+            <EmptyState
+              title="Start with a fresh PI"
+              description={language === "ZH" ? "Approved Chinese PIs are listed under Confirmed Received PIs." : "Create a draft, add products, then save or send it when the details feel complete."}
+            />
           ) : (
             <div className="space-y-6">
               {renderPiGroup("Drafts", editor.activePis.filter((p) => p.status === "DRAFT"))}
-              {renderPiGroup(
-                language === "EN" ? "Submitted" : "Sent for review",
-                editor.activePis.filter((p) => p.status !== "DRAFT")
+              {language === "EN" ? (
+                renderPiGroup("Submitted", editor.activePis.filter((p) => p.status !== "DRAFT"))
+              ) : (
+                <>
+                  {renderPiGroup("Rejected", editor.activePis.filter((p) => p.status === "REJECTED"))}
+                  {renderPiGroup(piStatusLabel("PENDING_REVIEW"), editor.activePis.filter((p) => p.status === "PENDING_REVIEW"))}
+                  {renderPiGroup(piStatusLabel("PENDING_COMMERCE"), editor.activePis.filter((p) => p.status === "PENDING_COMMERCE"))}
+                </>
               )}
             </div>
           )}
@@ -243,7 +295,29 @@ export function PiPage({ language }: { language: Language }) {
       <form onSubmit={editor.save} className="space-y-6">
         <PiEditorSection title={editor.current ? piSectionTitle(editor.current, language) : `New ${title}`}>
           {editor.current?.rejectionNote && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.current.rejectionNote}</div>}
-          {editor.locked && editor.current && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">This PI is read-only in status {editor.current.status}.</div>}
+          {editor.locked && editor.current && (
+            <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">
+              {language === "EN" && editor.current.linkedPiStatus === "APPROVED"
+                ? "This PI is locked because its Chinese PI is approved. Start a revision of the Chinese PI to change it."
+                : `This PI is read-only (${piStatusLabel(editor.current.status, language)}).`}
+            </div>
+          )}
+          {revising && editor.current && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              <span>
+                <strong>{revisionLabel((editor.current.revisionNo ?? 1) + 1)} in progress.</strong> Reason: {editor.current.revisionReason || "—"}.
+                {" "}The approved {revisionLabel(editor.current.revisionNo)} stays effective until commerce approves this revision. Highlighted fields differ from it.
+              </span>
+              {canAbandonRevision && (
+                <button type="button" className="btn-secondary px-3 py-1 text-xs" onClick={editor.abandonRevision}>Abandon revision</button>
+              )}
+            </div>
+          )}
+          {language === "ZH" && editor.current && (editor.current.status === "PENDING_COMMERCE" || editor.current.status === "APPROVED" || revising) && (
+            <div className="text-sm">
+              <Link className="text-primary underline" to={`/pi/view/${editor.current.id}`}>Open the read-only view (Chinese and English)</Link>
+            </div>
+          )}
           {editor.canEditPendingZh && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-700">You received this PI. Edits stay in your browser — nothing is saved until you Confirm. Reject sends the PI back with your note (and any edits become suggestions).</div>}
           {canViewSnapshot && (
             <div className="flex items-center gap-2 rounded-lg bg-[#f1f5fc] p-2 text-sm">
@@ -277,10 +351,10 @@ export function PiPage({ language }: { language: Language }) {
               </>
             ) : (
               <>
-                <Field label="Production Order No."><input disabled={editor.locked} value={viewHeader.productionOrderNo ?? ""} onChange={(e) => setHeaderField({ productionOrderNo: e.target.value })} /></Field>
-                <SelectWithManage label="Customer Source" value={viewHeader.customerSource ?? ""} options={sourceOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerSource: value })} onManage={() => setOptionEditor("customerSource")} />
-                <SelectWithManage label="Customer Type" value={viewHeader.customerType ?? ""} options={typeOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerType: value })} onManage={() => setOptionEditor("customerType")} />
-                <DateField label="Delivery Date" disabled={editor.locked} value={viewHeader.deliveryDate ?? ""} onChange={(value) => setHeaderField({ deliveryDate: value })} />
+                <Changed on={changes.header.has("productionOrderNo")}><Field label="Production Order No."><input disabled={editor.locked} value={viewHeader.productionOrderNo ?? ""} onChange={(e) => setHeaderField({ productionOrderNo: e.target.value })} /></Field></Changed>
+                <Changed on={changes.header.has("customerSource")}><SelectWithManage label="Customer Source" value={viewHeader.customerSource ?? ""} options={sourceOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerSource: value })} onManage={() => setOptionEditor("customerSource")} /></Changed>
+                <Changed on={changes.header.has("customerType")}><SelectWithManage label="Customer Type" value={viewHeader.customerType ?? ""} options={typeOptions} disabled={editor.locked} canManage={user?.role === "ADMIN"} onChange={(value) => setHeaderField({ customerType: value })} onManage={() => setOptionEditor("customerType")} /></Changed>
+                <Changed on={changes.header.has("deliveryDate")}><DateField label="Delivery Date" disabled={editor.locked} value={viewHeader.deliveryDate ?? ""} onChange={(value) => setHeaderField({ deliveryDate: value })} /></Changed>
               </>
             )}
           </div>
@@ -322,33 +396,61 @@ export function PiPage({ language }: { language: Language }) {
           <div className="space-y-3">
             {viewItems.length === 0 && !editor.locked && <EmptyState title="Add the first product" description="Pick a product above and the page will open the fields needed for this invoice." />}
             {viewItems.map((it, idx) => (
-              <LineItem
-                key={idx}
-                item={it}
-                product={products.find((p) => p.id === it.productId)}
-                language={language}
-                locked={editor.locked || showingSnapshot}
-                onChange={(next) => editor.setItems(editor.items.map((x, i) => i === idx ? next : x))}
-                onRemove={() => editor.setItems(editor.items.filter((_, i) => i !== idx))}
-              />
+              <Changed key={idx} on={changes.items.has(idx)}>
+                <LineItem
+                  item={it}
+                  product={products.find((p) => p.id === it.productId)}
+                  language={language}
+                  locked={editor.locked || showingSnapshot}
+                  onChange={(next) => editor.setItems(editor.items.map((x, i) => i === idx ? next : x))}
+                  onRemove={() => editor.setItems(editor.items.filter((_, i) => i !== idx))}
+                />
+              </Changed>
             ))}
           </div>
           {language === "EN" && <div className="text-right font-semibold">Total: {formatCurrency(editor.total, editor.totalCurrency)}</div>}
         </PiEditorSection>
 
         <PiEditorSection title="Other Requirements">
-          <textarea
-            className="w-full"
-            disabled={editor.locked}
-            rows={5}
-            value={viewHeader.otherRequirements ?? ""}
-            onChange={(e) => setHeaderField({ otherRequirements: e.target.value })}
-          />
+          <Changed on={changes.header.has("otherRequirements")}>
+            <textarea
+              className="w-full"
+              disabled={editor.locked}
+              rows={5}
+              value={viewHeader.otherRequirements ?? ""}
+              onChange={(e) => setHeaderField({ otherRequirements: e.target.value })}
+            />
+          </Changed>
         </PiEditorSection>
 
         {editor.events.length > 0 && (
           <Section title="Review History">
-            {editor.events.map((e) => <div key={e.id} className="border-t py-2 text-sm">{e.action} by {e.actorName} - {e.note}</div>)}
+            {(editor.events as PiReviewEvent[]).map((e) => (
+              <div key={e.id} className="border-t py-2 text-sm">
+                {reviewEventLabel(e)} by {e.actorName || "—"}{e.note ? ` — ${e.note}` : ""}
+                <span className="ml-2 text-xs text-slate-400">{e.createdAt}</span>
+              </div>
+            ))}
+          </Section>
+        )}
+
+        {revisionFormOpen && (
+          <Section title="Start a revision">
+            <p className="mb-2 text-sm text-[#63749b]">
+              The Chinese PI and its English PI reopen for editing and go through presales confirmation and commerce approval again.
+              Until then the approved version stays in effect.
+            </p>
+            <textarea
+              className="w-full"
+              rows={3}
+              placeholder="Reason for the change (required; shown to the reviewers)"
+              value={revisionReason}
+              onChange={(e) => setRevisionReason(e.target.value)}
+            />
+            <div className="mt-2 flex gap-2">
+              <button type="button" className="btn-primary" onClick={submitRevision}>Start revision</button>
+              <button type="button" className="btn-secondary" onClick={() => setRevisionFormOpen(false)}>Cancel</button>
+            </div>
           </Section>
         )}
 
@@ -388,6 +490,9 @@ export function PiPage({ language }: { language: Language }) {
               </button>
             </>
           )}
+          {canStartRevision && !revisionFormOpen && (
+            <button type="button" className="btn-secondary" onClick={() => setRevisionFormOpen(true)}>Modify (start revision)</button>
+          )}
           {(language === "EN" || (language === "ZH" && user?.role === "ADMIN" && editor.current?.status === "APPROVED")) && (
             <button
               type="button"
@@ -423,6 +528,12 @@ export function PiPage({ language }: { language: Language }) {
           <div className="flex items-center justify-between gap-3 rounded-lg bg-green-50 p-3 text-sm text-green-700">
             <span>{editor.linkedNotice}</span>
             <button type="button" className="text-green-700 underline" onClick={() => editor.setLinkedNotice("")}>Dismiss</button>
+          </div>
+        )}
+        {editor.submitNotice && (
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+            <span>{editor.submitNotice}</span>
+            <button type="button" className="underline" onClick={() => editor.setSubmitNotice("")}>Dismiss</button>
           </div>
         )}
         {editor.exportError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{editor.exportError}</div>}
@@ -490,12 +601,22 @@ function optionsFor(
 
 function piListSubtitle(pi: Pi, language: Language) {
   if (language === "EN") return pi.customerCompany || "";
-  return `${pi.customerCompany} - ${pi.status}`;
+  return `${pi.customerCompany} - ${piStatusLabel(pi.status)}`;
 }
 
 function piSectionTitle(pi: Pi, language: Language) {
   if (language === "EN") return piDisplayName(pi, language);
-  return `${piDisplayName(pi, language)} - ${pi.status}`;
+  return `${piDisplayName(pi, language)} - ${piStatusLabel(pi.status)} · ${revisionLabel(pi.revisionInProgress ? (pi.revisionNo ?? 1) + 1 : pi.revisionNo)}`;
+}
+
+// Marks a field or line item a revision changed relative to the approved version.
+function Changed({ on, children }: { on: boolean; children: React.ReactNode }) {
+  if (!on) return <>{children}</>;
+  return (
+    <div className="rounded-lg bg-amber-50 ring-2 ring-amber-300 ring-offset-2" title="Changed in this revision">
+      {children}
+    </div>
+  );
 }
 
 function PiListSkeleton() {

@@ -1,6 +1,6 @@
 export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE";
 export type Language = "EN" | "ZH";
-export type PiStatus = "DRAFT" | "PENDING_REVIEW" | "REJECTED" | "APPROVED" | "SUBMITTED";
+export type PiStatus = "DRAFT" | "PENDING_REVIEW" | "PENDING_COMMERCE" | "REJECTED" | "APPROVED" | "SUBMITTED";
 export type ProductStatus = "ACTIVE" | "DISCONTINUED";
 
 export type User = {
@@ -93,6 +93,23 @@ export type Pi = {
   linkedPiNo?: string | null;
   linkedPiNoSnapshot?: string | null;
   linkedPiStatus?: string | null;
+  linkedPiRevisionInProgress?: number | null;
+  revisionNo?: number;
+  revisionInProgress?: number | boolean;
+  revisionReason?: string | null;
+  effectiveSnapshot?: string | null;
+  approvedAt?: string | null;
+  createdByName?: string | null;
+};
+
+export type PiReviewEvent = {
+  id: string;
+  action: "SUBMITTED" | "APPROVED" | "REJECTED" | "REVISION_STARTED" | "REVISION_ABANDONED";
+  step?: "PRESALES" | "COMMERCE" | null;
+  revisionNo?: number;
+  note?: string | null;
+  actorName?: string | null;
+  createdAt: string;
 };
 
 export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";

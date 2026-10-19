@@ -110,6 +110,11 @@ describe("tickets", () => {
     expect(detail.body.updates.map((u: any) => u.kind)).toEqual(["STATUS", "NOTE"]);
   });
 
+  it("is closed to commerce", async () => {
+    expect((await h.request("COMMERCE", "GET", "/tickets")).status).toBe(403);
+    expect((await h.request("COMMERCE", "GET", "/tickets/stats")).status).toBe(403);
+  });
+
   it("requires an active product", async () => {
     const res = await h.request("SALES", "POST", "/tickets", { contactName: "Li", contactInfo: "x", productId: "nope", answers: {} });
     expect(res.status).toBe(400);

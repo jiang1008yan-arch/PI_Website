@@ -40,6 +40,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [rejecting, setRejecting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exportError, setExportError] = useState("");
+  const [submitNotice, setSubmitNotice] = useState("");
   const fieldOptionsCache = useRef(new Map<string, {
     optionsByLabel: Map<string, string[]>;
     typeByLabel: Map<string, string>;
@@ -52,7 +53,14 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
 
   const canEditPendingZh = Boolean(user && current && isReviewerEditMode(user.role, language, current.status));
   const canConfirmReceivedZh = canEditPendingZh;
-  const locked = Boolean(language === "ZH" && current && !canEditPiDirectly(language, current.status) && !canEditPendingZh);
+  // An EN PI is locked together with its approved ZH PI (until a revision starts).
+  const linkedZhApproved = language === "EN" && current?.linkedPiStatus === "APPROVED";
+  const locked = Boolean(
+    current &&
+      (language === "ZH"
+        ? !canEditPiDirectly(language, current.status) && !canEditPendingZh
+        : !canEditPiDirectly(language, current.status, { linkedZhApproved }))
+  );
   const activePis = language === "ZH"
     ? pis.filter((p) => p.status !== "APPROVED" && !isConfirmedReceivedPi(p, user?.id))
     : pis;
@@ -167,6 +175,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setEvents(res.data.events ?? []);
     setCanonical({ header: { ...res.data.pi }, items: hydrated });
     setRejectNote("");
+    setSubmitNotice("");
     if (language === "EN" && res.data.pi.linkedPiId && res.data.pi.linkedPiNo && res.data.pi.linkedPiStatus) {
       setLinkedZh({
         id: res.data.pi.linkedPiId,
@@ -261,12 +270,45 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   async function submit() {
     const id = current?.id ?? await save();
     if (!id) return;
-    await api.post(
+    const res = await api.post(
       language === "ZH" ? `/pi/${id}/submit-for-review` : `/pi/${id}/submit`,
       language === "ZH" ? { assignedToId } : {}
     );
     await open(id);
     await reload();
+    // One PI, one production order — the server warns when the number is reused.
+    const duplicates: string[] = res.data?.duplicateProductionOrderPiNos ?? [];
+    if (duplicates.length) {
+      setSubmitNotice(`Sent. Note: production order no. ${header.productionOrderNo} is also used by ${duplicates.join(", ")}.`);
+    }
+  }
+
+  // Start a revision of an approved ZH PI. The approved version stays effective
+  // until the revision gets commerce approval.
+  async function startRevision(reason: string) {
+    if (!current) return false;
+    setExportError("");
+    try {
+      await api.post(`/pi/${current.id}/revisions`, { reason });
+      await Promise.all([open(current.id), reload()]);
+      return true;
+    } catch (err: any) {
+      setExportError(err.response?.data?.error ?? err.message ?? "Could not start the revision.");
+      return false;
+    }
+  }
+
+  async function abandonRevision() {
+    if (!current) return;
+    if (!window.confirm("Abandon this revision? The Chinese and English PIs go back to the approved version.")) return;
+    setExportError("");
+    try {
+      await api.post(`/pi/${current.id}/revisions/abandon`);
+      clearState();
+      await reload();
+    } catch (err: any) {
+      setExportError(err.response?.data?.error ?? err.message ?? "Could not abandon the revision.");
+    }
   }
 
   async function confirmReceivedPi() {
@@ -313,10 +355,15 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   }
 
   async function deleteDraft(pi: Pi) {
-    if (!canDeletePiByStatus(language, pi.status)) return;
+    if (!canDeletePiByStatus(language, pi.status, { revisionInProgress: Boolean(pi.revisionInProgress) })) return;
     const ok = window.confirm(`Delete ${language === "EN" ? "PI" : "draft"} ${piDisplayName(pi, language)}?`);
     if (!ok) return;
-    await api.delete(`/pi/${pi.id}`);
+    try {
+      await api.delete(`/pi/${pi.id}`);
+    } catch (err: any) {
+      window.alert(err.response?.data?.error ?? err.message ?? "Delete failed.");
+      return;
+    }
     if (current?.id === pi.id) clearState();
     await reload();
   }
@@ -346,17 +393,17 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     // Current PI state
     current, header, items, events, canonical, assignedToId, rejectNote,
     // UI flags
-    exporting, confirming, rejecting, saving, exportError, resyncing,
+    exporting, confirming, rejecting, saving, exportError, resyncing, submitNotice,
     // Linked ZH (需求1)
     linkedZh, linkedNotice, canResyncZh,
     // Derived
     locked, canEditPendingZh, canConfirmReceivedZh, hasBufferedEdits, isDirty,
     total, totalCurrency,
     // Setters
-    setHeader, setItems, setAssignedToId, setRejectNote, setExportError, setLinkedNotice,
+    setHeader, setItems, setAssignedToId, setRejectNote, setExportError, setLinkedNotice, setSubmitNotice,
     // Actions
     reload, open, reset, clearState, selectPi, save, submit,
-    confirmReceivedPi, rejectReview, deleteDraft, downloadExcel, resyncZh
+    confirmReceivedPi, rejectReview, deleteDraft, downloadExcel, resyncZh, startRevision, abandonRevision
   };
 }
 

@@ -1,12 +1,10 @@
-import { ChevronRight, ClipboardList, Clock3, FileCheck2, FileText, Folder, LayoutGrid, LifeBuoy, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { Archive, BadgeCheck, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { isUserApprovedChinesePi } from "../pi/labels";
 import { getCachedCount, setCachedCount, unseenCount } from "../pi/notifications";
-import { prefetchPiList, setCachedList } from "../pi/piListCache";
-import type { Pi } from "../types";
+import { prefetchPiList } from "../pi/piListCache";
 
 type HomeModule = {
   to: string;
@@ -30,14 +28,30 @@ export function HomePage() {
   // then revalidate against the live list below.
   const [pendingReviews, setPendingReviews] = useState(() => getCachedCount("pendingReviews", user?.id));
   const [confirmedReceived, setConfirmedReceived] = useState(() => getCachedCount("confirmedReceived", user?.id));
+  const [pendingCommerce, setPendingCommerce] = useState(() => getCachedCount("pendingCommerce", user?.id));
 
   // Surface a red dot on the After-Sales card when there are unhandled (NEW) tickets.
   useEffect(() => {
+    if (role === "COMMERCE") return;
     api
       .get("/tickets/stats")
       .then((res) => setNewTickets(res.data.byStatus?.find((r: { status: string }) => r.status === "NEW")?.n ?? 0))
       .catch(() => setNewTickets(0));
-  }, []);
+  }, [role]);
+
+  // Badge "Pending Commerce Approval" with queued PIs this commerce user hasn't opened.
+  useEffect(() => {
+    if (role !== "COMMERCE") return;
+    api
+      .get("/pi/commerce-queue")
+      .then((res) => {
+        const ids = (Array.isArray(res.data) ? res.data : []).map((p: { id: string }) => p.id);
+        const n = unseenCount("pendingCommerce", user?.id, ids);
+        setPendingCommerce(n);
+        setCachedCount("pendingCommerce", user?.id, n);
+      })
+      .catch(() => setPendingCommerce(0));
+  }, [role, user?.id]);
 
   // Badge the "Pending Reviews" card with the number of waiting Chinese PIs the
   // admin hasn't opened yet; opening the Pending Reviews page clears it (需求3).
@@ -54,17 +68,14 @@ export function HomePage() {
       .catch(() => setPendingReviews(0));
   }, [role, user?.id]);
 
-  // Badge the "Confirmed Received PIs" card with approved Chinese PIs the user
-  // hasn't opened yet; opening that page clears it (需求4).
+  // Badge the "Confirmed Received PIs" card with approved Chinese PIs (the
+  // newest page of the user's own) not opened yet; opening that page clears it.
   useEffect(() => {
-    if (role === "SERVICE") return;
+    if (role !== "ADMIN" && role !== "SALES") return;
     api
-      .get("/pi?language=ZH")
+      .get("/pi/approved", { params: { scope: "mine" } })
       .then((res) => {
-        const zh = (res.data as Pi[]).filter((pi) => pi.language === "ZH");
-        // Double as a cache warm so opening Chinese PI from here is instant.
-        setCachedList(user?.id, "ZH", zh);
-        const ids = zh.filter((pi) => isUserApprovedChinesePi(pi, user?.id)).map((pi) => pi.id);
+        const ids = ((res.data?.items ?? []) as { id: string }[]).map((pi) => pi.id);
         const n = unseenCount("confirmedReceived", user?.id, ids);
         setConfirmedReceived(n);
         setCachedCount("confirmedReceived", user?.id, n);
@@ -72,39 +83,55 @@ export function HomePage() {
       .catch(() => setConfirmedReceived(0));
   }, [role, user?.id]);
 
-  // Warm the English PI list too (the ZH effect above already caches Chinese),
-  // so the first jump from home into either PI workspace paints instantly.
+  // Warm both PI workspace lists so the first jump from home paints instantly.
   useEffect(() => {
     if (role !== "ADMIN" && role !== "SALES") return;
     void prefetchPiList(user?.id, "EN");
+    void prefetchPiList(user?.id, "ZH");
   }, [role, user?.id]);
 
   const piModules: HomeModule[] = [
     { to: "/pi/en", title: "English PI", desc: "Create English proforma invoices", Icon: FileText, tone: "blue", art: "document" },
-    { to: "/pi/zh", title: "Chinese PI", desc: "Create Chinese PIs for admin approval", Icon: FileCheck2, tone: "green", art: "temple" },
-    { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "View approved received Chinese PIs", Icon: ShieldCheck, tone: "cyan", art: "shield", badge: confirmedReceived },
+    { to: "/pi/zh", title: "Chinese PI", desc: "Create Chinese PIs for presales confirmation and commerce approval", Icon: FileCheck2, tone: "green", art: "temple" },
+    { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "Approved Chinese PIs you created or received", Icon: ShieldCheck, tone: "cyan", art: "shield", badge: confirmedReceived },
     { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
   ];
   const ticketModules: HomeModule[] = [
     { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests, links and statistics", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
+    ...(role === "ADMIN" || role === "SERVICE"
+      ? [{ to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" } as HomeModule]
+      : []),
     // The questionnaire shapes the after-sales form; ADMIN and SERVICE can configure it.
     ...(role === "ADMIN" || role === "SERVICE"
       ? [{ to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Configure the customer submission form", Icon: ClipboardList, tone: "violet", art: "grid" } as HomeModule]
       : [])
   ];
   const adminModules: HomeModule[] = [
-    { to: "/reviews", title: "Pending Reviews", desc: "Approve Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
+    { to: "/reviews", title: "Pending Reviews", desc: "Presales confirmation of Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
+    { to: "/commerce", title: "Commerce Queue", desc: "Watch PIs awaiting commerce approval", Icon: BadgeCheck, tone: "violet", art: "stamp" },
     { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
     { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
     { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" }
   ];
 
-  // SERVICE agents only handle after-sales tickets; everything else is hidden.
+  const commerceModules: HomeModule[] = [
+    { to: "/commerce", title: "Pending Commerce Approval", desc: "Approve or reject Chinese PIs after presales confirmation", Icon: BadgeCheck, tone: "orange", art: "stamp", badge: pendingCommerce },
+    { to: "/pi/approved", title: "Approved PIs", desc: "Search approved PIs and download Chinese and English Excel", Icon: Archive, tone: "cyan", art: "shield" },
+    { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
+  ];
+
+  // Each role sees only its own modules: SERVICE handles after-sales; COMMERCE
+  // approves and downloads PIs; SALES and ADMIN create PIs.
   const sections: HomeSection[] = [];
-  if (role !== "SERVICE") {
+  if (role === "COMMERCE") {
+    sections.push({ id: "commerce", title: "Commerce", subtitle: "Commerce approval and approved PIs", modules: commerceModules });
+  }
+  if (role === "ADMIN" || role === "SALES") {
     sections.push({ id: "pi", title: "Proforma Invoices", subtitle: "Create, review and export PIs", modules: piModules });
   }
-  sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
+  if (role !== "COMMERCE") {
+    sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
+  }
   if (role === "ADMIN") {
     sections.push({ id: "admin", title: "Administration", subtitle: "Products, reviews and access control", modules: adminModules });
   }
