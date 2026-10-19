@@ -37,23 +37,29 @@ A PI moves through these statuses. Transitions are gated by language, ownership,
 ```
               EN flow                            ZH flow
 
-              DRAFT                              DRAFT
-                |                                  |
-            (submit)                       (submit-for-review)
-                |                                  |
-            SUBMITTED                       PENDING_REVIEW
-                                                   |
-                                       admin: approve / reject
-                                            /              \
-                                       APPROVED         REJECTED
+              DRAFT                              DRAFT  <──────────────┐
+                |                                  |                   │
+            (submit)                       (submit-for-review)         │
+                |                                  |                   │
+            SUBMITTED                       PENDING_REVIEW             │
+                                                   |                   │
+                                   presales confirmation (ADMIN)       │
+                                          /                \           │
+                                PENDING_COMMERCE        REJECTED ──────┤
+                                          |                ^           │
+                              commerce approval (COMMERCE) │           │
+                                   /                \      │           │
+                              APPROVED            reject ──┘           │
+                                  │                                    │
+                                  └──── start revision (reopens) ──────┘
 ```
 
-- **DRAFT** — editable by owner/admin. Auto-purged after 3 days idle.
-- **SUBMITTED** — EN-only terminal-ish state; remains editable by owner/admin (EN has no lock).
-- **PENDING_REVIEW** — ZH-only. **Locked for direct writes.** Admin reviewers edit in **review mode** (see below) and commit changes only via Approve.
-- **APPROVED** — ZH only. Required before Excel export. Triggers visibility on the submitter's "Confirmed Received" view.
-- Approved ZH PIs are retained only for the configured cleanup window; the scheduled janitor hard-deletes expired rows and their line items/review events to control database size.
-- **REJECTED** — ZH only. Editable again by owner/admin; carries `rejectionNote` and (optionally) `suggestedChanges` from the reviewer.
+- **DRAFT** — editable by owner/admin. Auto-purged after 3 days idle, unless it is a revision or an EN PI paired with a ZH PI that has left its draft.
+- **SUBMITTED** — EN-only. Editable by owner/admin until its linked ZH PI is approved; then it is locked with it.
+- **PENDING_REVIEW** — ZH-only, awaiting presales confirmation. **Locked for direct writes.** Admin reviewers edit in **review mode** (see below) and commit changes only via confirmation.
+- **PENDING_COMMERCE** — ZH-only, awaiting commerce approval. Locked; commerce approves or rejects without editing.
+- **APPROVED** — ZH only, after commerce approval. Required before Excel export by admins; commerce may also download while deciding. Kept three years after the latest commerce approval, then purged by the scheduled janitor.
+- **REJECTED** — ZH only, by either step. Editable again by owner/admin; carries `rejectionNote` and (from presales only) `suggestedChanges`. Resubmitting restarts at presales confirmation.
 
 ## Review workflow
 
