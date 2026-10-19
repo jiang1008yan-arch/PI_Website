@@ -59,6 +59,10 @@ app.route("/", ticketLinkRoutes);
 app.route("/", ticketFieldRoutes);
 app.route("/", publicTicketRoutes);
 
+// Exported for the integration tests (functions/test/harness.ts), which drive the
+// app directly with a Miniflare-backed D1 instead of going through Pages.
+export { app };
+
 export const onRequest: PagesFunction<Env> = (context) =>
   // Pass the EventContext as Hono's ExecutionContext so handlers can defer
   // non-critical work (e.g. draft purge) past the response via c.executionCtx.
