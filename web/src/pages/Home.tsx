@@ -1,4 +1,4 @@
-import { Archive, BadgeCheck, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { Activity, Archive, BadgeCheck, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -97,13 +97,10 @@ export function HomePage() {
     { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
   ];
   const ticketModules: HomeModule[] = [
-    { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests, links and statistics", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
+    { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests, links and status counts", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
+    { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange", art: "grid" },
     ...(role === "ADMIN" || role === "SERVICE"
       ? [{ to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" } as HomeModule]
-      : []),
-    // The questionnaire shapes the after-sales form; ADMIN and SERVICE can configure it.
-    ...(role === "ADMIN" || role === "SERVICE"
-      ? [{ to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Configure the customer submission form", Icon: ClipboardList, tone: "violet", art: "grid" } as HomeModule]
       : [])
   ];
   const adminModules: HomeModule[] = [
@@ -111,7 +108,8 @@ export function HomePage() {
     { to: "/commerce", title: "Commerce Queue", desc: "Watch PIs awaiting commerce approval", Icon: BadgeCheck, tone: "violet", art: "stamp" },
     { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
     { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
-    { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" }
+    { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" },
+    { to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Questions on the customer ticket form", Icon: ClipboardList, tone: "violet", art: "grid" }
   ];
 
   const commerceModules: HomeModule[] = [
@@ -133,7 +131,7 @@ export function HomePage() {
     sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
   }
   if (role === "ADMIN") {
-    sections.push({ id: "admin", title: "Administration", subtitle: "Products, reviews and access control", modules: adminModules });
+    sections.push({ id: "admin", title: "Administration", subtitle: "Products, reviews, access control and configuration", modules: adminModules });
   }
 
   return (

@@ -7,6 +7,7 @@ import { CommerceQueuePage } from "./pages/CommerceQueuePage";
 import { ConfirmedReceivedPisPage } from "./pages/ConfirmedReceivedPis";
 import { ContractsPage } from "./pages/Contracts";
 import { CreateTicketPage } from "./pages/CreateTicket";
+import { FaultAnalyticsPage } from "./pages/FaultAnalyticsPage";
 import { FeishuBindPage } from "./pages/FeishuBindPage";
 import { HomePage } from "./pages/Home";
 import { LoginPage } from "./pages/Login";
@@ -52,12 +53,11 @@ export default function App() {
             <Route path="/tickets" element={<TicketsPage />} />
             <Route path="/tickets/new" element={<CreateTicketPage />} />
             <Route path="/tickets/:id" element={<TicketDetailPage />} />
-          </Route>
-          {/* Questionnaire shapes the after-sales form, so SERVICE can edit it too. */}
-          <Route element={<RoleRoute allow={["ADMIN", "SERVICE"]} />}>
-            <Route path="/ticket-fields-config" element={<TicketFieldsConfigPage />} />
+            {/* Fault analytics: statistics for all three; settings tab for ADMIN/SERVICE. */}
+            <Route path="/fault-analytics" element={<FaultAnalyticsPage />} />
           </Route>
           <Route element={<AdminRoute />}>
+            <Route path="/ticket-fields-config" element={<TicketFieldsConfigPage />} />
             <Route path="/products" element={<ProductsPage />} />
             <Route path="/reviews" element={<ReviewPage />} />
             <Route path="/permissions" element={<PermissionsPage />} />
