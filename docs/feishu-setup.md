@@ -42,7 +42,47 @@ The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_
 - The first time someone presses a card button the bot DMs them a one-time link to tie their Feishu account to their portal
   account. Only after-sales and admins can take or update tickets; sales can create them.
 
-## 4. Verify in a test tenant before going live
+## 4. Trying it locally first (recommended)
+
+Feishu must reach the server over public HTTPS. Instead of deploying (the deployed site shares the production
+database), run the portal locally and expose it with a temporary Cloudflare tunnel. Only the local database is touched.
+
+1. Install the tunnel tool once: `winget install --id Cloudflare.cloudflared`.
+2. Local portal with test data: `npm run db:migrate:local`, `node scripts/seed-local-dev.mjs`, `npm run build`, `npm run dev:api` (port 8788).
+3. In another terminal: `cloudflared tunnel --url http://localhost:8788` — it prints an `https://….trycloudflare.com` address.
+   The address changes every time you restart it; update `APP_BASE_URL` and both Feishu URLs when it does.
+4. Create the Feishu app (section 1, steps 1–2; the external-sharing step can wait — test with internal groups).
+   Under **Events & callbacks → Encryption**, generate an Encrypt Key and note the Verification Token.
+5. Put the values into `.dev.vars` (never committed) and restart `npm run dev:api`:
+   ```
+   FEISHU_APP_ID=cli_...
+   FEISHU_APP_SECRET=...
+   FEISHU_VERIFICATION_TOKEN=...
+   FEISHU_ENCRYPT_KEY=...
+   FEISHU_SERVICE_CHAT_ID=oc_...
+   APP_BASE_URL=https://<your-tunnel>.trycloudflare.com
+   ANTHROPIC_API_KEY=...   (optional — AI suggestions)
+   ```
+   The server must already have the Encrypt Key and Verification Token **before** you save the URLs in Feishu,
+   because Feishu checks the URL immediately.
+6. Save the event URL `https://<tunnel>/api/feishu/events` (add event 接收消息 v2.0) and the callback URL
+   `https://<tunnel>/api/feishu/card` (add callback 卡片回传交互). Then create and publish an app version, limited to yourself.
+7. Make two internal groups: an "after-sales" group and a "customer" group (a stand-in for an external group). Add the bot to both.
+   Get the after-sales group's `chat_id` from the [API Explorer](https://open.feishu.cn/api-explorer) with
+   **获取用户或机器人所在的群列表** (`GET /im/v1/chats`, tenant token) and put it in `FEISHU_SERVICE_CHAT_ID`; restart the server.
+8. Try the flow:
+   - In the customer group, post a message like "PO-2026-0901 charger keeps going offline", then **reply** to it with `@bot`.
+   - The bot DMs you a confirmation card. Pressing its button the first time gets you a link-your-account DM: open it,
+     sign in as `service_dev` (local test account), press **Link**, then press the card button again.
+   - Fill in contact (and customer, production order, fault type) → **Create ticket**. Expect: a ticket card in the after-sales group,
+     a "registered" reply in the customer group, and the ticket at `http://localhost:8788/tickets`.
+   - On the group card: **Take**, then add a note, then set **Resolved**. The card should update in place, and the customer group
+     should get only the "resolved" message. Changing the status in the portal should update the card too.
+9. If a card button shows an error code, see the code table in Feishu's
+   [card callback docs](https://open.feishu.cn/document/feishu-cards/card-callback-communication) (e.g. 200671 = server error,
+   200673 = bad card JSON) and check the `npm run dev:api` terminal output.
+
+## 5. Verify in a test tenant before going live
 
 Built against the documented formats and covered by automated tests with a fake Feishu API, but not yet run against real Feishu:
 
