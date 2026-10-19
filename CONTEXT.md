@@ -13,6 +13,22 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Excel template** — per-language workbook used to render approved PIs.
 - **Submitted snapshot** — an immutable JSON capture of a ZH PI's header + line items, frozen at `submit-for-review` time and stored on `pi.submittedSnapshot`. Lets the submitter see what they sent even after admin edits land on the PI row. Overwritten on each new submit-for-review; per-submission history lives in `piReviewEvents`.
 - **PI number sequence** — per-date sequence state stored in `piNumberSequences`, independent from retained PI rows. This lets scheduled cleanup hard-delete old PIs without reusing PI numbers.
+- **Production order number** — the factory order number a salesperson enters on a ZH PI. One PI has exactly one; it is the key that links a PI to after-sales tickets and devices. _Avoid_: order number, order no. (on tickets).
+
+## Approval and revision
+
+- **Presales confirmation** — the first approval step on a ZH PI, done by an ADMIN (the "recipient"), who may edit the PI while confirming. Shown in the UI as "Confirm Received". _Avoid_: review approval.
+- **Commerce approval** — the second and final approval step, done by a COMMERCE user, who may approve or reject but never edit. A PI is **approved** only after this step.
+- **Commerce** (`COMMERCE` role) — the business staff who give commerce approval and download the EN/ZH Excel files. Distinct from ADMIN; an ADMIN may never give commerce approval.
+- **Revision** — a change to an already-approved PI pair (ZH + linked EN), started with a mandatory reason and sent through presales confirmation and commerce approval again. Numbered Rev 1, Rev 2, … under the same PI No.
+- **Effective version** — the most recently approved content of a PI. While a revision is in progress the effective version stays the previous approved content; it is replaced only when the revision gets commerce approval.
+
+## After-sales
+
+- **Ticket** — one customer after-sales issue. Linked to an approved ZH PI through its production order number.
+- **Device** — one physical unit delivered under a PI, identified by its **serial number (SN)**. An SN belongs to exactly one PI.
+- **Fault type** — the after-sales-confirmed classification of what went wrong, chosen from a maintained list. Statistics count only confirmed fault types; the customer's self-reported problem type is reference only. _Avoid_: problem type (for the confirmed value).
+- **Repeat fault** — the same fault type on the same catalog product reaching a configured count within a configured window.
 
 ## PI status state machine
 
