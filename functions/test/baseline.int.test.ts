@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHarness, seedProduct, type Harness } from "./harness";
 
-// Regression net over the PI and ticket flows as they exist before the
-// two-step approval work. Each test gets a fresh database.
+// Regression net over the existing PI and ticket flows. Each test gets a
+// fresh database. Two-step approval and revisions are covered in approval.int.test.ts.
 
 let h: Harness;
 beforeEach(async () => {
@@ -25,7 +25,7 @@ async function createZhPi(productId: string, extra: Record<string, unknown> = {}
 }
 
 describe("ZH PI review flow", () => {
-  it("submit → admin confirm → APPROVED with review events", async () => {
+  it("submit → presales confirm → PENDING_COMMERCE with review events", async () => {
     const productId = await seedProduct(h.db);
     const piId = await createZhPi(productId);
 
@@ -42,8 +42,8 @@ describe("ZH PI review flow", () => {
     expect((await h.request("ADMIN", "POST", `/pi/${piId}/approve`, {})).status).toBe(200);
 
     const after = await h.request("SALES", "GET", `/pi/${piId}`);
-    expect(after.body.pi.status).toBe("APPROVED");
-    expect(after.body.events.map((e: any) => e.action)).toEqual(["SUBMITTED", "APPROVED"]);
+    expect(after.body.pi.status).toBe("PENDING_COMMERCE");
+    expect(after.body.events.map((e: any) => [e.action, e.step])).toEqual([["SUBMITTED", null], ["APPROVED", "PRESALES"]]);
   });
 
   it("reject returns the PI to the salesperson with the note", async () => {
@@ -59,12 +59,14 @@ describe("ZH PI review flow", () => {
     expect((await h.request("SALES", "PATCH", `/pi/${piId}`, { customerCompany: "ACME 2" })).status).toBe(200);
   });
 
-  it("ZH export is admin-only and requires APPROVED", async () => {
+  it("ZH export is admin/commerce-only and requires APPROVED", async () => {
     const productId = await seedProduct(h.db);
     const piId = await createZhPi(productId);
     expect((await h.request("ADMIN", "GET", `/pi/${piId}/export-bundle`)).status).toBe(403);
     await h.request("SALES", "POST", `/pi/${piId}/submit-for-review`, {});
     await h.request("ADMIN", "POST", `/pi/${piId}/approve`, {});
+    expect((await h.request("ADMIN", "GET", `/pi/${piId}/export-bundle`)).status).toBe(403);
+    await h.request("COMMERCE", "POST", `/pi/${piId}/commerce-approve`, {});
     expect((await h.request("SALES", "GET", `/pi/${piId}/export-bundle`)).status).toBe(403);
     expect((await h.request("ADMIN", "GET", `/pi/${piId}/export-bundle`)).status).toBe(200);
   });

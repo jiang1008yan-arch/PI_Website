@@ -2,28 +2,41 @@ import { all, first, id } from "../../lib/db";
 import { nextPiNumber } from "../../lib/piNumber";
 import { buildLinkedZhItems } from "../../lib/piLink";
 import {
+  canAbandonRevision,
   canApprovePi,
+  canCommerceDecide,
   canDeletePi,
   canExportPi,
   canPatchPi,
   canReadPi,
   canRejectPi,
+  canStartRevision,
   canSubmitForReview,
   canSubmitPi,
+  canViewLinkedEn,
+  canViewPi,
+  type ExportVersion,
   type PiRow,
   type Verdict
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
+import { purgeExpired } from "../../scheduled";
 import { piItemInsertStatements, piItemReplaceStatements } from "../../lib/piItems";
 import type { Language } from "../../lib/types";
 import {
   EDITABLE_HEADER_COLUMN_SET,
+  parseEffectiveSnapshot,
+  planAbandonRevision,
   planApprove,
+  planCommerceApprove,
+  planCommerceReject,
   planDelete,
   planReject,
+  planStartRevision,
   planSubmit,
   planSubmitForReview,
-  runTransition
+  runTransition,
+  type EffectiveSnapshot
 } from "../../lib/piWorkflow";
 import { admin, body, createApp } from "./_shared";
 import type { Context } from "hono";
@@ -48,8 +61,42 @@ function runAfterResponse(c: Context, task: () => Promise<unknown>) {
 
 type PiRowFull = PiRow & Record<string, any>;
 
+// Loads the PI row plus, for a linked EN PI, its ZH PI's status and revision
+// flag — an EN PI follows its approved ZH PI's lock (see piCapabilities).
 async function loadPi(c: Context): Promise<PiRowFull | null> {
-  return await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", c.req.param("id"));
+  const row = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", c.req.param("id"));
+  if (row && row.language === "EN" && row.linkedPiId) {
+    row.linkedZh = await first<{ status: PiRow["status"]; revisionInProgress: number }>(
+      c.env.DB,
+      "SELECT status, revisionInProgress FROM pi WHERE id=?",
+      row.linkedPiId
+    );
+  }
+  return row;
+}
+
+const ITEM_SELECT =
+  "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder";
+
+// Items of a frozen snapshot, decorated with product names like ITEM_SELECT rows.
+async function snapshotItemsWithProducts(db: D1Database, items: EffectiveSnapshot["zh"]["items"]) {
+  const ids = Array.from(new Set(items.map((it) => it.productId)));
+  const products = ids.length
+    ? await all<{ id: string; code: string; nameEn: string; nameZh: string }>(
+        db,
+        `SELECT id, code, nameEn, nameZh FROM products WHERE id IN (${ids.map(() => "?").join(", ")})`,
+        ...ids
+      )
+    : [];
+  const byId = new Map(products.map((p) => [p.id, p]));
+  return items.map((it, i) => ({
+    ...it,
+    fieldValues: JSON.stringify(it.fieldValues ?? []),
+    sortOrder: i,
+    code: byId.get(it.productId)?.code ?? null,
+    nameEn: byId.get(it.productId)?.nameEn ?? null,
+    nameZh: byId.get(it.productId)?.nameZh ?? null
+  }));
 }
 
 async function loadPiItems(db: D1Database, piId: string) {
@@ -93,6 +140,8 @@ const PI_LIST_COLUMNS = [
   "assignedToId",
   "linkedPiId",
   "linkedPiNoSnapshot",
+  "revisionNo",
+  "revisionInProgress",
   "updatedAt"
 ] as const;
 
@@ -116,6 +165,9 @@ piRoutes.get("/pi", async (c) => {
     where.push("pi.createdById = ?");
     params.push(user.id);
   }
+  // The workspace lists work in progress only; approved ZH PIs live in the
+  // searchable approved list (GET /pi/approved).
+  where.push("NOT (pi.language = 'ZH' AND pi.status = 'APPROVED')");
   // Expose the linked counterpart's PI No so a linked ZH draft can display the
   // English PI No as its name (需求1).
   const cols = PI_LIST_COLUMNS.map((col) => `pi.${col}`).join(", ");
@@ -139,30 +191,90 @@ piRoutes.delete("/pi/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Commerce approval ─────────────────────────────────────────────────────
+
+piRoutes.get("/pi/commerce-queue", async (c) => {
+  const user = c.get("user");
+  if (user.role !== "COMMERCE" && user.role !== "ADMIN") return c.json({ error: "Forbidden" }, 403);
+  return c.json(
+    await all(
+      c.env.DB,
+      `SELECT pi.id, pi.piNo, pi.status, pi.productionOrderNo, pi.customerCompany, pi.linkedPiId, pi.linkedPiNoSnapshot,
+              pi.revisionNo, pi.revisionInProgress, pi.updatedAt, linked.piNo AS linkedPiNo, creator.displayName AS createdByName
+       FROM pi
+       LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+       LEFT JOIN users creator ON creator.id = pi.createdById
+       WHERE pi.language = 'ZH' AND pi.status = 'PENDING_COMMERCE'
+       ORDER BY pi.updatedAt DESC`
+    )
+  );
+});
+
+// ── Approved list (search + paging) ───────────────────────────────────────
+
+const APPROVED_PAGE_SIZE = 50;
+
+piRoutes.get("/pi/approved", async (c) => {
+  const user = c.get("user");
+  const q = String(c.req.query("q") ?? "").trim().slice(0, 100);
+  const offset = Math.max(0, Number(c.req.query("offset") ?? 0) || 0);
+  // Sales only ever see their own (created or received); others may narrow to theirs.
+  const mine = user.role === "SALES" || c.req.query("scope") === "mine";
+
+  const company = "COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany)";
+  const orderNo = "COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo)";
+  const where = ["pi.language = 'ZH'", "(pi.status = 'APPROVED' OR pi.revisionInProgress = 1)"];
+  const params: unknown[] = [];
+  if (mine) {
+    where.push("(pi.createdById = ? OR pi.assignedToId = ?)");
+    params.push(user.id, user.id);
+  }
+  if (q) {
+    const like = `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    where.push(
+      `(pi.piNo LIKE ? ESCAPE '\\' OR ${orderNo} LIKE ? ESCAPE '\\' OR ${company} LIKE ? ESCAPE '\\' OR linked.piNo LIKE ? ESCAPE '\\' OR pi.linkedPiNoSnapshot LIKE ? ESCAPE '\\')`
+    );
+    params.push(like, like, like, like, like);
+  }
+  const rows = await all<any>(
+    c.env.DB,
+    `SELECT pi.id, pi.piNo, pi.status, pi.revisionNo, pi.revisionInProgress, pi.approvedAt, pi.createdById, pi.assignedToId,
+            pi.linkedPiId, pi.linkedPiNoSnapshot, linked.piNo AS linkedPiNo,
+            ${company} AS customerCompany, ${orderNo} AS productionOrderNo, creator.displayName AS createdByName
+     FROM pi
+     LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+     LEFT JOIN users creator ON creator.id = pi.createdById
+     WHERE ${where.join(" AND ")}
+     ORDER BY pi.approvedAt DESC, pi.id DESC
+     LIMIT ? OFFSET ?`,
+    ...params,
+    APPROVED_PAGE_SIZE + 1,
+    offset
+  );
+  return c.json({ items: rows.slice(0, APPROVED_PAGE_SIZE), hasMore: rows.length > APPROVED_PAGE_SIZE });
+});
+
 piRoutes.get("/pi/:id", async (c) => {
   const row = await loadPi(c);
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canReadPi(c.get("user"), row));
   if (denied) return denied;
-  const items = await all(
-    c.env.DB,
-    "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder",
-    row.id
-  );
-  const events = await all(
-    c.env.DB,
-    "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY createdAt",
-    row.id
-  );
+  const items = await all(c.env.DB, ITEM_SELECT, row.id);
+  const events = await loadEvents(c.env.DB, row.id);
   const linked = row.linkedPiId
-    ? await first<{ piNo: string; status: string }>(c.env.DB, "SELECT piNo, status FROM pi WHERE id=?", row.linkedPiId)
+    ? await first<{ piNo: string; status: string; revisionInProgress: number }>(
+        c.env.DB,
+        "SELECT piNo, status, revisionInProgress FROM pi WHERE id=?",
+        row.linkedPiId
+      )
     : null;
   const linkedPiNoSnapshot = String(row.linkedPiNoSnapshot ?? "").trim() || null;
   return c.json({
     pi: {
       ...row,
       linkedPiNo: linked?.piNo ?? linkedPiNoSnapshot,
-      linkedPiStatus: linked?.status ?? null
+      linkedPiStatus: linked?.status ?? null,
+      linkedPiRevisionInProgress: linked?.revisionInProgress ?? 0
     },
     items,
     events
@@ -303,7 +415,18 @@ piRoutes.post("/pi/:id/submit-for-review", async (c) => {
     planSubmitForReview(row, items, { assignedToId: d.assignedToId ?? null }),
     c.get("user").id
   );
-  return c.json({ ok: true });
+  // One PI, one production order: warn (not block) when another ZH PI already
+  // carries this number — older data may legitimately repeat it.
+  const orderNo = String(row.productionOrderNo ?? "").trim();
+  const duplicates = orderNo
+    ? await all<{ piNo: string }>(
+        c.env.DB,
+        "SELECT piNo FROM pi WHERE language='ZH' AND id<>? AND TRIM(productionOrderNo)=?",
+        row.id,
+        orderNo
+      )
+    : [];
+  return c.json({ ok: true, duplicateProductionOrderPiNos: duplicates.map((d) => d.piNo) });
 });
 
 piRoutes.post("/pi/:id/approve", async (c) => {
@@ -366,13 +489,14 @@ piRoutes.post("/pi/:id/resync-zh", async (c) => {
 piRoutes.get("/pi/:id/export-bundle", async (c) => {
   const row = await loadPi(c);
   if (!row) return c.json({ error: "Not found" }, 404);
-  const denied = deny(c, canExportPi(c.get("user"), row));
+  const version: ExportVersion = c.req.query("version") === "effective" ? "effective" : "current";
+  const denied = deny(c, canExportPi(c.get("user"), row, version));
   if (denied) return denied;
-  const items = await all<any>(
-    c.env.DB,
-    "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder",
-    row.id
-  );
+  // While a revision is in progress the effective version is the frozen
+  // snapshot (on the ZH row, covering its linked EN PI too).
+  const effective = version === "effective" ? await effectiveContentFor(c.env.DB, row) : null;
+  const items = effective ? effective.items : await all<any>(c.env.DB, ITEM_SELECT, row.id);
+  const exportRow = effective ? effective.pi : row;
   const sender = await first(c.env.DB, "SELECT * FROM senderProfile WHERE id=1");
   const template = await first<any>(c.env.DB, "SELECT * FROM excelTemplates WHERE language=?", row.language);
   const templateRows = await all<any>(
@@ -383,7 +507,7 @@ piRoutes.get("/pi/:id/export-bundle", async (c) => {
   const urls: Record<string, string> = {};
   for (const tpl of templateRows) urls[tpl.productId] = objectUrl(tpl.r2Key);
   return c.json({
-    pi: row,
+    pi: exportRow,
     items,
     sender,
     excelTemplateUrl: template ? objectUrl(template.r2Key) : null,
@@ -416,11 +540,125 @@ async function replaceItems(db: D1Database, piId: string, items: any[]) {
 }
 
 async function purgeExpiredDrafts(db: D1Database) {
-  const rows = await all<{ id: string }>(
-    db,
-    "SELECT id FROM pi WHERE status='DRAFT' AND updatedAt < datetime('now', '-3 days')"
-  );
-  for (const row of rows) {
-    await runTransition(db, row.id, planDelete({ id: row.id } as PiRow), "");
-  }
+  // Same janitor as the scheduled job (idle drafts and expired approvals).
+  await purgeExpired(db, new Date());
 }
+
+async function loadEvents(db: D1Database, piId: string) {
+  return await all(
+    db,
+    "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY piReviewEvents.createdAt, piReviewEvents.rowid",
+    piId
+  );
+}
+
+// The effective (approved) content of a PI: the frozen snapshot while a
+// revision of its ZH PI is in progress, otherwise null (the live row is it).
+async function effectiveContentFor(db: D1Database, row: PiRowFull) {
+  const zhRow =
+    row.language === "ZH"
+      ? row
+      : row.linkedPiId
+        ? await first<PiRowFull>(db, "SELECT * FROM pi WHERE id=?", row.linkedPiId)
+        : null;
+  if (!zhRow?.revisionInProgress) return null;
+  const snapshot = parseEffectiveSnapshot(zhRow.effectiveSnapshot);
+  if (!snapshot) return null;
+  const part = row.language === "ZH" ? snapshot.zh : snapshot.en;
+  if (!part) return null;
+  return { pi: { ...row, ...part.header }, items: await snapshotItemsWithProducts(db, part.items) };
+}
+
+// ── Commerce approval ─────────────────────────────────────────────────────
+
+piRoutes.post("/pi/:id/commerce-approve", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canCommerceDecide(c.get("user"), row));
+  if (denied) return denied;
+  await runTransition(c.env.DB, row.id, planCommerceApprove(row, new Date()), c.get("user").id);
+  // ERP hook point (not built this phase): once an ERP contract exists, hand the
+  // approved ZH/EN pair over here, e.g. enqueueOutbox(c.env.DB, "PI_ZH", row.id, {...}).
+  // TODO: ERP hand-off.
+  return c.json({ ok: true });
+});
+
+piRoutes.post("/pi/:id/commerce-reject", async (c) => {
+  const d = await body<any>(c).catch(() => ({}));
+  const note = String(d.note ?? "").trim();
+  if (!note) return c.json({ error: "A rejection reason is required" }, 400);
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canCommerceDecide(c.get("user"), row));
+  if (denied) return denied;
+  await runTransition(c.env.DB, row.id, planCommerceReject(row, { note }), c.get("user").id);
+  return c.json({ ok: true });
+});
+
+// ── Revisions ─────────────────────────────────────────────────────────────
+
+piRoutes.post("/pi/:id/revisions", async (c) => {
+  const d = await body<any>(c).catch(() => ({}));
+  const reason = String(d.reason ?? "").trim().slice(0, 2000);
+  if (!reason) return c.json({ error: "A reason for the change is required" }, 400);
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canStartRevision(c.get("user"), row));
+  if (denied) return denied;
+  const zhItems = await loadPiItems(c.env.DB, row.id);
+  const enRow = row.linkedPiId ? await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId) : null;
+  const en = enRow ? { row: enRow, items: await loadPiItems(c.env.DB, enRow.id) } : null;
+  await runTransition(c.env.DB, row.id, planStartRevision(row, zhItems as any[], en as any, reason), c.get("user").id);
+  return c.json({ ok: true });
+});
+
+piRoutes.post("/pi/:id/revisions/abandon", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canAbandonRevision(c.get("user"), row));
+  if (denied) return denied;
+  await runTransition(c.env.DB, row.id, planAbandonRevision(row), c.get("user").id);
+  return c.json({ ok: true });
+});
+
+// ── Read-only detail page ─────────────────────────────────────────────────
+
+piRoutes.get("/pi/:id/view", async (c) => {
+  const user = c.get("user");
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canViewPi(user, row));
+  if (denied) return denied;
+
+  const snapshot = row.revisionInProgress ? parseEffectiveSnapshot(row.effectiveSnapshot) : null;
+  const decorate = async (part: { header: Record<string, unknown>; items: any[] } | null | undefined, base: PiRowFull) =>
+    part ? { pi: { ...base, ...part.header }, items: await snapshotItemsWithProducts(c.env.DB, part.items) } : null;
+
+  // After-sales sees only the effective Chinese version — never a draft revision.
+  if (user.role === "SERVICE") {
+    const effective = snapshot ? await decorate(snapshot.zh, row) : { pi: row, items: await all(c.env.DB, ITEM_SELECT, row.id) };
+    return c.json({ zh: { current: null, effective }, en: null, events: [], revisionNo: row.revisionNo, revisionInProgress: Boolean(row.revisionInProgress) });
+  }
+
+  const zhCurrent = { pi: row, items: await all(c.env.DB, ITEM_SELECT, row.id) };
+  const zhEffective = snapshot ? await decorate(snapshot.zh, row) : row.status === "APPROVED" ? zhCurrent : null;
+
+  let en: { current: any; effective: any } | null = null;
+  if (row.linkedPiId && canViewLinkedEn(user)) {
+    const enRow = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId);
+    if (enRow) {
+      const enCurrent = { pi: enRow, items: await all(c.env.DB, ITEM_SELECT, enRow.id) };
+      const enEffective = snapshot?.en ? await decorate(snapshot.en, enRow) : row.status === "APPROVED" ? enCurrent : null;
+      en = { current: enCurrent, effective: enEffective };
+    }
+  }
+
+  return c.json({
+    zh: { current: zhCurrent, effective: zhEffective },
+    en,
+    events: await loadEvents(c.env.DB, row.id),
+    revisionNo: row.revisionNo,
+    revisionInProgress: Boolean(row.revisionInProgress)
+  });
+});
+

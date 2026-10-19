@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import type { AppUser, Env, Role } from "./types";
 
-const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE"];
+const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE"];
 const asRole = (value: unknown): Role => (ROLES.includes(value as Role) ? (value as Role) : "SALES");
 
 const encoder = new TextEncoder();

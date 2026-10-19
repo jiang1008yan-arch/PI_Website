@@ -34,18 +34,28 @@ export type Harness = {
   close: () => Promise<void>;
 };
 
-const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE"];
+const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE"];
 
-export async function createHarness(): Promise<Harness> {
+/** A fresh, empty in-memory D1 (no migrations applied). */
+export async function createD1(): Promise<{ db: D1Database; close: () => Promise<void> }> {
   const mf = new Miniflare({ modules: true, script: "export default {}", d1Databases: ["DB"] });
   const db = (await mf.getD1Database("DB")) as unknown as D1Database;
+  return { db, close: () => mf.dispose() };
+}
 
-  const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
+/** Applies migrations in filename order; `only` limits which files run. */
+export async function applyMigrations(db: D1Database, only: (file: string) => boolean = () => true) {
+  const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort().filter(only);
   for (const file of files) {
     for (const stmt of migrationStatements(readFileSync(join(MIGRATIONS_DIR, file), "utf8"))) {
       await db.prepare(stmt).run();
     }
   }
+}
+
+export async function createHarness(): Promise<Harness> {
+  const { db, close } = await createD1();
+  await applyMigrations(db);
   await db.prepare("INSERT OR IGNORE INTO senderProfile (id, corp, address, fromName, phone, email) VALUES (1, '', '', '', '', '')").run();
 
   const env = { DB: db, FILES: undefined as unknown as R2Bucket, JWT_SECRET: "test-secret" } as Env;
@@ -83,7 +93,7 @@ export async function createHarness(): Promise<Harness> {
     return { status: res.status, body: parsed };
   }
 
-  return { env, db, users, request, close: () => mf.dispose() };
+  return { env, db, users, request, close };
 }
 
 /** Inserts an ACTIVE product with no fields; returns its id. */

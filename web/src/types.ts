@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "SALES" | "SERVICE";
+export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE";
 export type Language = "EN" | "ZH";
 export type PiStatus = "DRAFT" | "PENDING_REVIEW" | "REJECTED" | "APPROVED" | "SUBMITTED";
 export type ProductStatus = "ACTIVE" | "DISCONTINUED";

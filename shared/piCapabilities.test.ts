@@ -2,23 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   canDeletePiByStatus,
   canEditPiDirectly,
+  hasEffectiveVersion,
+  isCommerceDecisionMode,
   isReviewerEditMode,
   type PiStatus,
   type Role
 } from "./piCapabilities";
 
-const ALL_STATUSES: PiStatus[] = ["DRAFT", "SUBMITTED", "PENDING_REVIEW", "APPROVED", "REJECTED"];
-const NON_ADMIN: Role[] = ["SALES", "SERVICE"];
+const ALL_STATUSES: PiStatus[] = ["DRAFT", "SUBMITTED", "PENDING_REVIEW", "PENDING_COMMERCE", "APPROVED", "REJECTED"];
+const NON_ADMIN: Role[] = ["SALES", "SERVICE", "COMMERCE"];
 
 describe("canEditPiDirectly", () => {
-  it("EN is always directly writable, regardless of status", () => {
-    for (const status of ALL_STATUSES) expect(canEditPiDirectly("EN", status)).toBe(true);
+  it("EN is directly writable in any status unless its linked ZH PI is approved", () => {
+    for (const status of ALL_STATUSES) {
+      expect(canEditPiDirectly("EN", status)).toBe(true);
+      expect(canEditPiDirectly("EN", status, { linkedZhApproved: true })).toBe(false);
+    }
   });
 
   it("ZH is directly writable only as DRAFT or REJECTED", () => {
     expect(canEditPiDirectly("ZH", "DRAFT")).toBe(true);
     expect(canEditPiDirectly("ZH", "REJECTED")).toBe(true);
-    for (const status of ["SUBMITTED", "PENDING_REVIEW", "APPROVED"] as PiStatus[]) {
+    for (const status of ["SUBMITTED", "PENDING_REVIEW", "PENDING_COMMERCE", "APPROVED"] as PiStatus[]) {
       expect(canEditPiDirectly("ZH", status)).toBe(false);
     }
   });
@@ -42,14 +47,44 @@ describe("isReviewerEditMode", () => {
 });
 
 describe("canDeletePiByStatus", () => {
-  it("EN is deletable in any status", () => {
-    for (const status of ALL_STATUSES) expect(canDeletePiByStatus("EN", status)).toBe(true);
+  it("EN is deletable in any status unless its linked ZH PI is approved", () => {
+    for (const status of ALL_STATUSES) {
+      expect(canDeletePiByStatus("EN", status)).toBe(true);
+      expect(canDeletePiByStatus("EN", status, { linkedZhApproved: true })).toBe(false);
+    }
+  });
+
+  it("a ZH revision draft is never deletable", () => {
+    expect(canDeletePiByStatus("ZH", "DRAFT", { revisionInProgress: true })).toBe(false);
   });
 
   it("ZH is deletable only as a DRAFT", () => {
     expect(canDeletePiByStatus("ZH", "DRAFT")).toBe(true);
     for (const status of ALL_STATUSES.filter((s) => s !== "DRAFT")) {
       expect(canDeletePiByStatus("ZH", status)).toBe(false);
+    }
+  });
+});
+
+describe("isCommerceDecisionMode", () => {
+  it("is true only for COMMERCE on a ZH PENDING_COMMERCE PI", () => {
+    expect(isCommerceDecisionMode("COMMERCE", "ZH", "PENDING_COMMERCE")).toBe(true);
+    for (const role of ["ADMIN", "SALES", "SERVICE"] as Role[]) {
+      expect(isCommerceDecisionMode(role, "ZH", "PENDING_COMMERCE")).toBe(false);
+    }
+    expect(isCommerceDecisionMode("COMMERCE", "EN", "PENDING_COMMERCE")).toBe(false);
+    for (const status of ALL_STATUSES.filter((s) => s !== "PENDING_COMMERCE")) {
+      expect(isCommerceDecisionMode("COMMERCE", "ZH", status)).toBe(false);
+    }
+  });
+});
+
+describe("hasEffectiveVersion", () => {
+  it("is true when approved, or while a revision is in progress", () => {
+    expect(hasEffectiveVersion("APPROVED")).toBe(true);
+    for (const status of ALL_STATUSES.filter((s) => s !== "APPROVED")) {
+      expect(hasEffectiveVersion(status)).toBe(false);
+      expect(hasEffectiveVersion(status, { revisionInProgress: true })).toBe(true);
     }
   });
 });
