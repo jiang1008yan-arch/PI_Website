@@ -1,8 +1,8 @@
 import type { Context } from "hono";
 import { all, first, id } from "../../lib/db";
 import { triageMessages } from "../../lib/aiTriage";
-import { bindCard, draftCard } from "../../lib/feishu/cards";
-import { feishuEnabled, getMessageText, messageContentToText, replyText, sendCard, updateCard } from "../../lib/feishu/client";
+import { bindCard, dismissedCard, draftCard, promptCard } from "../../lib/feishu/cards";
+import { feishuEnabled, getMessageText, messageContentToText, sendCard, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
 import { pushTicketChange } from "../../lib/feishu/sync";
 import { canUseTickets } from "../../lib/ticketAccess";
@@ -27,10 +27,6 @@ import { body, createApp } from "./_shared";
 export const feishuRoutes = createApp();
 
 const BIND_TOKEN_TTL_MS = 30 * 60 * 1000;
-
-export const DM_HELP =
-  "如需创建售后工单，请在群聊中 @我（可回复客户的消息再 @我）。私聊不会创建工单。\n" +
-  "To create an after-sales ticket, @ me in a group chat (reply to the customer's message and @ me). Direct messages don't create tickets.";
 
 function runLater(c: Context, task: () => Promise<unknown>) {
   const promise = task().catch((error) => console.error("Feishu background task failed", error));
@@ -94,20 +90,15 @@ feishuRoutes.post("/feishu/events", async (c) => {
   // Feishu advises de-duplicating message events by message_id.
   if (!(await firstSeen(env.DB, `msg:${message.message_id}`))) return c.json({});
 
-  // The agreed signal for "make a ticket" is @-mentioning the bot in a group
-  // (Feishu only delivers group messages that @ the bot). Every direct message
-  // reaches the bot, so those get usage help instead of a ticket card.
-  if (message.chat_type !== "group") {
-    runLater(c, () => replyText(env, message.message_id, DM_HELP));
-    return c.json({});
-  }
   runLater(c, () => handleTicketRequest(env, event));
   return c.json({});
 });
 
-// A staff member replies to a customer's message with @bot (the quoted message
-// is the request), or a customer @-mentions the bot directly. Either way a
-// private confirmation card is sent; nothing is created yet.
+// An @-mention in a group (Feishu only delivers those) or any direct message.
+// Nothing is created and no AI runs yet: the bot first asks "turn this into a
+// ticket?" with a small card, so casual messages cost nothing and can be
+// ignored. The quoted message, when staff reply to a customer's message and @
+// the bot, is the request.
 async function handleTicketRequest(env: Env, event: any) {
   const message = event.message;
   const requesterOpenId = String(event.sender?.sender_id?.open_id ?? "");
@@ -115,21 +106,32 @@ async function handleTicketRequest(env: Env, event: any) {
   const quoted = message.parent_id ? await getMessageText(env, message.parent_id).catch(() => "") : "";
   const text = [quoted, ownText].filter(Boolean).join("\n— ").slice(0, 4000) || "(no text)";
 
-  const types = await faultTypes(env.DB);
-  const triage = await triageMessages(env, text, types);
   const draftId = id("fdr");
   await env.DB.prepare(
-    "INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text, aiSummary, aiFaultType) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text) VALUES (?, ?, ?, ?, ?)"
   )
-    .bind(draftId, requesterOpenId, message.chat_id, message.parent_id || message.message_id, text, triage?.summary ?? null, triage?.faultType ?? null)
+    .bind(draftId, requesterOpenId, message.chat_id, message.parent_id || message.message_id, text)
     .run();
 
-  const card = draftCard({ draftId, text, aiSummary: triage?.summary ?? null, aiFaultType: triage?.faultType ?? null, faultTypes: types });
-  // Staff who asked get the card privately; a customer's own @bot request goes
-  // to the internal after-sales group for anyone to pick up.
+  const card = promptCard({ draftId, text });
+  // Staff who asked get the question privately; anyone else's request (e.g. a
+  // customer's own @bot) goes to the internal after-sales group to pick up.
   const requester = requesterOpenId ? await userForOpenId(env.DB, requesterOpenId) : null;
   if (requester && canUseTickets(requester)) await sendCard(env, "open_id", requesterOpenId, card);
   else await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, card);
+}
+
+// "Create ticket" on the prompt: turn that card into the form, with AI
+// suggestions when configured.
+async function openDraftForm(env: Env, draftId: string, cardMessageId: string | null) {
+  const draft = await first<any>(env.DB, "SELECT * FROM feishuDrafts WHERE id = ?", draftId);
+  if (!draft || !cardMessageId) return;
+  const types = await faultTypes(env.DB);
+  const triage = draft.aiSummary ? { summary: draft.aiSummary, faultType: draft.aiFaultType } : await triageMessages(env, draft.text, types);
+  if (triage && !draft.aiSummary) {
+    await env.DB.prepare("UPDATE feishuDrafts SET aiSummary = ?, aiFaultType = ? WHERE id = ?").bind(triage.summary, triage.faultType, draftId).run();
+  }
+  await updateCard(env, cardMessageId, draftCard({ draftId, text: draft.text, aiSummary: triage?.summary ?? null, aiFaultType: triage?.faultType ?? null, faultTypes: types }));
 }
 
 // ── Card callbacks: buttons and forms on our cards ────────────────────────
@@ -176,6 +178,17 @@ feishuRoutes.post("/feishu/card", async (c) => {
           if (note) await pushTicketChange(env, ticketId, { kind: "note" });
         });
         return c.json(toast("success", "Ticket updated."));
+      }
+      case "open_draft": {
+        if (!canUseTickets(user)) return c.json(toast("warning", "Your role cannot create tickets."));
+        const messageId = event.context?.open_message_id ?? null;
+        runLater(c, () => openDraftForm(env, String(value.draftId), messageId));
+        return c.json(toast("info", "Opening the ticket form…"));
+      }
+      case "dismiss_draft": {
+        const messageId = event.context?.open_message_id ?? null;
+        if (messageId) runLater(c, () => updateCard(env, messageId, dismissedCard()));
+        return c.json(toast("info", "Ignored."));
       }
       case "confirm_draft":
         return c.json(await confirmDraft(c, env, user, String(value.draftId), form, event.context?.open_message_id ?? null));

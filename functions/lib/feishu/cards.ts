@@ -86,6 +86,31 @@ export function ticketCard(t: TicketCardData, portalUrl: string | null) {
   };
 }
 
+// The first reply to an @-mention or direct message: ask before doing anything.
+export function promptCard(d: { draftId: string; text: string }) {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain("要把这条消息创建为售后工单吗？ Create a ticket?"), template: "blue" },
+    body: {
+      elements: [
+        md(`> ${esc(d.text).slice(0, 500)}`),
+        callbackButton("创建工单 Create ticket", { action: "open_draft", draftId: d.draftId }, { type: "primary" }),
+        callbackButton("忽略 Ignore", { action: "dismiss_draft", draftId: d.draftId })
+      ]
+    }
+  };
+}
+
+export function dismissedCard() {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain("已忽略 Ignored"), template: "grey" },
+    body: { elements: [md("没有创建工单。需要时再 @我 或私聊我即可。")] }
+  };
+}
+
 export type DraftCardData = {
   draftId: string;
   text: string;

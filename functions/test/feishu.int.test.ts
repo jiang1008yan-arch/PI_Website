@@ -95,7 +95,7 @@ describe("turning a chat message into a ticket", () => {
     await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
   });
 
-  it("a direct message to the bot gets usage help, not a ticket card", async () => {
+  it("a direct message first gets a small 'create a ticket?' card; Ignore closes it, Create opens the form", async () => {
     await push("/feishu/events", {
       schema: "2.0",
       header: { event_id: "e-dm", token: "vt", event_type: "im.message.receive_v1" },
@@ -105,11 +105,27 @@ describe("turning a chat message into a ticket", () => {
       }
     });
     await h.settle();
-    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<{ n: number }>())?.n).toBe(0);
-    const replies = messages((c) => c.path === "/im/v1/messages/om_dm/reply");
-    expect(replies).toHaveLength(1);
-    expect(JSON.parse(replies[0].body.content).text).toContain("@");
-    expect(messages((c) => c.body?.msg_type === "interactive")).toEqual([]);
+    const prompt = messages((c) => c.body?.msg_type === "interactive");
+    expect(prompt).toHaveLength(1);
+    const promptJson = JSON.parse(prompt[0].body.content);
+    const buttons = promptJson.body.elements.filter((e: any) => e.tag === "button").map((b: any) => b.behaviors[0].value.action);
+    expect(buttons).toEqual(["open_draft", "dismiss_draft"]);
+    expect(JSON.stringify(promptJson)).not.toContain("confirm_draft"); // no form yet
+    const draftId = promptJson.body.elements.find((e: any) => e.tag === "button").behaviors[0].value.draftId;
+
+    // Ignore: the card is replaced, nothing created.
+    expect((await cardAction("ou_service", { action: "dismiss_draft", draftId }, {}, "e-ignore", "om_prompt")).body.toast.type).toBe("info");
+    await h.settle();
+    const ignored = messages((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_prompt");
+    expect(JSON.parse(ignored[0].body.content).header.title.content).toContain("Ignored");
+
+    // Create: the card turns into the form.
+    calls = [];
+    await cardAction("ou_service", { action: "open_draft", draftId }, {}, "e-open", "om_prompt");
+    await h.settle();
+    const opened = messages((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_prompt");
+    expect(JSON.stringify(JSON.parse(opened[0].body.content))).toContain("confirm_draft");
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM tickets").first<{ n: number }>())?.n).toBe(0);
   });
 
   it("a staff @bot reply sends a private confirmation card; confirming creates the ticket and its group card", async () => {
