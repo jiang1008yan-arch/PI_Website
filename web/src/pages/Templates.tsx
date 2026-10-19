@@ -108,7 +108,6 @@ export function TemplatesPage() {
     <PageHero
       eyebrow="Excel setup"
       title="Excel Template Settings"
-      description="Map PI fields to precise cells so completed invoices export cleanly without manual cleanup."
       Icon={LayoutGrid}
     />
     <Section title="Upload PI Header Template">

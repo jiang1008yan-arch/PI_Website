@@ -21,7 +21,6 @@ export function TicketsPage() {
       <PageHero
         eyebrow="After-sales"
         title="Ticket Center"
-        description="Track service requests, generate customer submission links and review ticket statistics."
         Icon={LifeBuoy}
       />
       <Section

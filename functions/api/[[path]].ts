@@ -59,4 +59,7 @@ app.route("/", ticketLinkRoutes);
 app.route("/", ticketFieldRoutes);
 app.route("/", publicTicketRoutes);
 
-export const onRequest: PagesFunction<Env> = (context) => app.fetch(context.request, context.env);
+export const onRequest: PagesFunction<Env> = (context) =>
+  // Pass the EventContext as Hono's ExecutionContext so handlers can defer
+  // non-critical work (e.g. draft purge) past the response via c.executionCtx.
+  app.fetch(context.request, context.env, context as unknown as ExecutionContext);

@@ -2,13 +2,20 @@ import { useEffect, useState } from "react";
 import { Clock3 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import { EmptyState, PageHero, Section } from "../components/Form";
+import { markAllSeen } from "../pi/notifications";
 
 export function ReviewPage() {
+  const { user } = useAuth();
   const [queue, setQueue] = useState<any[]>([]);
   useEffect(() => {
-    void api.get("/pi/review-queue").then((r) => setQueue(r.data));
-  }, []);
+    void api.get("/pi/review-queue").then((r) => {
+      setQueue(r.data);
+      // Opening the queue counts as seeing these PIs — clear the home badge.
+      markAllSeen("pendingReviews", user?.id, (r.data as { id: string }[]).map((p) => p.id));
+    });
+  }, [user?.id]);
 
   return (
     <div className="space-y-6">

@@ -86,7 +86,6 @@ export function CreateTicketPage() {
       <PageHero
         eyebrow="After-sales"
         title="New ticket"
-        description="Log a service request directly and assign who should handle it."
         Icon={LifeBuoy}
         action={
           <Link

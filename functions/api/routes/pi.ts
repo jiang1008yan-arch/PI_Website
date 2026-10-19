@@ -35,6 +35,17 @@ function deny(c: Context, verdict: Verdict) {
   return c.json({ error: verdict.reason }, verdict.status);
 }
 
+// Schedule background work that should not delay the response. Prefers
+// executionCtx.waitUntil (keeps the worker alive); if the context is absent
+// (e.g. under tests), falls back to a detached promise.
+function runAfterResponse(c: Context, task: () => Promise<unknown>) {
+  try {
+    c.executionCtx.waitUntil(task());
+  } catch {
+    void task();
+  }
+}
+
 type PiRowFull = PiRow & Record<string, any>;
 
 async function loadPi(c: Context): Promise<PiRowFull | null> {
@@ -86,7 +97,10 @@ const PI_LIST_COLUMNS = [
 ] as const;
 
 piRoutes.get("/pi", async (c) => {
-  await purgeExpiredDrafts(c.env.DB);
+  // Cleanup of 3-day-idle drafts must not block first paint of the list. Run it
+  // after the response is sent (waitUntil keeps the worker alive for it); fall
+  // back to a fire-and-forget if no execution context is available.
+  runAfterResponse(c, () => purgeExpiredDrafts(c.env.DB));
   const user = c.get("user");
   const includeArchived = c.req.query("includeArchived") === "1" && user.role === "ADMIN";
   const where = [includeArchived ? "1=1" : "pi.archivedAt IS NULL"];

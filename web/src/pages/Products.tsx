@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { ArrowLeft, Package, Plus } from "lucide-react";
 import { api } from "../api/client";
+import { useCachedList } from "../hooks/useCachedList";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
 import type { Language, Product, ProductField } from "../types";
 import { blankRule, ModelRule, modelRuleKey, optionPath } from "../pi/modelRule";
@@ -18,7 +19,12 @@ import {
 import { loadProductModelRule } from "../products/modelRuleAdmin";
 
 export function ProductsPage() {
-  const [products, setProducts] = useState<Product[]>([]);
+  // Cached so re-entering Product Management paints the list instantly; refresh
+  // is called after a create/edit so the list reflects the change.
+  const { data: products, refresh: loadProducts } = useCachedList<Product>(
+    "products",
+    () => api.get("/products").then((res) => res.data)
+  );
   const [product, setProduct] = useState<any>(blankProduct);
   const [selected, setSelected] = useState<Product | null>(null);
   const [fieldsByLang, setFieldsByLang] = useState<Record<Language, ProductField[]>>({ EN: [], ZH: [] });
@@ -32,13 +38,6 @@ export function ProductsPage() {
   const enFieldOptions = fieldsByLang.EN
     .filter((f) => f.id && !f.id.startsWith("draft-") && f.label.trim())
     .map((f) => ({ id: f.id as string, label: f.label }));
-
-  const loadProducts = async () => {
-    const res = await api.get("/products");
-    setProducts(res.data);
-  };
-
-  useEffect(() => { loadProducts(); }, []);
 
   async function openProduct(p: Product) {
     setError("");

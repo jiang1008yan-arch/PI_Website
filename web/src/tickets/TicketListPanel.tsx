@@ -1,32 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowUpRight, Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../components/Form";
 import { api } from "../api/client";
+import { useCachedList } from "../hooks/useCachedList";
 import type { Ticket, TicketStatus } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, STATUS_ORDER, formatDateTime } from "./ticketShared";
 
 export function TicketListPanel() {
-  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [status, setStatus] = useState<"" | TicketStatus>("");
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    api
-      .get("/tickets", { params: status ? { status } : {} })
-      .then((res) => {
-        if (active) setTickets(res.data);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [status]);
+  // Cached per status filter so re-entering the tab (or switching filters back)
+  // paints instantly, then revalidates.
+  const { data: tickets, loading } = useCachedList<Ticket>(
+    `tickets:${status || "all"}`,
+    () => api.get("/tickets", { params: status ? { status } : {} }).then((res) => res.data)
+  );
 
   // Free-text search across ticket number, order, company and product name.
   const filtered = useMemo(() => {

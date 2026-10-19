@@ -4,6 +4,8 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { isUserApprovedChinesePi } from "../pi/labels";
+import { getCachedCount, setCachedCount, unseenCount } from "../pi/notifications";
+import { prefetchPiList, setCachedList } from "../pi/piListCache";
 import type { Pi } from "../types";
 
 type HomeModule = {
@@ -24,8 +26,10 @@ export function HomePage() {
   const { user } = useAuth();
   const role = user?.role;
   const [newTickets, setNewTickets] = useState(0);
-  const [pendingReviews, setPendingReviews] = useState(0);
-  const [confirmedReceived, setConfirmedReceived] = useState(0);
+  // Seed from the cached count so the badge paints instantly (no delayed dot),
+  // then revalidate against the live list below.
+  const [pendingReviews, setPendingReviews] = useState(() => getCachedCount("pendingReviews", user?.id));
+  const [confirmedReceived, setConfirmedReceived] = useState(() => getCachedCount("confirmedReceived", user?.id));
 
   // Surface a red dot on the After-Sales card when there are unhandled (NEW) tickets.
   useEffect(() => {
@@ -35,24 +39,44 @@ export function HomePage() {
       .catch(() => setNewTickets(0));
   }, []);
 
-  // Badge the "Pending Reviews" card so admins see at a glance that Chinese PIs
-  // are waiting for them (需求3).
+  // Badge the "Pending Reviews" card with the number of waiting Chinese PIs the
+  // admin hasn't opened yet; opening the Pending Reviews page clears it (需求3).
   useEffect(() => {
     if (role !== "ADMIN") return;
     api
       .get("/pi/review-queue")
-      .then((res) => setPendingReviews(Array.isArray(res.data) ? res.data.length : 0))
+      .then((res) => {
+        const ids = (Array.isArray(res.data) ? res.data : []).map((p: { id: string }) => p.id);
+        const n = unseenCount("pendingReviews", user?.id, ids);
+        setPendingReviews(n);
+        setCachedCount("pendingReviews", user?.id, n);
+      })
       .catch(() => setPendingReviews(0));
-  }, [role]);
+  }, [role, user?.id]);
 
-  // Badge the "Confirmed Received PIs" card so salespeople notice when an
-  // approved Chinese PI has come back to them (需求4).
+  // Badge the "Confirmed Received PIs" card with approved Chinese PIs the user
+  // hasn't opened yet; opening that page clears it (需求4).
   useEffect(() => {
     if (role === "SERVICE") return;
     api
       .get("/pi?language=ZH")
-      .then((res) => setConfirmedReceived((res.data as Pi[]).filter((pi) => isUserApprovedChinesePi(pi, user?.id)).length))
+      .then((res) => {
+        const zh = (res.data as Pi[]).filter((pi) => pi.language === "ZH");
+        // Double as a cache warm so opening Chinese PI from here is instant.
+        setCachedList(user?.id, "ZH", zh);
+        const ids = zh.filter((pi) => isUserApprovedChinesePi(pi, user?.id)).map((pi) => pi.id);
+        const n = unseenCount("confirmedReceived", user?.id, ids);
+        setConfirmedReceived(n);
+        setCachedCount("confirmedReceived", user?.id, n);
+      })
       .catch(() => setConfirmedReceived(0));
+  }, [role, user?.id]);
+
+  // Warm the English PI list too (the ZH effect above already caches Chinese),
+  // so the first jump from home into either PI workspace paints instantly.
+  useEffect(() => {
+    if (role !== "ADMIN" && role !== "SALES") return;
+    void prefetchPiList(user?.id, "EN");
   }, [role, user?.id]);
 
   const piModules: HomeModule[] = [
