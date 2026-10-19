@@ -4,10 +4,18 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
-import type { Ticket, TicketField, TicketStatus, TicketUpdate, User } from "../types";
+import type { MatchedPi, RepeatInfo, Ticket, TicketField, TicketStatus, TicketUpdate, User } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
+import { TicketPiPanel } from "../tickets/TicketPiPanel";
 
-type Detail = { ticket: Ticket; updates: TicketUpdate[]; fields: TicketField[] };
+type Detail = {
+  ticket: Ticket;
+  updates: TicketUpdate[];
+  fields: TicketField[];
+  matchedPis: MatchedPi[];
+  device: { serialNumber: string; piId: string; piNo: string; linkedPiNo?: string | null; linkedPiNoSnapshot?: string | null } | null;
+  repeat: RepeatInfo | null;
+};
 
 export function TicketDetailPage() {
   const { id = "" } = useParams();
@@ -92,7 +100,7 @@ export function TicketDetailPage() {
       <PageHero
         eyebrow="After-sales"
         title={ticket.ticketNo}
-        description={`${ticket.customerCompany || "—"} · Order ${ticket.orderNo || "—"}`}
+        description={`${ticket.customerCompany || "—"} · Production Order No. ${ticket.orderNo || "—"}`}
         Icon={LifeBuoy}
         action={
           <Link
@@ -112,20 +120,29 @@ export function TicketDetailPage() {
           <Section title="Customer & request">
             <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Info label="Company" value={ticket.customerCompany} />
-              <Info label="Order number" value={ticket.orderNo} />
+              <Info label="Production order no." value={ticket.orderNo} />
               <Info label="Contact name" value={ticket.contactName} />
               <Info label="Contact details" value={ticket.contactInfo} />
             </dl>
             <div className="border-t pt-4">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Questionnaire</h3>
               <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Info label="Product" value={ticket.productNameEn ?? "—"} />
+                <Info label="Product (as reported)" value={ticket.productNameEn ?? "—"} />
                 {fields.map((f) => (
                   <Info key={f.id} label={f.label} value={parsedAnswers[f.id!] || "—"} />
                 ))}
               </dl>
             </div>
           </Section>
+
+          <TicketPiPanel
+            ticket={ticket}
+            matchedPis={data.matchedPis ?? []}
+            device={data.device ?? null}
+            repeat={data.repeat ?? null}
+            canManage={canManage}
+            onChanged={load}
+          />
 
           <Section title="Activity">
             {updates.length === 0 ? (

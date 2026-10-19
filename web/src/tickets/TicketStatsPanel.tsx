@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { EmptyState } from "../components/Form";
-import type { TicketStats, TicketStatus } from "../types";
+import type { FaultMatrix, Ticket, TicketStats, TicketStatus } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, STATUS_ORDER } from "./ticketShared";
 
 // A rotating palette so each bar reads as its own category at a glance.
@@ -79,8 +80,14 @@ export function TicketStatsPanel() {
       </div>
 
       <div>
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Confirmed faults by product</h3>
+        <p className="mb-3 text-xs text-[#8595b6]">Counts only fault types confirmed by after-sales. Click a number to see the models and tickets behind it.</p>
+        <FaultMatrixTable matrix={stats.faultMatrix} />
+      </div>
+
+      <div>
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">
-          {stats.problemType ? `By ${stats.problemType.label}` : "By problem type"}
+          {stats.problemType ? `Customer-reported: ${stats.problemType.label}` : "Customer-reported problem type"}
         </h3>
         {stats.problemType ? (
           <Bars rows={problemRows} />
@@ -93,6 +100,91 @@ export function TicketStatsPanel() {
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">By product</h3>
         <Bars rows={productRows} />
       </div>
+    </div>
+  );
+}
+
+type Cell = { productId: string | null; productName: string; faultType: string };
+
+// Product × confirmed fault type. Darker cells mean more tickets; a cell opens
+// the concrete models and tickets behind the count.
+function FaultMatrixTable({ matrix }: { matrix: FaultMatrix | undefined }) {
+  const [cell, setCell] = useState<Cell | null>(null);
+  const [models, setModels] = useState<{ model: string; n: number }[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+
+  useEffect(() => {
+    if (!cell) return;
+    const params = { productId: cell.productId ?? "", faultType: cell.faultType };
+    void api.get("/tickets/fault-breakdown", { params }).then((res) => setModels(res.data.byModel));
+    void api.get("/tickets", { params }).then((res) => setTickets(res.data));
+  }, [cell]);
+
+  if (!matrix || matrix.products.length === 0) {
+    return <EmptyState title="No confirmed faults yet" description="Confirm a fault type on a ticket to start the statistics." />;
+  }
+  const max = Math.max(1, ...matrix.products.flatMap((p) => Object.values(p.byFault)));
+
+  return (
+    <div className="space-y-4">
+      <div className="overflow-x-auto">
+        <table className="min-w-full border-separate border-spacing-1 text-sm">
+          <thead>
+            <tr>
+              <th className="text-left text-xs font-medium text-[#8595b6]">Product</th>
+              {matrix.faultTypes.map((f) => <th key={f} className="px-2 text-center text-xs font-medium text-[#294477]">{f}</th>)}
+              <th className="px-2 text-center text-xs font-medium text-[#8595b6]">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matrix.products.map((p) => (
+              <tr key={p.productId ?? "none"}>
+                <td className="whitespace-nowrap pr-3 font-medium text-[#07183f]">{p.productName}</td>
+                {matrix.faultTypes.map((f) => {
+                  const n = p.byFault[f] ?? 0;
+                  const active = cell?.productId === p.productId && cell?.faultType === f;
+                  return (
+                    <td key={f} className="text-center">
+                      {n ? (
+                        <button
+                          type="button"
+                          className={`w-full rounded-md px-2 py-1 font-semibold ${active ? "ring-2 ring-primary" : ""}`}
+                          style={{ backgroundColor: `rgba(47, 107, 216, ${0.12 + 0.6 * (n / max)})`, color: n / max > 0.6 ? "white" : "#07183f" }}
+                          onClick={() => setCell({ productId: p.productId, productName: p.productName, faultType: f })}
+                        >
+                          {n}
+                        </button>
+                      ) : (
+                        <span className="text-[#c4cee4]">·</span>
+                      )}
+                    </td>
+                  );
+                })}
+                <td className="text-center font-semibold text-[#294477]">{p.total}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {cell && (
+        <div className="rounded-lg border border-[#e3ecff] bg-[#f8fbff] p-4 text-sm">
+          <div className="mb-2 font-semibold text-[#07183f]">{cell.productName} · {cell.faultType}</div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {models.map((m) => (
+              <span key={m.model} className="rounded-full bg-white px-3 py-1 text-xs text-[#294477] ring-1 ring-[#dbe6fb]">{m.model}: {m.n}</span>
+            ))}
+          </div>
+          <ul className="space-y-1">
+            {tickets.map((t) => (
+              <li key={t.id}>
+                <Link className="text-primary underline" to={`/tickets/${t.id}`}>{t.ticketNo}</Link> · {t.customerCompany || "—"}
+                {t.productModel ? ` · ${t.productModel}` : ""} · {t.createdAt?.slice(0, 10)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

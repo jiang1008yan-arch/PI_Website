@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { EmptyState, ErrorText, Field } from "../components/Form";
 import type { TicketLink, User } from "../types";
 import { formatDateTime } from "./ticketShared";
+import { ProductionOrderHint } from "./ProductionOrderHint";
 
 function publicUrl(token: string) {
   return `${window.location.origin}/ticket/new?t=${token}`;
@@ -98,9 +99,12 @@ export function TicketLinksPanel() {
           <Field label="Customer company">
             <input value={customerCompany} onChange={(e) => setCustomerCompany(e.target.value)} maxLength={200} />
           </Field>
-          <Field label="Order number">
-            <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} maxLength={100} />
-          </Field>
+          <div>
+            <Field label="Production order no.">
+              <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} maxLength={100} />
+            </Field>
+            <ProductionOrderHint orderNo={orderNo} onUseCompany={setCustomerCompany} />
+          </div>
         </div>
         {isAdmin && (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -164,7 +168,7 @@ export function TicketLinksPanel() {
           <thead>
             <tr className="text-left text-xs uppercase tracking-wide text-[#8595b6]">
               <th className="py-2">Company</th>
-              <th>Order</th>
+              <th>Production order</th>
               <th>Submissions</th>
               <th>Expires</th>
               <th>Status</th>

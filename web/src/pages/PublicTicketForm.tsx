@@ -127,7 +127,7 @@ export function PublicTicketForm() {
           <form onSubmit={submit} className="space-y-5 rounded-lg border border-[#dbe6fb] bg-white p-6 shadow-sm">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <ReadonlyField label="Company" value={config?.customerCompany || "—"} />
-              <ReadonlyField label="Order No." value={config?.orderNo || "—"} />
+              <ReadonlyField label="Production Order No." value={config?.orderNo || "—"} />
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

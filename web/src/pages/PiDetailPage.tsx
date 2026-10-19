@@ -11,6 +11,7 @@ import { labelForCustomer, labelForSender, piDisplayName, piStatusLabel, reviewE
 import { parsePiItems, type ParsedPiItem } from "../pi/piItemCodec";
 import { revisionChanges, type RevisionChanges } from "../pi/piDiff";
 import type { Language, Pi, PiReviewEvent } from "../types";
+import { DeviceSerials } from "../pi/DeviceSerials";
 
 // Read-only view of a ZH PI and its linked EN PI — where commerce approves or
 // rejects, where after-sales looks a PI up, and the target of every approved-list
@@ -157,6 +158,8 @@ export function PiDetailPage() {
       </div>
 
       {shown ? <PiContent content={shown} language={tab} changes={changes} /> : <EmptyState title="Nothing to show" description="This PI has no content for this language." />}
+
+      {tab === "ZH" && (status === "APPROVED" || data.revisionInProgress) && <DeviceSerials piId={id} />}
 
       {data.events.length > 0 && (
         <Section title="Review History">

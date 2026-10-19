@@ -142,8 +142,37 @@ export type Ticket = {
   assignedSalesName?: string | null;
   assignedServiceName?: string | null;
   linkId?: string | null;
+  productModel?: string | null;
+  serialNumber?: string | null;
+  faultType?: string | null;
+  faultConfirmedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+// An approved Chinese PI a ticket's production order number points at.
+export type MatchedPi = {
+  id: string;
+  piNo: string;
+  linkedPiNo?: string | null;
+  linkedPiNoSnapshot?: string | null;
+  customerCompany: string;
+  productionOrderNo?: string | null;
+  revisionNo?: number;
+  revisionInProgress?: number;
+};
+
+export type RepeatInfo = {
+  count: number;
+  windowDays: number;
+  threshold: number;
+  isRepeat: boolean;
+  tickets: { id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null }[];
+};
+
+export type FaultMatrix = {
+  faultTypes: string[];
+  products: { productId: string | null; productName: string; total: number; byFault: Record<string, number> }[];
 };
 
 export type TicketUpdate = {
@@ -177,6 +206,7 @@ export type TicketStats = {
   byStatus: { status: string; n: number }[];
   byProduct: { productId: string; name: string; n: number }[];
   problemType: { label: string; counts: Record<string, number> } | null;
+  faultMatrix: FaultMatrix;
 };
 
 export type PublicProduct = { id: string; code: string; nameEn: string; nameZh: string };

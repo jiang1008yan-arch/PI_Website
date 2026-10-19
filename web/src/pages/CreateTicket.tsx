@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { ticketProductOptionLabel } from "../tickets/productOptionLabel";
 import type { PublicProduct, TicketField, User } from "../types";
+import { ProductionOrderHint } from "../tickets/ProductionOrderHint";
 
 function parseFields(raw: any[]): TicketField[] {
   return raw.map((f) => ({ ...f, options: JSON.parse(f.options || "[]") }));
@@ -104,9 +105,12 @@ export function CreateTicketPage() {
             <Field label="Customer company">
               <input value={customerCompany} onChange={(e) => setCustomerCompany(e.target.value)} maxLength={200} />
             </Field>
-            <Field label="Order number">
-              <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} maxLength={100} />
-            </Field>
+            <div>
+              <Field label="Production order no.">
+                <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} maxLength={100} />
+              </Field>
+              <ProductionOrderHint orderNo={orderNo} onUseCompany={setCustomerCompany} />
+            </div>
             <Field label="Contact name *">
               <input value={contactName} onChange={(e) => setContactName(e.target.value)} maxLength={200} required />
             </Field>

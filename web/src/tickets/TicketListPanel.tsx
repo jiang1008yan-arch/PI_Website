@@ -47,7 +47,7 @@ export function TicketListPanel() {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search ticket, order, company, product"
+              placeholder="Search ticket, production order, company, product"
               className="w-full rounded-lg border border-[#e0e8f7] bg-white py-2 pl-9 pr-3 text-sm text-[#07183f] outline-none transition placeholder:text-[#9aa8c6] focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
             />
           </div>
@@ -73,7 +73,7 @@ export function TicketListPanel() {
             <tr className="text-left text-xs uppercase tracking-wide text-[#8595b6]">
               <th className="py-2">Ticket</th>
               <th>Company</th>
-              <th>Order</th>
+              <th>Production order</th>
               <th>Product</th>
               <th>Status</th>
               <th>Created</th>
