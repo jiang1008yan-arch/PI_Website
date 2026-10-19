@@ -1,0 +1,53 @@
+# Feishu bot setup
+
+How to connect the after-sales Feishu bot (see [ADR 0002](adr/0002-feishu-as-after-sales-work-surface.md)).
+Until the secrets below are set, the bot is off and the portal works exactly as before.
+
+## 1. Create the app (Feishu admin)
+
+1. In the [Feishu Open Platform](https://open.feishu.cn/app) create an **enterprise self-built app** (企业自建应用) and enable **Bot** (机器人).
+2. Permissions (权限管理) — request these, nothing broader:
+   - `im:message.group_at_msg:readonly` — receive messages that @ the bot in groups
+   - `im:message.p2p_msg:readonly` — receive direct messages to the bot
+   - `im:message:send_as_bot` — send and update messages as the bot
+   - `im:message:readonly` — read the quoted customer message when staff reply with @bot
+   The bot does **not** need the sensitive "read all group messages" permission.
+3. To join customers' external groups, enable external sharing for the app (对外共享) — this needs admin review.
+4. **Events & callbacks** (事件与回调), "send to developer server":
+   - Event request URL: `https://<portal-domain>/api/feishu/events`, subscribe to **接收消息 v2.0** (`im.message.receive_v1`).
+   - Callback request URL: `https://<portal-domain>/api/feishu/card`, subscribe to **卡片回传交互** (`card.action.trigger`).
+   - Set an **Encrypt Key** and copy the **Verification Token**.
+5. Publish a version of the app so the settings take effect.
+
+## 2. Secrets and settings (Cloudflare Pages)
+
+```bash
+npx wrangler pages secret put FEISHU_APP_ID
+```
+
+Set the same way: `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY`, `FEISHU_SERVICE_CHAT_ID`
+(the internal after-sales group's `chat_id`, `oc_…`), and optionally `ANTHROPIC_API_KEY` for AI suggestions.
+Set `APP_BASE_URL` (e.g. `https://portal.example.com`) as a plain variable — links in bot messages use it.
+
+The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_CHAT_ID` are all set.
+
+## 3. Day-to-day use
+
+- Add the bot to the internal after-sales group and to each customer's external group.
+- **Create a ticket from a customer's message:** reply to that message and @ the bot. The bot sends you a private card with the
+  message, an AI suggestion (if enabled) and a short form; nothing is created until you press **Create ticket**.
+  A customer who @s the bot directly gets their message forwarded to the internal group as the same card.
+- The customer group only ever sees "ticket registered" and "ticket resolved". Everything else stays in the internal group,
+  where each ticket has one card (Take / status / note) that updates in place, and the ticket's sales person is @-mentioned on changes.
+- The first time someone presses a card button the bot DMs them a one-time link to tie their Feishu account to their portal
+  account. Only after-sales and admins can take or update tickets; sales can create them.
+
+## 4. Verify in a test tenant before going live
+
+Built against the documented formats and covered by automated tests with a fake Feishu API, but not yet run against real Feishu:
+
+- Card JSON 2.0 forms (`form`, `select_static`, `input`, submit button with `behaviors: callback`) — check they render and submit.
+- In-place card updates (`PATCH /im/v1/messages/:id`) for a card in a group.
+- Encrypted pushes and signatures with your Encrypt Key.
+- Feishu's **message shortcut** (消息快捷操作) was not used because its event format could not be confirmed; replying with @bot
+  covers the same need. It can be added later as a second trigger.

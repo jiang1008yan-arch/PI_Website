@@ -7,6 +7,7 @@ import { CommerceQueuePage } from "./pages/CommerceQueuePage";
 import { ConfirmedReceivedPisPage } from "./pages/ConfirmedReceivedPis";
 import { ContractsPage } from "./pages/Contracts";
 import { CreateTicketPage } from "./pages/CreateTicket";
+import { FeishuBindPage } from "./pages/FeishuBindPage";
 import { HomePage } from "./pages/Home";
 import { LoginPage } from "./pages/Login";
 import { PermissionsPage } from "./pages/Permissions";
@@ -38,6 +39,7 @@ export default function App() {
           <Route element={<RoleRoute allow={["ADMIN", "SALES", "COMMERCE"]} />}>
             <Route path="/contracts" element={<ContractsPage />} />
           </Route>
+          <Route path="/feishu/bind" element={<FeishuBindPage />} />
           {/* Read-only PI view; the server decides which PIs each role may open. */}
           <Route path="/pi/view/:id" element={<PiDetailPage />} />
           <Route element={<RoleRoute allow={["ADMIN", "COMMERCE", "SERVICE"]} />}>

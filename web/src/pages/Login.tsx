@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field } from "../components/Form";
 
@@ -8,8 +8,10 @@ export function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  // Return to the page that required sign-in (e.g. a Feishu account-link link).
+  const from = (useLocation().state as { from?: string } | null)?.from;
 
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to={from && from.startsWith("/") ? from : "/"} replace />;
 
   async function submit(e: FormEvent) {
     e.preventDefault();

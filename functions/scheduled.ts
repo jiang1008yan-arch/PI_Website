@@ -1,3 +1,4 @@
+import { drainFeishuOutbox } from "./lib/feishu/sync";
 import type { Env } from "./lib/types";
 
 // Approved ZH PIs are kept for three years after their latest commerce approval
@@ -46,11 +47,12 @@ export async function purgeExpired(db: D1Database, now: Date): Promise<void> {
 export const onScheduled: PagesFunction<Env> = async ({ env }) => {
   await purgeExpired(env.DB, new Date());
 
-  // 需求4 (方案A) — integrationOutbox consumer is intentionally not implemented
-  // this phase. When the company backend contract is ready, read PENDING rows
-  // here, POST to env.INTERNAL_PUSH_URL with env.INTERNAL_PUSH_KEY, and mark
-  // each row SENT / FAILED (incrementing attempts + lastError). See lib/outbox.ts.
-  // TODO: drain integrationOutbox.
+  // Retry Feishu pushes that failed (see lib/feishu/sync.ts).
+  await drainFeishuOutbox(env);
+
+  // 需求4 (方案A) — pushes to the company backend are still reserved: when its
+  // contract is ready, deliver those outbox rows here too. See lib/outbox.ts.
+  // TODO: drain company-backend outbox rows.
 
   return new Response("ok");
 };

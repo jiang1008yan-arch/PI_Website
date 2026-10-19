@@ -1,10 +1,10 @@
 import { all, id } from "../../lib/db";
 import { canManageFaultTypes } from "../../lib/ticketAccess";
+import { FAULT_TYPE_OPTION_KEY } from "../../lib/ticketService";
 import { admin, body, createApp } from "./_shared";
 
 // Option lists are ADMIN-managed, except the after-sales fault type list,
 // which after-sales maintain themselves.
-export const FAULT_TYPE_OPTION_KEY = "faultType";
 
 export const optionRoutes = createApp();
 

@@ -1,0 +1,150 @@
+// Feishu card JSON 2.0 builders (pure). Cards are sent with update_multi so a
+// ticket's single card can be refreshed in place for everyone in the group.
+
+export type TicketCardData = {
+  id: string;
+  ticketNo: string;
+  status: "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+  customerCompany: string;
+  orderNo: string;
+  contactName: string;
+  productName: string | null;
+  productModel: string | null;
+  serialNumber: string | null;
+  faultType: string | null;
+  serviceName: string | null;
+  salesName: string | null;
+  latestNote: string | null;
+  repeat?: { count: number; windowDays: number } | null;
+};
+
+export const STATUS_TEXT: Record<TicketCardData["status"], string> = {
+  NEW: "New",
+  IN_PROGRESS: "In progress",
+  RESOLVED: "Resolved",
+  CLOSED: "Closed"
+};
+
+// Next statuses offered on the card — the same transitions as the portal.
+const NEXT: Record<TicketCardData["status"], TicketCardData["status"][]> = {
+  NEW: ["IN_PROGRESS"],
+  IN_PROGRESS: ["RESOLVED"],
+  RESOLVED: ["CLOSED", "IN_PROGRESS"],
+  CLOSED: []
+};
+
+const TEMPLATE: Record<TicketCardData["status"], string> = { NEW: "red", IN_PROGRESS: "orange", RESOLVED: "green", CLOSED: "grey" };
+
+const plain = (content: string) => ({ tag: "plain_text", content });
+const md = (content: string) => ({ tag: "markdown", content });
+// Card markdown treats these characters specially; customer text must not format.
+const esc = (value: unknown) => String(value ?? "").replace(/([\\`*_~[\]<>])/g, "\\$1");
+
+function callbackButton(text: string, value: Record<string, string>, opts: { type?: string; name?: string; submit?: boolean } = {}) {
+  return {
+    tag: "button",
+    ...(opts.name ? { name: opts.name } : {}),
+    text: plain(text),
+    type: opts.type ?? "default",
+    ...(opts.submit ? { form_action_type: "submit" } : {}),
+    behaviors: [{ type: "callback", value }]
+  };
+}
+
+export function ticketCard(t: TicketCardData, portalUrl: string | null) {
+  const facts = [
+    `**Production order:** ${esc(t.orderNo) || "—"}`,
+    `**Product:** ${esc(t.productName) || "—"}${t.productModel ? ` · ${esc(t.productModel)}` : ""}${t.serialNumber ? ` · SN ${esc(t.serialNumber)}` : ""}`,
+    `**Fault type:** ${esc(t.faultType) || "not confirmed"}`,
+    `**Contact:** ${esc(t.contactName)}`,
+    `**After-sales:** ${esc(t.serviceName) || "unassigned"} · **Sales:** ${esc(t.salesName) || "—"}`
+  ].join("\n");
+  const elements: unknown[] = [md(facts)];
+  if (t.latestNote) elements.push(md(`**Latest:** ${esc(t.latestNote)}`));
+  if (t.repeat) elements.push(md(`**Repeat fault:** ${t.repeat.count} times on this product in ${t.repeat.windowDays} days`));
+  if (t.status === "NEW") elements.push(callbackButton("Take", { action: "take", ticketId: t.id }, { type: "primary" }));
+  const next = NEXT[t.status];
+  if (t.status !== "CLOSED") {
+    elements.push({
+      tag: "form",
+      name: "update_form",
+      elements: [
+        ...(next.length
+          ? [{ tag: "select_static", name: "status", placeholder: plain("Change status (optional)"), options: next.map((s) => ({ text: plain(STATUS_TEXT[s]), value: s })) }]
+          : []),
+        { tag: "input", name: "note", placeholder: plain("Progress note (optional)"), max_length: 1000 },
+        callbackButton("Update", { action: "update", ticketId: t.id }, { type: "primary", name: "submit_update", submit: true })
+      ]
+    });
+  }
+  if (portalUrl) elements.push(md(`[Open in portal](${portalUrl}/tickets/${t.id})`));
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain(`${t.ticketNo} · ${STATUS_TEXT[t.status]}`), subtitle: plain(t.customerCompany || "—"), template: TEMPLATE[t.status] },
+    body: { elements }
+  };
+}
+
+export type DraftCardData = {
+  draftId: string;
+  text: string;
+  aiSummary: string | null;
+  aiFaultType: string | null;
+  faultTypes: string[];
+  createdTicketNo?: string | null;
+};
+
+// The private confirmation card for a "turn into ticket" request. Nothing is
+// created until a staff member submits it; AI suggestions are marked as such.
+export function draftCard(d: DraftCardData) {
+  if (d.createdTicketNo) {
+    return {
+      schema: "2.0",
+      config: { update_multi: true },
+      header: { title: plain(`Ticket ${d.createdTicketNo} created`), template: "green" },
+      body: { elements: [md(`> ${esc(d.text).slice(0, 500)}`)] }
+    };
+  }
+  const elements: unknown[] = [md(`**Customer message**\n> ${esc(d.text).slice(0, 1500)}`)];
+  if (d.aiSummary) elements.push(md(`**AI suggestion** (check before creating): ${esc(d.aiSummary)}`));
+  elements.push({
+    tag: "form",
+    name: "draft_form",
+    elements: [
+      // Placeholders double as labels: only well-documented component properties are used.
+      { tag: "input", name: "customerCompany", placeholder: plain("Customer company"), max_length: 200 },
+      { tag: "input", name: "orderNo", placeholder: plain("Production order no., e.g. PO-2026-0901"), max_length: 100 },
+      { tag: "input", name: "contactName", placeholder: plain("Customer contact name (required)"), max_length: 200 },
+      ...(d.faultTypes.length
+        ? [{
+            tag: "select_static",
+            name: "faultType",
+            placeholder: plain("Fault type (optional)"),
+            ...(d.aiFaultType && d.faultTypes.includes(d.aiFaultType) ? { initial_option: d.aiFaultType } : {}),
+            options: d.faultTypes.map((f) => ({ text: plain(f), value: f }))
+          }]
+        : []),
+      callbackButton("Create ticket", { action: "confirm_draft", draftId: d.draftId }, { type: "primary", name: "submit_draft", submit: true })
+    ]
+  });
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain("Turn into an after-sales ticket?"), template: "blue" },
+    body: { elements }
+  };
+}
+
+export function bindCard(link: string) {
+  return {
+    schema: "2.0",
+    header: { title: plain("Link your Feishu account"), template: "blue" },
+    body: {
+      elements: [
+        md("Before you can update tickets from Feishu, link this Feishu account to your portal account once."),
+        { tag: "button", text: plain("Link account"), type: "primary", behaviors: [{ type: "open_url", default_url: link }] }
+      ]
+    }
+  };
+}

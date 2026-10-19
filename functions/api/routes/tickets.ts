@@ -1,19 +1,15 @@
 import { all, first, id } from "../../lib/db";
 import { normalizeSerial } from "../../lib/devices";
 import { buildFaultMatrix, isRepeatFault, repeatSettings, repeatWindowStart, type FaultCountRow } from "../../lib/faultStats";
-import { FAULT_TYPE_OPTION_KEY } from "./options";
 import {
   canAssignSalesSide,
   canAssignServiceSide,
-  canChangeStatus,
   canConfirmFault,
   canUseTickets,
-  canWriteNote,
-  isValidTransition,
   type TicketStatus
 } from "../../lib/ticketAccess";
-import { validateAnswers, type TicketFieldRow } from "../../lib/ticketAnswers";
-import { nextTicketNumber } from "../../lib/ticketNumber";
+import { addTicketNote, changeTicketStatus, confirmTicketFault, createTicket } from "../../lib/ticketService";
+import { afterTicketChange } from "../../lib/feishu/sync";
 import { body, createApp } from "./_shared";
 
 export const ticketRoutes = createApp();
@@ -100,47 +96,9 @@ async function repeatInfo(db: D1Database, productId: string | null, faultType: s
 // and the questionnaire is validated exactly like the public submission.
 ticketRoutes.post("/tickets", async (c) => {
   const d = await body<any>(c);
-  const customerCompany = String(d.customerCompany ?? "").trim().slice(0, 200);
-  const orderNo = String(d.orderNo ?? "").trim().slice(0, 100);
-  const contactName = String(d.contactName ?? "").trim();
-  const contactInfo = String(d.contactInfo ?? "").trim();
-  if (!contactName || contactName.length > 200) return c.json({ error: "A valid contact name is required." }, 400);
-  if (!contactInfo || contactInfo.length > 200) return c.json({ error: "Valid contact details are required." }, 400);
-
-  const product = d.productId
-    ? await first<{ id: string }>(c.env.DB, "SELECT id FROM products WHERE id=? AND status='ACTIVE'", String(d.productId))
-    : null;
-  if (!product) return c.json({ error: "A valid product is required." }, 400);
-
-  const fields = await all<TicketFieldRow>(
-    c.env.DB,
-    "SELECT id, label, fieldType, options, required FROM ticketFields ORDER BY sortOrder, label"
-  );
-  const validated = validateAnswers(fields, d.answers);
-  if (!validated.ok) return c.json({ error: validated.error }, 400);
-
-  const date = new Date().toISOString().slice(0, 10);
-  const { seq, ticketNo } = await nextTicketNumber(c.env, date);
-  const ticketId = id("tkt");
-  await c.env.DB.prepare(
-    `INSERT INTO tickets (id, ticketNo, seq, status, customerCompany, orderNo, contactName, contactInfo, productId, answers, assignedSalesId, assignedServiceId, linkId)
-     VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
-  )
-    .bind(
-      ticketId,
-      ticketNo,
-      seq,
-      customerCompany,
-      orderNo,
-      contactName,
-      contactInfo,
-      product.id,
-      JSON.stringify(validated.answers),
-      d.assignedSalesId || null,
-      d.assignedServiceId || null
-    )
-    .run();
-  return c.json({ id: ticketId, ticketNo });
+  const created = await createTicket(c.env, d, { requireProduct: true, validateQuestionnaire: true });
+  afterTicketChange(c, created.id, { kind: "created" });
+  return c.json(created);
 });
 
 // Lightweight stats: by status, by problem-type (first DROPDOWN questionnaire
@@ -243,67 +201,31 @@ ticketRoutes.patch("/tickets/:id/product", async (c) => {
   await c.env.DB.prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
     .bind(product.id, String(d.productModel ?? "").trim().slice(0, 300) || null, normalizeSerial(d.serialNumber).slice(0, 64) || null, ticket.id)
     .run();
+  afterTicketChange(c, ticket.id, { kind: "product" });
   return c.json({ ok: true });
 });
 
 // After-sales confirm the fault type (from the maintained list). Only
 // confirmed fault types count in statistics and repeat-fault checks.
 ticketRoutes.patch("/tickets/:id/fault", async (c) => {
-  const user = c.get("user");
-  if (!canConfirmFault(user)) return c.json({ error: "Forbidden" }, 403);
   const d = await body<{ faultType?: string }>(c);
-  const faultType = String(d.faultType ?? "").trim();
-  const ticket = await first<any>(c.env.DB, "SELECT id, productId, faultType FROM tickets WHERE id=?", c.req.param("id"));
-  if (!ticket) return c.json({ error: "Not found" }, 404);
-  const allowed = await all<{ value: string }>(c.env.DB, "SELECT value FROM appOptions WHERE optionKey = ?", FAULT_TYPE_OPTION_KEY);
-  if (!allowed.some((o) => o.value === faultType)) return c.json({ error: "Choose a fault type from the list." }, 400);
-  await c.env.DB.batch([
-    c.env.DB
-      .prepare("UPDATE tickets SET faultType=?, faultConfirmedById=?, faultConfirmedAt=CURRENT_TIMESTAMP, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
-      .bind(faultType, user.id, ticket.id),
-    c.env.DB
-      .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)")
-      .bind(id("tup"), ticket.id, user.id, `Fault type confirmed: ${faultType}`)
-  ]);
-  const repeat = await repeatInfo(c.env.DB, ticket.productId, faultType, new Date());
+  const confirmed = await confirmTicketFault(c.env.DB, c.get("user"), c.req.param("id"), String(d.faultType ?? ""));
+  const repeat = await repeatInfo(c.env.DB, confirmed.productId, confirmed.faultType, new Date());
+  afterTicketChange(c, c.req.param("id"), { kind: "fault", repeat: repeat?.isRepeat ? repeat : null });
   return c.json({ ok: true, repeat });
 });
 
 ticketRoutes.patch("/tickets/:id/status", async (c) => {
-  const user = c.get("user");
-  if (!canChangeStatus(user)) return c.json({ error: "Forbidden" }, 403);
   const d = await body<{ status?: string }>(c);
-  const ticket = await first<any>(c.env.DB, "SELECT * FROM tickets WHERE id=?", c.req.param("id"));
-  if (!ticket) return c.json({ error: "Not found" }, 404);
-  const to = d.status as TicketStatus;
-  if (!isValidTransition(ticket.status as TicketStatus, to)) {
-    return c.json({ error: `Cannot move from ${ticket.status} to ${to}` }, 400);
-  }
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE tickets SET status=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(to, ticket.id),
-    c.env.DB
-      .prepare(
-        "INSERT INTO ticketUpdates (id, ticketId, actorId, kind, statusFrom, statusTo) VALUES (?, ?, ?, 'STATUS', ?, ?)"
-      )
-      .bind(id("tup"), ticket.id, user.id, ticket.status, to)
-  ]);
+  const change = await changeTicketStatus(c.env.DB, c.get("user"), c.req.param("id"), d.status as TicketStatus);
+  afterTicketChange(c, c.req.param("id"), { kind: "status", to: change.to });
   return c.json({ ok: true });
 });
 
 ticketRoutes.post("/tickets/:id/notes", async (c) => {
-  const user = c.get("user");
-  if (!canWriteNote(user)) return c.json({ error: "Forbidden" }, 403);
   const d = await body<{ note?: string }>(c);
-  const note = String(d.note ?? "").trim();
-  if (!note) return c.json({ error: "Note is required" }, 400);
-  const ticket = await first<any>(c.env.DB, "SELECT id FROM tickets WHERE id=?", c.req.param("id"));
-  if (!ticket) return c.json({ error: "Not found" }, 404);
-  await c.env.DB.prepare(
-    "INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)"
-  )
-    .bind(id("tup"), ticket.id, user.id, note.slice(0, 4000))
-    .run();
-  await c.env.DB.prepare("UPDATE tickets SET updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticket.id).run();
+  await addTicketNote(c.env.DB, c.get("user"), c.req.param("id"), String(d.note ?? ""));
+  afterTicketChange(c, c.req.param("id"), { kind: "note" });
   return c.json({ ok: true });
 });
 

@@ -15,6 +15,7 @@ import { ticketRoutes } from "./routes/tickets";
 import { ticketLinkRoutes } from "./routes/ticketLinks";
 import { ticketFieldRoutes } from "./routes/ticketFields";
 import { publicTicketRoutes } from "./routes/publicTickets";
+import { feishuRoutes } from "./routes/feishu";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
 
@@ -36,6 +37,9 @@ app.use("*", async (c, next) => {
   // inside the handlers), mirroring the login whitelist.
   if (c.req.path.startsWith("/api/public/")) return next();
   if (c.req.method === "GET" && c.req.path.startsWith("/api/files/")) return next();
+  // Feishu pushes events and card callbacks; the handlers check its signature
+  // and verification token instead of a portal login.
+  if (c.req.method === "POST" && (c.req.path === "/api/feishu/events" || c.req.path === "/api/feishu/card")) return next();
   const token = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return c.json({ error: "Authentication required" }, 401);
   try {
@@ -60,6 +64,7 @@ app.route("/", ticketRoutes);
 app.route("/", ticketLinkRoutes);
 app.route("/", ticketFieldRoutes);
 app.route("/", publicTicketRoutes);
+app.route("/", feishuRoutes);
 
 // Exported for the integration tests (functions/test/harness.ts), which drive the
 // app directly with a Miniflare-backed D1 instead of going through Pages.

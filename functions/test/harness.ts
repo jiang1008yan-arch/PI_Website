@@ -31,6 +31,10 @@ export type Harness = {
   users: Record<Role, AppUser>;
   /** Calls the API as `as` (a role or a user); JSON body in, `{ status, body }` out. */
   request: (as: Role | AppUser | null, method: string, path: string, body?: unknown) => Promise<{ status: number; body: any }>;
+  /** Sends a raw request (custom headers/body), e.g. a Feishu push. */
+  raw: (method: string, path: string, body: string, headers?: Record<string, string>) => Promise<{ status: number; body: any }>;
+  /** Waits for work handlers deferred past the response (executionCtx.waitUntil). */
+  settle: () => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -53,12 +57,12 @@ export async function applyMigrations(db: D1Database, only: (file: string) => bo
   }
 }
 
-export async function createHarness(): Promise<Harness> {
+export async function createHarness(envOverrides: Partial<Env> = {}): Promise<Harness> {
   const { db, close } = await createD1();
   await applyMigrations(db);
   await db.prepare("INSERT OR IGNORE INTO senderProfile (id, corp, address, fromName, phone, email) VALUES (1, '', '', '', '', '')").run();
 
-  const env = { DB: db, FILES: undefined as unknown as R2Bucket, JWT_SECRET: "test-secret" } as Env;
+  const env = { DB: db, FILES: undefined as unknown as R2Bucket, JWT_SECRET: "test-secret", ...envOverrides } as Env;
 
   const users = {} as Record<Role, AppUser>;
   for (const role of ROLES) {
@@ -70,7 +74,14 @@ export async function createHarness(): Promise<Harness> {
     users[role] = user;
   }
 
-  const ctx = { waitUntil: (p: Promise<unknown>) => void p.catch(() => {}), passThroughOnException: () => {} };
+  const pending: Promise<unknown>[] = [];
+  const ctx = {
+    waitUntil: (p: Promise<unknown>) => void pending.push(p.catch(() => {})),
+    passThroughOnException: () => {}
+  };
+  async function settle() {
+    while (pending.length) await Promise.all(pending.splice(0));
+  }
 
   async function request(as: Role | AppUser | null, method: string, path: string, body?: unknown) {
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -78,11 +89,15 @@ export async function createHarness(): Promise<Harness> {
       const user = typeof as === "string" ? users[as] : as;
       headers.authorization = `Bearer ${await signJwt(env, user)}`;
     }
-    const res = await app.fetch(
-      new Request(`http://test/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }),
-      env,
-      ctx as unknown as ExecutionContext
-    );
+    return send(method, path, body === undefined ? undefined : JSON.stringify(body), headers);
+  }
+
+  async function raw(method: string, path: string, body: string, headers: Record<string, string> = {}) {
+    return send(method, path, body, { "content-type": "application/json", ...headers });
+  }
+
+  async function send(method: string, path: string, body: string | undefined, headers: Record<string, string>) {
+    const res = await app.fetch(new Request(`http://test/api${path}`, { method, headers, body }), env, ctx as unknown as ExecutionContext);
     const text = await res.text();
     let parsed: any = text;
     try {
@@ -93,7 +108,7 @@ export async function createHarness(): Promise<Harness> {
     return { status: res.status, body: parsed };
   }
 
-  return { env, db, users, request, close };
+  return { env, db, users, request, raw, settle, close };
 }
 
 /** Inserts an ACTIVE product with no fields; returns its id. */
