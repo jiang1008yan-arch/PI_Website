@@ -37,6 +37,7 @@ export async function purgeExpired(db: D1Database, now: Date): Promise<void> {
       WHERE linkedPiId IN (${expired})
     `).bind(draftCutoff, approvedCutoff),
     db.prepare(`DELETE FROM piItems WHERE piId IN (${expired})`).bind(draftCutoff, approvedCutoff),
+    db.prepare(`DELETE FROM devices WHERE piId IN (${expired})`).bind(draftCutoff, approvedCutoff),
     db.prepare(`DELETE FROM piReviewEvents WHERE piId IN (${expired})`).bind(draftCutoff, approvedCutoff),
     db.prepare(`DELETE FROM pi WHERE id IN (${expired})`).bind(draftCutoff, approvedCutoff)
   ]);

@@ -273,6 +273,7 @@ export async function runTransition(
          WHERE linkedPiId = ?`
       ).bind(piId, piId),
       db.prepare("DELETE FROM piItems WHERE piId=?").bind(piId),
+      db.prepare("DELETE FROM devices WHERE piId=?").bind(piId),
       db.prepare("DELETE FROM piReviewEvents WHERE piId=?").bind(piId),
       db.prepare("DELETE FROM pi WHERE id=?").bind(piId)
     ]);

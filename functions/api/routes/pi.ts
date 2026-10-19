@@ -20,6 +20,8 @@ import {
   type Verdict
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
+import { parseSerials } from "../../lib/devices";
+import { canRegisterSn } from "../../lib/ticketAccess";
 import { purgeExpired } from "../../scheduled";
 import { piItemInsertStatements, piItemReplaceStatements } from "../../lib/piItems";
 import type { Language } from "../../lib/types";
@@ -232,9 +234,11 @@ piRoutes.get("/pi/approved", async (c) => {
   if (q) {
     const like = `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
     where.push(
-      `(pi.piNo LIKE ? ESCAPE '\\' OR ${orderNo} LIKE ? ESCAPE '\\' OR ${company} LIKE ? ESCAPE '\\' OR linked.piNo LIKE ? ESCAPE '\\' OR pi.linkedPiNoSnapshot LIKE ? ESCAPE '\\')`
+      `(pi.piNo LIKE ? ESCAPE '\\' OR ${orderNo} LIKE ? ESCAPE '\\' OR ${company} LIKE ? ESCAPE '\\' OR linked.piNo LIKE ? ESCAPE '\\' OR pi.linkedPiNoSnapshot LIKE ? ESCAPE '\\'
+        OR EXISTS (SELECT 1 FROM devices d WHERE d.piId = pi.id AND d.serialNumber LIKE ? ESCAPE '\\'))`
     );
-    params.push(like, like, like, like, like);
+    // SNs are stored upper-cased.
+    params.push(like, like, like, like, like, like.toUpperCase());
   }
   const rows = await all<any>(
     c.env.DB,
@@ -662,3 +666,64 @@ piRoutes.get("/pi/:id/view", async (c) => {
   });
 });
 
+
+// ── Device serial numbers ─────────────────────────────────────────────────
+
+piRoutes.get("/pi/:id/devices", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canViewPi(c.get("user"), row));
+  if (denied) return denied;
+  return c.json(
+    await all(
+      c.env.DB,
+      `SELECT d.id, d.serialNumber, d.createdAt, u.displayName AS createdByName
+       FROM devices d LEFT JOIN users u ON u.id = d.createdById
+       WHERE d.piId = ? ORDER BY d.serialNumber`,
+      row.id
+    )
+  );
+});
+
+// Registers SNs (pasted, one per line) on an approved ZH PI. An SN already on
+// any PI is reported, never moved.
+piRoutes.post("/pi/:id/devices", async (c) => {
+  const user = c.get("user");
+  if (!canRegisterSn(user)) return c.json({ error: "Forbidden" }, 403);
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.language !== "ZH" || !(row.status === "APPROVED" || row.revisionInProgress)) {
+    return c.json({ error: "Serial numbers can only be registered on approved Chinese PIs" }, 400);
+  }
+  const d = await body<any>(c).catch(() => ({}));
+  const { serials, invalid } = parseSerials(d.serials ?? "");
+  if (serials.length > 500) return c.json({ error: "Register at most 500 serial numbers at a time" }, 400);
+  const existing = serials.length
+    ? await all<{ serialNumber: string; piId: string; piNo: string }>(
+        c.env.DB,
+        `SELECT d.serialNumber, d.piId, pi.piNo FROM devices d LEFT JOIN pi ON pi.id = d.piId
+         WHERE d.serialNumber IN (${serials.map(() => "?").join(", ")})`,
+        ...serials
+      )
+    : [];
+  const taken = new Set(existing.map((e) => e.serialNumber));
+  const toAdd = serials.filter((sn) => !taken.has(sn));
+  if (toAdd.length) {
+    await c.env.DB.batch(
+      toAdd.map((sn) =>
+        c.env.DB.prepare("INSERT INTO devices (id, serialNumber, piId, createdById) VALUES (?, ?, ?, ?)").bind(id("dev"), sn, row.id, user.id)
+      )
+    );
+  }
+  return c.json({
+    added: toAdd,
+    duplicates: existing.map((e) => ({ serialNumber: e.serialNumber, piNo: e.piNo, samePi: e.piId === row.id })),
+    invalid
+  });
+});
+
+piRoutes.delete("/pi/:id/devices/:deviceId", async (c) => {
+  if (!canRegisterSn(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
+  await c.env.DB.prepare("DELETE FROM devices WHERE id = ? AND piId = ?").bind(c.req.param("deviceId"), c.req.param("id")).run();
+  return c.json({ ok: true });
+});

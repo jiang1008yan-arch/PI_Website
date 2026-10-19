@@ -8,6 +8,12 @@ export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
 //   SALES    — view all (read-only), generate links, self-assign sales side. No status/notes.
 //   COMMERCE — no access to tickets at all.
 export const canUseTickets = (user: AppUser) => user.role !== "COMMERCE";
+// After-sales confirm a ticket's product line and fault type, register device
+// SNs on approved PIs, and maintain the fault type list. The repeat-fault
+// thresholds are an ADMIN setting.
+export const canConfirmFault = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
+export const canRegisterSn = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
+export const canManageFaultTypes = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
 export const canChangeStatus = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
 export const canWriteNote = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
 export const canGenerateLink = (user: AppUser) =>

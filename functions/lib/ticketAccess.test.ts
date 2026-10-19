@@ -4,7 +4,10 @@ import {
   canAssignSalesSide,
   canAssignServiceSide,
   canChangeStatus,
+  canConfirmFault,
   canGenerateLink,
+  canManageFaultTypes,
+  canRegisterSn,
   canUseTickets,
   canWriteNote,
   isValidTransition,
@@ -32,6 +35,12 @@ describe("role predicates", () => {
   it("status changes and notes: ADMIN and SERVICE only", () => {
     expect([canChangeStatus(ADMIN), canChangeStatus(SERVICE), canChangeStatus(SALES)]).toEqual([true, true, false]);
     expect([canWriteNote(ADMIN), canWriteNote(SERVICE), canWriteNote(SALES)]).toEqual([true, true, false]);
+  });
+
+  it("fault confirmation, SN registration and the fault type list: ADMIN and SERVICE", () => {
+    for (const can of [canConfirmFault, canRegisterSn, canManageFaultTypes]) {
+      expect([can(ADMIN), can(SERVICE), can(SALES), can(COMMERCE)]).toEqual([true, true, false, false]);
+    }
   });
 
   it("link generation: all three roles", () => {

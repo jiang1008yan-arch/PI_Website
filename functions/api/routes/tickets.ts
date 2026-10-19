@@ -1,8 +1,12 @@
 import { all, first, id } from "../../lib/db";
+import { normalizeSerial } from "../../lib/devices";
+import { buildFaultMatrix, isRepeatFault, repeatSettings, repeatWindowStart, type FaultCountRow } from "../../lib/faultStats";
+import { FAULT_TYPE_OPTION_KEY } from "./options";
 import {
   canAssignSalesSide,
   canAssignServiceSide,
   canChangeStatus,
+  canConfirmFault,
   canUseTickets,
   canWriteNote,
   isValidTransition,
@@ -31,15 +35,65 @@ const TICKET_SELECT = `
   LEFT JOIN users service ON service.id = t.assignedServiceId
 `;
 
-// All three roles can browse every ticket (no ownership filter).
+// All three roles can browse every ticket (no ownership filter). Optional
+// filters: status, and product + confirmed fault type (statistics drill-down).
 ticketRoutes.get("/tickets", async (c) => {
-  const status = c.req.query("status");
-  const where = status ? "WHERE t.status = ?" : "";
-  const params = status ? [status] : [];
+  const where: string[] = [];
+  const params: unknown[] = [];
+  for (const [query, column] of [["status", "t.status"], ["productId", "t.productId"], ["faultType", "t.faultType"], ["productModel", "t.productModel"]] as const) {
+    const value = c.req.query(query);
+    if (value) {
+      where.push(`${column} = ?`);
+      params.push(value);
+    }
+  }
   return c.json(
-    await all(c.env.DB, `${TICKET_SELECT} ${where} ORDER BY t.createdAt DESC`, ...params)
+    await all(c.env.DB, `${TICKET_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY t.createdAt DESC`, ...params)
   );
 });
+
+// The approved Chinese PIs a production order number points at (normally one;
+// legacy data may repeat a number). Reads the effective version's number.
+async function approvedPisForOrder(db: D1Database, orderNo: string) {
+  const value = orderNo.trim();
+  if (!value) return [];
+  return await all(
+    db,
+    `SELECT pi.id, pi.piNo, pi.status, pi.revisionNo, pi.revisionInProgress, linked.piNo AS linkedPiNo, pi.linkedPiNoSnapshot,
+            COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany) AS customerCompany,
+            COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo) AS productionOrderNo
+     FROM pi LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+     WHERE pi.language = 'ZH' AND (pi.status = 'APPROVED' OR pi.revisionInProgress = 1)
+       AND TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo)) = ?
+     ORDER BY pi.approvedAt DESC`,
+    value
+  );
+}
+
+async function loadRepeatSettings(db: D1Database) {
+  const rows = await all<{ optionKey: string; value: string }>(
+    db,
+    "SELECT optionKey, value FROM appOptions WHERE optionKey IN ('repeatFaultDays', 'repeatFaultThreshold')"
+  );
+  const get = (key: string) => rows.find((r) => r.optionKey === key)?.value;
+  return repeatSettings(get("repeatFaultDays"), get("repeatFaultThreshold"));
+}
+
+// How often this product has had this confirmed fault within the window.
+async function repeatInfo(db: D1Database, productId: string | null, faultType: string | null, now: Date) {
+  if (!productId || !faultType) return null;
+  const settings = await loadRepeatSettings(db);
+  const since = repeatWindowStart(now, settings.windowDays);
+  const tickets = await all<{ id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null }>(
+    db,
+    `SELECT id, ticketNo, createdAt, customerCompany, productModel FROM tickets
+     WHERE productId = ? AND faultType = ? AND createdAt >= ? ORDER BY createdAt DESC`,
+    productId,
+    faultType,
+    since
+  );
+  return { count: tickets.length, windowDays: settings.windowDays, threshold: settings.threshold, isRepeat: isRepeatFault(tickets.length, settings), tickets };
+}
 
 // Staff-created ticket (no customer link). ADMIN, SALES and SERVICE may all
 // create tickets directly and name the responsible people. Product is required
@@ -129,7 +183,28 @@ ticketRoutes.get("/tickets/stats", async (c) => {
     for (const r of rows) counts[r.v] = r.n;
     problemType = { label: problemField.label, counts };
   }
-  return c.json({ byStatus, byProduct, problemType });
+  const faultRows = await all<FaultCountRow>(
+    c.env.DB,
+    `SELECT t.productId AS productId, COALESCE(p.nameEn, '(no product)') AS productName, t.faultType AS faultType, COUNT(*) AS n
+     FROM tickets t LEFT JOIN products p ON p.id = t.productId
+     WHERE t.faultType IS NOT NULL AND t.faultType <> ''
+     GROUP BY t.productId, t.faultType`
+  );
+  return c.json({ byStatus, byProduct, problemType, faultMatrix: buildFaultMatrix(faultRows) });
+});
+
+// Statistics drill-down for one product × fault cell: which concrete models.
+ticketRoutes.get("/tickets/fault-breakdown", async (c) => {
+  const productId = c.req.query("productId") ?? "";
+  const faultType = c.req.query("faultType") ?? "";
+  const byModel = await all(
+    c.env.DB,
+    `SELECT COALESCE(NULLIF(productModel, ''), '(model not recorded)') AS model, COUNT(*) AS n
+     FROM tickets WHERE productId IS ? AND faultType = ? GROUP BY model ORDER BY n DESC`,
+    productId || null,
+    faultType
+  );
+  return c.json({ byModel });
 });
 
 ticketRoutes.get("/tickets/:id", async (c) => {
@@ -142,7 +217,56 @@ ticketRoutes.get("/tickets/:id", async (c) => {
     ticket.id
   );
   const fields = await all(c.env.DB, "SELECT * FROM ticketFields ORDER BY sortOrder, label");
-  return c.json({ ticket, updates, fields });
+  const matchedPis = await approvedPisForOrder(c.env.DB, String(ticket.orderNo ?? ""));
+  const serial = normalizeSerial(ticket.serialNumber);
+  const device = serial
+    ? await first(
+        c.env.DB,
+        `SELECT d.serialNumber, pi.id AS piId, pi.piNo, linked.piNo AS linkedPiNo, pi.linkedPiNoSnapshot, pi.productionOrderNo
+         FROM devices d JOIN pi ON pi.id = d.piId LEFT JOIN pi linked ON linked.id = pi.linkedPiId WHERE d.serialNumber = ?`,
+        serial
+      )
+    : null;
+  const repeat = await repeatInfo(c.env.DB, ticket.productId, ticket.faultType, new Date());
+  return c.json({ ticket, updates, fields, matchedPis, device, repeat });
+});
+
+// After-sales record which PI line the issue is about: the catalog product,
+// the concrete generated model, and the device SN if known.
+ticketRoutes.patch("/tickets/:id/product", async (c) => {
+  if (!canConfirmFault(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
+  const d = await body<{ productId?: string; productModel?: string; serialNumber?: string }>(c);
+  const ticket = await first<any>(c.env.DB, "SELECT id FROM tickets WHERE id=?", c.req.param("id"));
+  if (!ticket) return c.json({ error: "Not found" }, 404);
+  const product = d.productId ? await first<{ id: string }>(c.env.DB, "SELECT id FROM products WHERE id=?", String(d.productId)) : null;
+  if (!product) return c.json({ error: "A valid product is required." }, 400);
+  await c.env.DB.prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
+    .bind(product.id, String(d.productModel ?? "").trim().slice(0, 300) || null, normalizeSerial(d.serialNumber).slice(0, 64) || null, ticket.id)
+    .run();
+  return c.json({ ok: true });
+});
+
+// After-sales confirm the fault type (from the maintained list). Only
+// confirmed fault types count in statistics and repeat-fault checks.
+ticketRoutes.patch("/tickets/:id/fault", async (c) => {
+  const user = c.get("user");
+  if (!canConfirmFault(user)) return c.json({ error: "Forbidden" }, 403);
+  const d = await body<{ faultType?: string }>(c);
+  const faultType = String(d.faultType ?? "").trim();
+  const ticket = await first<any>(c.env.DB, "SELECT id, productId, faultType FROM tickets WHERE id=?", c.req.param("id"));
+  if (!ticket) return c.json({ error: "Not found" }, 404);
+  const allowed = await all<{ value: string }>(c.env.DB, "SELECT value FROM appOptions WHERE optionKey = ?", FAULT_TYPE_OPTION_KEY);
+  if (!allowed.some((o) => o.value === faultType)) return c.json({ error: "Choose a fault type from the list." }, 400);
+  await c.env.DB.batch([
+    c.env.DB
+      .prepare("UPDATE tickets SET faultType=?, faultConfirmedById=?, faultConfirmedAt=CURRENT_TIMESTAMP, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
+      .bind(faultType, user.id, ticket.id),
+    c.env.DB
+      .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)")
+      .bind(id("tup"), ticket.id, user.id, `Fault type confirmed: ${faultType}`)
+  ]);
+  const repeat = await repeatInfo(c.env.DB, ticket.productId, faultType, new Date());
+  return c.json({ ok: true, repeat });
 });
 
 ticketRoutes.patch("/tickets/:id/status", async (c) => {

@@ -40,10 +40,12 @@ app.use("*", async (c, next) => {
   if (!token) return c.json({ error: "Authentication required" }, 401);
   try {
     c.set("user", await verifyJwt(c.env, token));
-    await next();
   } catch {
     return c.json({ error: "Invalid or expired token" }, 401);
   }
+  // Outside the try: a handler's own 403 (e.g. requireAdmin throwing a
+  // Response) must not be turned into a 401, which logs the user out.
+  await next();
 });
 
 app.route("/", authRoutes);
