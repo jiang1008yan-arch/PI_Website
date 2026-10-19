@@ -34,9 +34,11 @@ The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_
 ## 3. Day-to-day use
 
 - Add the bot to the internal after-sales group and to each customer's external group.
+- **The rule: @ the bot in a group = "make a ticket".** Agree this with after-sales and customers.
 - **Create a ticket from a customer's message:** reply to that message and @ the bot. The bot sends you a private card with the
   message, an AI suggestion (if enabled) and a short form; nothing is created until you press **Create ticket**.
   A customer who @s the bot directly gets their message forwarded to the internal group as the same card.
+- Direct messages to the bot never create tickets; the bot answers them with this usage hint.
 - The customer group only ever sees "ticket registered" and "ticket resolved". Everything else stays in the internal group,
   where each ticket has one card (Take / status / note) that updates in place, and the ticket's sales person is @-mentioned on changes.
 - The first time someone presses a card button the bot DMs them a one-time link to tie their Feishu account to their portal
@@ -70,7 +72,9 @@ database), run the portal locally and expose it with a temporary Cloudflare tunn
 7. Make two internal groups: an "after-sales" group and a "customer" group (a stand-in for an external group). Add the bot to both.
    Get the after-sales group's `chat_id` from the [API Explorer](https://open.feishu.cn/api-explorer) with
    **获取用户或机器人所在的群列表** (`GET /im/v1/chats`, tenant token) and put it in `FEISHU_SERVICE_CHAT_ID`; restart the server.
-8. Try the flow:
+8. Try the flow (with a one-person account, the direct chat with the bot can be the after-sales "group" — put its `chat_id`,
+   taken from the bot's first event, in `FEISHU_SERVICE_CHAT_ID` — but the customer side must be a real group, since only group
+   @-mentions create tickets):
    - In the customer group, post a message like "PO-2026-0901 charger keeps going offline", then **reply** to it with `@bot`.
    - The bot DMs you a confirmation card. Pressing its button the first time gets you a link-your-account DM: open it,
      sign in as `service_dev` (local test account), press **Link**, then press the card button again.

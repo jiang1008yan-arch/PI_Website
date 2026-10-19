@@ -95,6 +95,23 @@ describe("turning a chat message into a ticket", () => {
     await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
   });
 
+  it("a direct message to the bot gets usage help, not a ticket card", async () => {
+    await push("/feishu/events", {
+      schema: "2.0",
+      header: { event_id: "e-dm", token: "vt", event_type: "im.message.receive_v1" },
+      event: {
+        sender: { sender_id: { open_id: "ou_service" }, sender_type: "user" },
+        message: { message_id: "om_dm", chat_id: "oc_dm", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text: "你好" }) }
+      }
+    });
+    await h.settle();
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<{ n: number }>())?.n).toBe(0);
+    const replies = messages((c) => c.path === "/im/v1/messages/om_dm/reply");
+    expect(replies).toHaveLength(1);
+    expect(JSON.parse(replies[0].body.content).text).toContain("@");
+    expect(messages((c) => c.body?.msg_type === "interactive")).toEqual([]);
+  });
+
   it("a staff @bot reply sends a private confirmation card; confirming creates the ticket and its group card", async () => {
     const event = {
       schema: "2.0",

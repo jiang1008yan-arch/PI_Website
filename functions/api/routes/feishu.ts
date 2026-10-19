@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { all, first, id } from "../../lib/db";
 import { triageMessages } from "../../lib/aiTriage";
 import { bindCard, draftCard } from "../../lib/feishu/cards";
-import { feishuEnabled, getMessageText, messageContentToText, sendCard, updateCard } from "../../lib/feishu/client";
+import { feishuEnabled, getMessageText, messageContentToText, replyText, sendCard, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
 import { pushTicketChange } from "../../lib/feishu/sync";
 import { canUseTickets } from "../../lib/ticketAccess";
@@ -27,6 +27,10 @@ import { body, createApp } from "./_shared";
 export const feishuRoutes = createApp();
 
 const BIND_TOKEN_TTL_MS = 30 * 60 * 1000;
+
+export const DM_HELP =
+  "如需创建售后工单，请在群聊中 @我（可回复客户的消息再 @我）。私聊不会创建工单。\n" +
+  "To create an after-sales ticket, @ me in a group chat (reply to the customer's message and @ me). Direct messages don't create tickets.";
 
 function runLater(c: Context, task: () => Promise<unknown>) {
   const promise = task().catch((error) => console.error("Feishu background task failed", error));
@@ -90,6 +94,13 @@ feishuRoutes.post("/feishu/events", async (c) => {
   // Feishu advises de-duplicating message events by message_id.
   if (!(await firstSeen(env.DB, `msg:${message.message_id}`))) return c.json({});
 
+  // The agreed signal for "make a ticket" is @-mentioning the bot in a group
+  // (Feishu only delivers group messages that @ the bot). Every direct message
+  // reaches the bot, so those get usage help instead of a ticket card.
+  if (message.chat_type !== "group") {
+    runLater(c, () => replyText(env, message.message_id, DM_HELP));
+    return c.json({});
+  }
   runLater(c, () => handleTicketRequest(env, event));
   return c.json({});
 });
