@@ -105,6 +105,9 @@ describe("personal AI keys", () => {
 
     const shown = await h.request("SERVICE", "GET", "/me/ai");
     expect(shown.body.setting).toMatchObject({ provider: "DEEPSEEK", maskedKey: "sk-****4321", model: null });
+    expect(shown.body.feishuLinked).toBe(false);
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_x' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    expect((await h.request("SERVICE", "GET", "/me/ai")).body.feishuLinked).toBe(true);
     expect(JSON.stringify(shown.body)).not.toContain("sk-real-key-4321");
     const row = await h.db.prepare("SELECT * FROM userAiSettings WHERE userId = ?").bind(h.users.SERVICE.id).first<any>();
     expect(JSON.stringify(row)).not.toContain("real-key");

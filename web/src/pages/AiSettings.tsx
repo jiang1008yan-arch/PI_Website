@@ -6,6 +6,7 @@ import { ErrorText, Field, PageHero, Section } from "../components/Form";
 type Provider = "QWEN" | "DEEPSEEK";
 type AiState = {
   available: boolean;
+  feishuLinked: boolean;
   providers: Record<Provider, { defaultModel: string }>;
   setting: { provider: Provider; model: string | null; maskedKey: string; updatedAt: string } | null;
 };
@@ -73,6 +74,12 @@ export function AiSettingsPage() {
             When you press <strong>创建工单</strong> on a Feishu card, AI suggests a one-line summary, the ticket type and the fault type. It runs only then,
             uses your own key, and its usage is billed to your account with the provider. Without a key the form works the same, just without suggestions.
           </p>
+          {state.available && !state.feishuLinked && (
+            <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              This portal account is not linked to your Feishu account, so a key saved here will not be used. In Feishu, send
+              <strong> 绑定 </strong> to 售后工单Robot in a direct message, open the link and sign in with this account.
+            </div>
+          )}
           {!state.available && (
             <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">AI is not enabled on this server yet. Ask an administrator.</div>
           )}

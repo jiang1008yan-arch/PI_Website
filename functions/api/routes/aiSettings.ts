@@ -21,8 +21,11 @@ aiSettingsRoutes.use("/me/ai/*", async (c, next) => {
 
 aiSettingsRoutes.get("/me/ai", async (c) => {
   const row = await loadUserAiRow(c.env.DB, c.get("user").id);
+  // AI runs for the Feishu account linked to this user, so say if there is none.
+  const linked = await c.env.DB.prepare("SELECT feishuOpenId IS NOT NULL AS linked FROM users WHERE id = ?").bind(c.get("user").id).first<{ linked: number }>();
   return c.json({
     available: Boolean(c.env.AI_KEY_SECRET),
+    feishuLinked: Boolean(linked?.linked),
     providers: Object.fromEntries(Object.entries(AI_PROVIDERS).map(([k, v]) => [k, { defaultModel: v.defaultModel }])),
     setting: row ? { provider: row.provider, model: row.model, maskedKey: maskApiKey(row.apiKeyLast4), updatedAt: row.updatedAt } : null
   });
