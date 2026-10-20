@@ -168,8 +168,10 @@ describe("turning a chat message into a ticket", () => {
     const ticket = await h.db.prepare("SELECT * FROM tickets").first<any>();
     expect(ticket).toMatchObject({ status: "NEW", orderNo: "PO-2026-0901", faultType: "Offline / no network", feishuSourceChatId: CUSTOMER_CHAT });
     expect(ticket.feishuCardMessageId).toMatch(/^om_/);
-    // The internal card went to the after-sales group; the customer got a receipt reply only.
-    expect(messages((c) => c.path.includes("receive_id_type=chat_id") && c.body.receive_id === SERVICE_CHAT && c.body.msg_type === "interactive")).toHaveLength(1);
+    // The creator owns the ticket and gets its card privately; the group is not told; the customer got a receipt reply only.
+    expect(ticket.assignedServiceId).toBe(h.users.SERVICE.id);
+    expect(messages((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "interactive" && c.body.content.includes(ticket.ticketNo))).toHaveLength(1);
+    expect(messages((c) => c.body?.receive_id === SERVICE_CHAT)).toHaveLength(0);
     const receipt = messages((c) => c.path === "/im/v1/messages/om_parent/reply");
     expect(JSON.parse(receipt[0].body.content).text).toContain(ticket.ticketNo);
     // The private card was updated to say the ticket exists; a second confirm is refused.
@@ -181,7 +183,7 @@ describe("turning a chat message into a ticket", () => {
   });
 });
 
-describe("working a ticket from the group card", () => {
+describe("working a ticket from the owner's card", () => {
   let ticketId: string;
   beforeEach(async () => {
     await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
@@ -193,7 +195,7 @@ describe("working a ticket from the group card", () => {
     calls = [];
   });
 
-  it("take, update with a note, resolve: the card refreshes, sales is mentioned, the customer hears only about resolution", async () => {
+  it("take, update with a note, resolve: the owner's card refreshes, sales is told privately, the customer hears only about resolution", async () => {
     expect((await cardAction("ou_sales", { action: "take", ticketId })).body.toast.type).toBe("warning"); // sales cannot take
     expect((await cardAction("ou_service", { action: "take", ticketId })).body.toast.type).toBe("success");
     await h.settle();
@@ -208,11 +210,14 @@ describe("working a ticket from the group card", () => {
     await cardAction("ou_service", { action: "update", ticketId }, { status: "RESOLVED" });
     await h.settle();
 
+    // Taking it sent the card to the new owner; later changes refresh that card.
     const card = afterTake.feishuCardMessageId;
+    expect(messages((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "interactive")).toHaveLength(1);
     expect(messages((c) => c.method === "PATCH" && c.path === `/im/v1/messages/${card}`).length).toBeGreaterThanOrEqual(3);
-    const mentions = messages((c) => c.path === `/im/v1/messages/${card}/reply`).map((c) => JSON.parse(c.body.content).text);
-    expect(mentions.every((t) => t.startsWith('<at user_id="ou_sales"></at>'))).toBe(true);
-    expect(mentions.some((t) => t.includes("Replaced the network module"))).toBe(true);
+    expect(messages((c) => c.body?.receive_id === SERVICE_CHAT)).toHaveLength(0);
+    const toSales = messages((c) => c.body?.receive_id === "ou_sales").map((c) => JSON.parse(c.body.content).text);
+    expect(toSales.length).toBeGreaterThanOrEqual(3);
+    expect(toSales.some((t) => t.includes("Replaced the network module"))).toBe(true);
     const toCustomer = messages((c) => c.body?.receive_id === CUSTOMER_CHAT).map((c) => JSON.parse(c.body.content).text);
     expect(toCustomer).toHaveLength(1);
     expect(toCustomer[0]).toContain("resolved");
@@ -340,14 +345,20 @@ describe("AI keys, types, the requirement pool and owners", () => {
     expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<{ n: number }>())?.n).toBe(0);
   });
 
-  it("the new owner is told privately when a ticket is handed over", async () => {
+  it("a hand-over moves the card to the new owner and marks the old one", async () => {
     const id = (await h.request("SERVICE", "POST", "/tickets", { contactName: "Li", contactInfo: "x", productId: await seedProduct(h.db), answers: {} })).body.id;
     await h.settle();
+    const oldCard = (await h.db.prepare("SELECT feishuCardMessageId FROM tickets WHERE id = ?").bind(id).first<any>()).feishuCardMessageId;
+    expect(oldCard).toMatch(/^om_/);
     calls = [];
     await h.request("SERVICE", "PATCH", `/tickets/${id}/assign`, { assignedServiceId: h.users.ADMIN.id });
     await h.settle();
-    const toAdmin = messages((c) => c.body?.receive_id === "ou_admin" && c.body.msg_type === "text");
+    const toAdmin = messages((c) => c.body?.receive_id === "ou_admin" && c.body.msg_type === "interactive");
     expect(toAdmin).toHaveLength(1);
-    expect(JSON.parse(toAdmin[0].body.content).text).toContain(`https://portal.example/tickets/${id}`);
+    const handedOver = messages((c) => c.method === "PATCH" && c.path === `/im/v1/messages/${oldCard}`);
+    expect(handedOver[0].body.content).toContain("handed over");
+    const row = await h.db.prepare("SELECT feishuCardMessageId, feishuCardOwnerId FROM tickets WHERE id = ?").bind(id).first<any>();
+    expect(row).toMatchObject({ feishuCardOwnerId: h.users.ADMIN.id });
+    expect(row.feishuCardMessageId).not.toBe(oldCard);
   });
 });

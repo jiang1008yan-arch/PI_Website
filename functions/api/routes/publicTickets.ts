@@ -1,4 +1,7 @@
 import { all, first, id } from "../../lib/db";
+import { afterTicketChange } from "../../lib/feishu/sync";
+import { ownersForCreator } from "../../lib/ticketService";
+import type { Role } from "../../lib/types";
 import { nextTicketNumber } from "../../lib/ticketNumber";
 import { validateAnswers, type TicketFieldRow } from "../../lib/ticketAnswers";
 import { verifyTurnstile } from "../../lib/turnstile";
@@ -12,6 +15,8 @@ type LinkRow = {
   orderNo: string;
   assignedSalesId: string | null;
   assignedServiceId: string | null;
+  createdById: string;
+  createdByRole: Role;
   expiresAt: string;
   revokedAt: string | null;
 };
@@ -82,6 +87,9 @@ publicTicketRoutes.post("/public/tickets", async (c) => {
   const validated = validateAnswers(fields, d.answers);
   if (!validated.ok) return c.json({ error: validated.error }, 400);
 
+  // The people named on the link own the ticket; otherwise whoever made the link.
+  const owners = ownersForCreator({ id: link.createdById, role: link.createdByRole, username: "", displayName: "" }, link);
+  const ticketId = id("tkt");
   const date = new Date().toISOString().slice(0, 10);
   const { seq, ticketNo } = await nextTicketNumber(c.env, date);
   await c.env.DB.prepare(
@@ -89,7 +97,7 @@ publicTicketRoutes.post("/public/tickets", async (c) => {
      VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
-      id("tkt"),
+      ticketId,
       ticketNo,
       seq,
       link.customerCompany,
@@ -98,8 +106,8 @@ publicTicketRoutes.post("/public/tickets", async (c) => {
       contactInfo,
       productId,
       JSON.stringify(validated.answers),
-      link.assignedSalesId,
-      link.assignedServiceId,
+      owners.assignedSalesId,
+      owners.assignedServiceId,
       link.id
     )
     .run();
@@ -108,5 +116,7 @@ publicTicketRoutes.post("/public/tickets", async (c) => {
   // enqueue this ticket: enqueueOutbox(c.env.DB, "TICKET", ticketNo, {...}).
   // TODO: enqueueOutbox(...).
 
+  // The owner gets the ticket's card in Feishu.
+  afterTicketChange(c, ticketId, { kind: "created" });
   return c.json({ ticketNo });
 });

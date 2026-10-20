@@ -2,14 +2,16 @@ import type { Context } from "hono";
 import { all, first } from "../db";
 import { enqueueOutbox, markOutbox, OUTBOX_MAX_ATTEMPTS } from "../outbox";
 import type { Env } from "../types";
-import { STATUS_TEXT, ticketCard, type TicketCardData } from "./cards";
+import { handedOverCard, STATUS_TEXT, ticketCard, type TicketCardData } from "./cards";
 import { addBitableRecord, feishuEnabled, replyText, sendCard, sendText, updateCard } from "./client";
 import { parsePoolUrl, poolRecordFields, POOL_URL_OPTION_KEY } from "./requirementPool";
 
 // Keeps Feishu in step with tickets (docs/adr/0002-feishu-as-after-sales-work-surface.md):
-// - the internal after-sales group has one card per ticket, refreshed in place
-//   after every change, from the portal or from Feishu;
-// - the ticket's sales person is @-mentioned under that card on changes;
+// - whoever owns a ticket works it: its card is sent privately to the
+//   after-sales owner and refreshed in place after every change, from the
+//   portal or from Feishu; a hand-over moves it to the new owner. The group is
+//   not told about every ticket (it gets a weekly summary instead);
+// - the ticket's sales person is told about changes in a private message;
 // - the customer's group gets only a receipt when the ticket is created and a
 //   notice when it is resolved — nothing internal;
 // - repeat faults raise an alert in the internal group;
@@ -73,6 +75,9 @@ export async function drainFeishuOutbox(env: Env) {
 }
 
 type TicketRow = TicketCardData & {
+  assignedServiceId: string | null;
+  serviceOpenId: string | null;
+  feishuCardOwnerId: string | null;
   createdAt: string;
   summary: string | null;
   bitableRecordId: string | null;
@@ -88,6 +93,7 @@ export async function loadTicketForCard(db: D1Database, ticketId: string): Promi
     db,
     `SELECT t.id, t.ticketNo, t.status, t.ticketType, t.customerCompany, t.orderNo, t.contactName, t.productModel, t.serialNumber, t.faultType,
             t.createdAt, t.summary, t.bitableRecordId, t.feishuCardMessageId, t.feishuSourceChatId, t.feishuSourceMessageId,
+            t.assignedServiceId, t.feishuCardOwnerId, service.feishuOpenId AS serviceOpenId,
             p.nameEn AS productName, service.displayName AS serviceName, sales.displayName AS salesName, sales.feishuOpenId AS salesOpenId,
             (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt DESC, u.rowid DESC LIMIT 1) AS latestNote,
             (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt, u.rowid LIMIT 1) AS firstNote
@@ -107,18 +113,21 @@ async function deliver(env: Env, payload: Payload) {
   const change = payload.change;
   const card = ticketCard({ ...t, repeat: change.kind === "fault" ? change.repeat : null }, env.APP_BASE_URL ?? null);
 
-  // 1. The internal card: create it once, then refresh it in place.
-  let cardMessageId = t.feishuCardMessageId;
-  if (cardMessageId) {
-    await updateCard(env, cardMessageId, card);
+  // 1. The owner's card, in their private chat with the bot: refreshed in
+  // place; after a hand-over the old card says so and the new owner gets one.
+  if (t.feishuCardMessageId && t.feishuCardOwnerId === t.assignedServiceId) {
+    await updateCard(env, t.feishuCardMessageId, card);
   } else {
-    cardMessageId = await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, card);
-    await env.DB.prepare("UPDATE tickets SET feishuCardMessageId=? WHERE id=?").bind(cardMessageId, t.id).run();
+    if (t.feishuCardMessageId) await updateCard(env, t.feishuCardMessageId, handedOverCard(t.ticketNo, t.serviceName));
+    const cardMessageId = t.serviceOpenId ? await sendCard(env, "open_id", t.serviceOpenId, card) : null;
+    await env.DB.prepare("UPDATE tickets SET feishuCardMessageId=?, feishuCardOwnerId=? WHERE id=?")
+      .bind(cardMessageId, cardMessageId ? t.assignedServiceId : null, t.id)
+      .run();
   }
 
-  // 2. Tell the sales person what changed, under the card.
+  // 2. Tell the sales person what changed, privately.
   if (t.salesOpenId && change.kind !== "created") {
-    await replyText(env, cardMessageId, `<at user_id="${t.salesOpenId}"></at> ${t.ticketNo}: ${describe(change, t)}`);
+    await sendText(env, "open_id", t.salesOpenId, `${t.ticketNo} (${t.customerCompany || "—"}): ${describe(change, t)}`);
   }
 
   // 3. The customer's group: receipt on creation, notice on resolution.
@@ -132,12 +141,14 @@ async function deliver(env: Env, payload: Payload) {
     }
   }
 
-  // 4. A new owner hears privately that the ticket is now theirs.
-  if (change.kind === "assigned" && change.newOwnerIds.length) {
+  // 4. A new sales owner hears privately that the ticket is now theirs (a new
+  // after-sales owner gets the card itself, above).
+  const newSalesOwners = change.kind === "assigned" ? change.newOwnerIds.filter((ownerId) => ownerId !== t.assignedServiceId) : [];
+  if (newSalesOwners.length) {
     const owners = await all<{ feishuOpenId: string }>(
       env.DB,
-      `SELECT feishuOpenId FROM users WHERE feishuOpenId IS NOT NULL AND id IN (${change.newOwnerIds.map(() => "?").join(",")})`,
-      ...change.newOwnerIds
+      `SELECT feishuOpenId FROM users WHERE feishuOpenId IS NOT NULL AND id IN (${newSalesOwners.map(() => "?").join(",")})`,
+      ...newSalesOwners
     );
     const link = env.APP_BASE_URL ? ` ${env.APP_BASE_URL}/tickets/${t.id}` : "";
     for (const o of owners) await sendText(env, "open_id", o.feishuOpenId, `You are now responsible for ticket ${t.ticketNo} (${t.customerCompany || "—"}).${link}`);

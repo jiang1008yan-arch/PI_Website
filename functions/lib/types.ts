@@ -23,6 +23,8 @@ export type Env = {
   // Master secret that encrypts users' own AI provider keys (functions/lib/aiKeys.ts).
   // Without it nobody can save a key and there are no AI suggestions.
   AI_KEY_SECRET?: string;
+  // Shared with the cron Worker (workers/cron) that triggers scheduled jobs.
+  CRON_SECRET?: string;
 };
 
 export type AppUser = {

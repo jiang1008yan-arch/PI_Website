@@ -106,6 +106,65 @@ export function promptCard(d: { draftId: string; text: string }) {
   };
 }
 
+export type WeeklySummary = {
+  weekOf: string;
+  created: number;
+  resolved: number;
+  open: { ticketNo: string; customerCompany: string; status: string; ownerName: string | null; ageDays: number }[];
+  repeats: { productName: string; faultType: string; count: number; windowDays: number }[];
+};
+
+export const OVERDUE_DAYS = 7;
+
+// The Monday summary for the after-sales group: last week's numbers, every open
+// ticket by owner (overdue ones flagged), and repeat faults that grew last week.
+export function weeklySummaryCard(s: WeeklySummary, portalUrl: string | null) {
+  const elements: unknown[] = [md(`**Last 7 days:** ${s.created} new · ${s.resolved} resolved · ${s.open.length} still open`)];
+  const byOwner = new Map<string, WeeklySummary["open"]>();
+  for (const t of s.open) {
+    const owner = t.ownerName ?? "No owner";
+    byOwner.set(owner, [...(byOwner.get(owner) ?? []), t]);
+  }
+  for (const [owner, tickets] of byOwner) {
+    const lines = tickets.slice(0, 15).map((t) => {
+      const line = `${t.ticketNo} · ${esc(t.customerCompany) || "—"} · ${STATUS_TEXT[t.status as TicketCardData["status"]] ?? t.status} · ${t.ageDays} d`;
+      return t.ageDays > OVERDUE_DAYS ? `- <font color='red'>${line}</font>` : `- ${line}`;
+    });
+    if (tickets.length > 15) lines.push(`- … and ${tickets.length - 15} more`);
+    elements.push(md(`**${esc(owner)}** (${tickets.length})\n${lines.join("\n")}`));
+  }
+  if (s.repeats.length) {
+    elements.push(
+      md(`**Repeat faults**\n${s.repeats.map((r) => `- ${esc(r.productName)} · ${esc(r.faultType)}: ${r.count} times in ${r.windowDays} days`).join("\n")}`)
+    );
+  }
+  if (portalUrl) elements.push(md(`[Open tickets in portal](${portalUrl}/tickets)`));
+  return {
+    schema: "2.0",
+    header: { title: plain(`After-sales weekly summary · week of ${s.weekOf}`), template: "blue" },
+    body: { elements }
+  };
+}
+
+// What an owner's old card turns into after the ticket is handed over.
+export function handedOverCard(ticketNo: string, newOwner: string | null) {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain(`${ticketNo} · handed over`), template: "grey" },
+    body: { elements: [md(newOwner ? `This ticket is now handled by ${esc(newOwner)}.` : "This ticket no longer has an after-sales owner.")] }
+  };
+}
+
+export function expiredDraftCard() {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain("已失效 Expired"), template: "grey" },
+    body: { elements: [md("这个建单请求超过 6 小时没有提交，已失效。需要时请重新 @我 或私聊我。")] }
+  };
+}
+
 export function dismissedCard() {
   return {
     schema: "2.0",

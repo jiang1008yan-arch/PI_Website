@@ -1,7 +1,8 @@
 import type { Context } from "hono";
 import { all, first, id } from "../../lib/db";
 import { TICKET_TYPES, triageMessages } from "../../lib/aiTriage";
-import { bindCard, dismissedCard, draftCard, promptCard } from "../../lib/feishu/cards";
+import { bindCard, dismissedCard, draftCard, expiredDraftCard, promptCard } from "../../lib/feishu/cards";
+import { isDraftExpired } from "../../lib/feishu/drafts";
 import { feishuEnabled, getMessageText, listBitableFields, messageContentToText, sendCard, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
 import { checkPoolFields, parsePoolUrl, POOL_URL_OPTION_KEY } from "../../lib/feishu/requirementPool";
@@ -125,8 +126,18 @@ async function handleTicketRequest(env: Env, event: any) {
   // Staff who asked get the question privately; anyone else's request (e.g. a
   // customer's own @bot) goes to the internal after-sales group to pick up.
   const requester = requesterOpenId ? await userForOpenId(env.DB, requesterOpenId) : null;
-  if (requester && canUseTickets(requester)) await sendCard(env, "open_id", requesterOpenId, card);
-  else await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, card);
+  const cardMessageId =
+    requester && canUseTickets(requester)
+      ? await sendCard(env, "open_id", requesterOpenId, card)
+      : await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, card);
+  await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draftId).run();
+}
+
+// A request left unanswered too long: say so, and grey out its card.
+async function refuseExpired(c: Context, env: Env, draftId: string, cardMessageId: string | null) {
+  await env.DB.prepare("UPDATE feishuDrafts SET expiredAt = COALESCE(expiredAt, CURRENT_TIMESTAMP) WHERE id = ?").bind(draftId).run();
+  if (cardMessageId) runLater(c, () => updateCard(env, cardMessageId, expiredDraftCard()));
+  return toast("warning", "This request has expired (6 hours). @ the bot again to start a new one.");
 }
 
 // "Create ticket" on the prompt: turn that card into the form, with AI
@@ -205,6 +216,12 @@ feishuRoutes.post("/feishu/card", async (c) => {
       case "open_draft": {
         if (!canUseTickets(user)) return c.json(toast("warning", "Your role cannot create tickets."));
         const messageId = event.context?.open_message_id ?? null;
+        const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null }>(
+          env.DB,
+          "SELECT createdAt, expiredAt, ticketId FROM feishuDrafts WHERE id = ?",
+          String(value.draftId)
+        );
+        if (draft && !draft.ticketId && isDraftExpired(draft, new Date())) return c.json(await refuseExpired(c, env, String(value.draftId), messageId));
         runLater(c, () => openDraftForm(env, String(value.draftId), messageId, user));
         return c.json(toast("info", "Opening the ticket form…"));
       }
@@ -237,6 +254,7 @@ async function confirmDraft(
   const draft = await first<any>(env.DB, "SELECT * FROM feishuDrafts WHERE id = ?", draftId);
   if (!draft) return toast("error", "This request no longer exists.");
   if (draft.ticketId) return toast("info", "A ticket was already created for this message.");
+  if (isDraftExpired(draft, new Date())) return await refuseExpired(c, env, draftId, cardMessageId);
   const contactName = String(form.contactName ?? "").trim();
   if (!contactName) return toast("warning", "Enter the customer contact name.");
 

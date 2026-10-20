@@ -1,0 +1,18 @@
+# Triggers the portal's scheduled jobs. Cloudflare Pages has no cron triggers,
+# so this tiny Worker calls POST /api/internal/cron every 30 minutes
+# (docs/adr/0003-cron-worker-for-pages.md).
+#
+# Deploy once:
+#   npx wrangler deploy --config workers/cron/wrangler.toml
+#   npx wrangler secret put CRON_SECRET --config workers/cron/wrangler.toml
+# and set the same CRON_SECRET on the Pages project.
+name = "sales-portal-cron"
+main = "index.js"
+compatibility_date = "2025-04-01"
+
+[triggers]
+crons = ["*/30 * * * *"]
+
+[vars]
+# The portal's public address.
+PORTAL_URL = "https://sales-portal.pages.dev"

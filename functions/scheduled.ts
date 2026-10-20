@@ -1,3 +1,6 @@
+import { feishuEnabled } from "./lib/feishu/client";
+import { remindStaleOwners, sendWeeklySummaryIfDue } from "./lib/feishu/digest";
+import { expireStaleDrafts } from "./lib/feishu/drafts";
 import { drainFeishuOutbox } from "./lib/feishu/sync";
 import type { Env } from "./lib/types";
 
@@ -44,15 +47,29 @@ export async function purgeExpired(db: D1Database, now: Date): Promise<void> {
   ]);
 }
 
-export const onScheduled: PagesFunction<Env> = async ({ env }) => {
-  await purgeExpired(env.DB, new Date());
-
-  // Retry Feishu pushes that failed (see lib/feishu/sync.ts).
-  await drainFeishuOutbox(env);
-
-  // 需求4 (方案A) — pushes to the company backend are still reserved: when its
-  // contract is ready, deliver those outbox rows here too. See lib/outbox.ts.
-  // TODO: drain company-backend outbox rows.
-
-  return new Response("ok");
-};
+// Every scheduled job, run by POST /api/internal/cron. Cloudflare Pages has no
+// cron triggers of its own, so a small separate Worker (workers/cron) calls
+// that endpoint every 30 minutes (docs/adr/0003-cron-worker-for-pages.md).
+// Each job is independent: one failing does not stop the others.
+export async function runScheduledJobs(env: Env, now: Date): Promise<Record<string, string>> {
+  const jobs: [string, () => Promise<unknown>][] = [
+    ["purgeExpired", () => purgeExpired(env.DB, now)],
+    // Retry Feishu pushes that failed (see lib/feishu/sync.ts).
+    ["feishuOutbox", () => drainFeishuOutbox(env)],
+    ["expireDrafts", () => (feishuEnabled(env) ? expireStaleDrafts(env, now) : Promise.resolve(0))],
+    ["ownerReminders", () => (feishuEnabled(env) ? remindStaleOwners(env, now) : Promise.resolve(0))],
+    ["weeklySummary", () => (feishuEnabled(env) ? sendWeeklySummaryIfDue(env, now) : Promise.resolve(false))]
+    // 需求4 (方案A) — pushes to the company backend are still reserved: when its
+    // contract is ready, deliver those outbox rows here too. See lib/outbox.ts.
+  ];
+  const results: Record<string, string> = {};
+  for (const [name, job] of jobs) {
+    try {
+      results[name] = `ok ${JSON.stringify((await job()) ?? null)}`;
+    } catch (error) {
+      console.error(`Scheduled job ${name} failed`, error);
+      results[name] = `failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  return results;
+}
