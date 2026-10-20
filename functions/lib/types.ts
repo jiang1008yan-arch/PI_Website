@@ -25,6 +25,8 @@ export type Env = {
   AI_KEY_SECRET?: string;
   // Shared with the cron Worker (workers/cron) that triggers scheduled jobs.
   CRON_SECRET?: string;
+  // Shared with the charger backend that pushes device status (POST /api/devices/status).
+  DEVICE_INGEST_SECRET?: string;
 };
 
 export type AppUser = {

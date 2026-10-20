@@ -158,7 +158,8 @@ async function openDraftForm(env: Env, draftId: string, cardMessageId: string | 
   // A production order number or SN written in the message fills the form.
   const refs = await findKnownReferences(env.DB, draft.text);
   const prefill: DraftPrefill = {
-    serialNumber: refs.device?.serialNumber,
+    // A device alert starts with its SN even when it is not registered on a PI.
+    serialNumber: refs.device?.serialNumber ?? draft.serialNumber ?? undefined,
     orderNo: refs.device?.productionOrderNo || refs.order?.productionOrderNo,
     customerCompany: refs.device?.customerCompany || refs.order?.customerCompany
   };
@@ -253,12 +254,13 @@ feishuRoutes.post("/feishu/card", async (c) => {
       case "open_draft": {
         if (!canUseTickets(user)) return c.json(toast("warning", "Your role cannot create tickets."));
         const messageId = event.context?.open_message_id ?? null;
-        const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null }>(
+        const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null; kind: string }>(
           env.DB,
-          "SELECT createdAt, expiredAt, ticketId FROM feishuDrafts WHERE id = ?",
+          "SELECT createdAt, expiredAt, ticketId, kind FROM feishuDrafts WHERE id = ?",
           String(value.draftId)
         );
-        if (draft && !draft.ticketId && isDraftExpired(draft, new Date())) return c.json(await refuseExpired(c, env, String(value.draftId), messageId));
+        if (draft?.ticketId) return c.json(toast("info", "A ticket was already created for this."));
+        if (draft && isDraftExpired(draft, new Date())) return c.json(await refuseExpired(c, env, String(value.draftId), messageId));
         runLater(c, () => openDraftForm(env, String(value.draftId), messageId, user));
         return c.json(toast("info", "Opening the ticket form…"));
       }
@@ -269,9 +271,9 @@ feishuRoutes.post("/feishu/card", async (c) => {
       }
       case "lookup_draft": {
         const messageId = event.context?.open_message_id ?? null;
-        const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null }>(
+        const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null; kind: string }>(
           env.DB,
-          "SELECT createdAt, expiredAt, ticketId FROM feishuDrafts WHERE id = ?",
+          "SELECT createdAt, expiredAt, ticketId, kind FROM feishuDrafts WHERE id = ?",
           String(value.draftId)
         );
         if (draft?.ticketId) return c.json(toast("info", "A ticket was already created for this message."));
@@ -328,6 +330,8 @@ async function confirmDraft(
     { requireProduct: false, validateQuestionnaire: false, creator: user }
   );
   await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ?").bind(created.id, draftId).run();
+  // A ticket from a device alert is linked to that alert.
+  if (draft.kind === "DEVICE_ALERT") await env.DB.prepare("UPDATE deviceStatus SET alertTicketId = ? WHERE alertDraftId = ?").bind(created.id, draftId).run();
   // Type and fault type are optional here, and only after-sales/admin may set them.
   const ticketType = TICKET_TYPES.find((t) => t === form.ticketType);
   const fault = String(form.faultType ?? "").trim();

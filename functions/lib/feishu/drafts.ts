@@ -10,7 +10,9 @@ export const DRAFT_TTL_HOURS = 6;
 // SQLite's CURRENT_TIMESTAMP format, in UTC.
 const parseSqlTime = (value: string) => new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
 
-export function isDraftExpired(draft: { createdAt: string; expiredAt?: string | null }, now: Date): boolean {
+// Device alerts stay open until someone acts on them.
+export function isDraftExpired(draft: { createdAt: string; expiredAt?: string | null; kind?: string | null }, now: Date): boolean {
+  if (draft.kind === "DEVICE_ALERT") return false;
   if (draft.expiredAt) return true;
   return now.getTime() - parseSqlTime(draft.createdAt).getTime() > DRAFT_TTL_HOURS * 60 * 60 * 1000;
 }
@@ -22,7 +24,7 @@ export async function expireStaleDrafts(env: Env, now: Date): Promise<number> {
   const cutoff = sqlTime(new Date(now.getTime() - DRAFT_TTL_HOURS * 60 * 60 * 1000));
   const stale = await all<{ id: string; cardMessageId: string | null }>(
     env.DB,
-    "SELECT id, cardMessageId FROM feishuDrafts WHERE ticketId IS NULL AND expiredAt IS NULL AND createdAt < ? LIMIT 100",
+    "SELECT id, cardMessageId FROM feishuDrafts WHERE kind = 'MESSAGE' AND ticketId IS NULL AND expiredAt IS NULL AND createdAt < ? LIMIT 100",
     cutoff
   );
   for (const draft of stale) {

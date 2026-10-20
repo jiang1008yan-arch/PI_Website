@@ -19,6 +19,7 @@ import { feishuRoutes } from "./routes/feishu";
 import { aiSettingsRoutes } from "./routes/aiSettings";
 import { internalRoutes } from "./routes/internal";
 import { lookupRoutes } from "./routes/lookup";
+import { deviceRoutes } from "./routes/devices";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
 
@@ -45,6 +46,8 @@ app.use("*", async (c, next) => {
   if (c.req.method === "POST" && (c.req.path === "/api/feishu/events" || c.req.path === "/api/feishu/card")) return next();
   // The cron Worker authenticates with a shared secret (checked in the handler).
   if (c.req.method === "POST" && c.req.path === "/api/internal/cron") return next();
+  // The charger backend authenticates with its own shared token (checked in the handler).
+  if (c.req.method === "POST" && c.req.path === "/api/devices/status") return next();
   const token = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return c.json({ error: "Authentication required" }, 401);
   try {
@@ -73,6 +76,7 @@ app.route("/", feishuRoutes);
 app.route("/", aiSettingsRoutes);
 app.route("/", internalRoutes);
 app.route("/", lookupRoutes);
+app.route("/", deviceRoutes);
 
 // Exported for the integration tests (functions/test/harness.ts), which drive the
 // app directly with a Miniflare-backed D1 instead of going through Pages.

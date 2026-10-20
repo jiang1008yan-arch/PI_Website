@@ -146,6 +146,42 @@ export function weeklySummaryCard(s: WeeklySummary, portalUrl: string | null) {
   };
 }
 
+export type DeviceAlertData = {
+  draftId: string;
+  serialNumber: string;
+  kind: "FAULT" | "OFFLINE";
+  faultCode: string | null;
+  faultText: string | null;
+  since: string | null;
+  registered: boolean;
+  customerCompany: string | null;
+  productionOrderNo: string | null;
+  piNo: string | null;
+};
+
+// A device problem reported by the charger backend, posted to the after-sales
+// group. "创建工单" opens the usual ticket form here; whoever submits owns it.
+export function deviceAlertCard(a: DeviceAlertData) {
+  const problem =
+    a.kind === "FAULT"
+      ? `**Fault:** ${esc(a.faultCode) || "—"}${a.faultText ? ` · ${esc(a.faultText)}` : ""}`
+      : `**Offline since:** ${esc(a.since) || "—"} (UTC)`;
+  const facts = [
+    `**SN:** ${esc(a.serialNumber)}${a.registered ? "" : " (not registered on any PI)"}`,
+    problem,
+    `**Customer:** ${esc(a.customerCompany) || "—"}`,
+    `**Production order:** ${esc(a.productionOrderNo) || "—"}${a.piNo ? ` · PI ${esc(a.piNo)}` : ""}`
+  ].join("\n");
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain(`设备告警 Device alert · ${a.serialNumber}`), template: a.kind === "FAULT" ? "red" : "orange" },
+    body: {
+      elements: [md(facts), callbackButton("创建工单 Create ticket", { action: "open_draft", draftId: a.draftId }, { type: "primary" })]
+    }
+  };
+}
+
 // What an owner's old card turns into after the ticket is handed over.
 export function handedOverCard(ticketNo: string, newOwner: string | null) {
   return {

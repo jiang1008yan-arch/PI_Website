@@ -51,7 +51,7 @@ describe("the cron endpoint", () => {
     expect((await h.raw("POST", "/internal/cron", "", { "x-cron-secret": "wrong" })).status).toBe(401);
     const ok = await h.raw("POST", "/internal/cron", "", { "x-cron-secret": "cron-secret" });
     expect(ok.status).toBe(200);
-    expect(Object.keys(ok.body.jobs)).toEqual(["purgeExpired", "feishuOutbox", "expireDrafts", "ownerReminders", "weeklySummary"]);
+    expect(Object.keys(ok.body.jobs)).toEqual(["purgeExpired", "feishuOutbox", "expireDrafts", "ownerReminders", "weeklySummary", "deviceOffline"]);
     h.env.CRON_SECRET = undefined;
     expect((await h.raw("POST", "/internal/cron", "", { "x-cron-secret": "" })).status).toBe(401);
   });

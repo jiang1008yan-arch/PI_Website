@@ -1,3 +1,4 @@
+import { checkOfflineDevices } from "./lib/deviceMonitor";
 import { feishuEnabled } from "./lib/feishu/client";
 import { remindStaleOwners, sendWeeklySummaryIfDue } from "./lib/feishu/digest";
 import { expireStaleDrafts } from "./lib/feishu/drafts";
@@ -58,7 +59,8 @@ export async function runScheduledJobs(env: Env, now: Date): Promise<Record<stri
     ["feishuOutbox", () => drainFeishuOutbox(env)],
     ["expireDrafts", () => (feishuEnabled(env) ? expireStaleDrafts(env, now) : Promise.resolve(0))],
     ["ownerReminders", () => (feishuEnabled(env) ? remindStaleOwners(env, now) : Promise.resolve(0))],
-    ["weeklySummary", () => (feishuEnabled(env) ? sendWeeklySummaryIfDue(env, now) : Promise.resolve(false))]
+    ["weeklySummary", () => (feishuEnabled(env) ? sendWeeklySummaryIfDue(env, now) : Promise.resolve(false))],
+    ["deviceOffline", () => checkOfflineDevices(env, now)]
     // 需求4 (方案A) — pushes to the company backend are still reserved: when its
     // contract is ready, deliver those outbox rows here too. See lib/outbox.ts.
   ];
