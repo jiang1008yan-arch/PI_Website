@@ -16,6 +16,7 @@ import { ticketLinkRoutes } from "./routes/ticketLinks";
 import { ticketFieldRoutes } from "./routes/ticketFields";
 import { publicTicketRoutes } from "./routes/publicTickets";
 import { feishuRoutes } from "./routes/feishu";
+import { aiSettingsRoutes } from "./routes/aiSettings";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
 
@@ -65,6 +66,7 @@ app.route("/", ticketLinkRoutes);
 app.route("/", ticketFieldRoutes);
 app.route("/", publicTicketRoutes);
 app.route("/", feishuRoutes);
+app.route("/", aiSettingsRoutes);
 
 // Exported for the integration tests (functions/test/harness.ts), which drive the
 // app directly with a Miniflare-backed D1 instead of going through Pages.

@@ -3,7 +3,8 @@ import { all, first } from "../db";
 import { enqueueOutbox, markOutbox, OUTBOX_MAX_ATTEMPTS } from "../outbox";
 import type { Env } from "../types";
 import { STATUS_TEXT, ticketCard, type TicketCardData } from "./cards";
-import { feishuEnabled, replyText, sendCard, sendText, updateCard } from "./client";
+import { addBitableRecord, feishuEnabled, replyText, sendCard, sendText, updateCard } from "./client";
+import { parsePoolUrl, poolRecordFields, POOL_URL_OPTION_KEY } from "./requirementPool";
 
 // Keeps Feishu in step with tickets (docs/adr/0002-feishu-as-after-sales-work-surface.md):
 // - the internal after-sales group has one card per ticket, refreshed in place
@@ -11,7 +12,10 @@ import { feishuEnabled, replyText, sendCard, sendText, updateCard } from "./clie
 // - the ticket's sales person is @-mentioned under that card on changes;
 // - the customer's group gets only a receipt when the ticket is created and a
 //   notice when it is resolved — nothing internal;
-// - repeat faults raise an alert in the internal group.
+// - repeat faults raise an alert in the internal group;
+// - a new owner is told privately that the ticket is now theirs;
+// - a ticket that becomes a product request is written once to the product
+//   managers' Bitable requirement pool.
 // Every push goes through the outbox, so a failed delivery is retried.
 
 export type TicketChange =
@@ -20,7 +24,9 @@ export type TicketChange =
   | { kind: "note" }
   | { kind: "taken" }
   | { kind: "product" }
-  | { kind: "fault"; repeat: { count: number; windowDays: number } | null };
+  | { kind: "fault"; repeat: { count: number; windowDays: number } | null }
+  | { kind: "type"; ticketType: string; toPool: boolean }
+  | { kind: "assigned"; newOwnerIds: string[] };
 
 type Payload = { channel: "feishu"; ticketId: string; change: TicketChange };
 
@@ -67,6 +73,10 @@ export async function drainFeishuOutbox(env: Env) {
 }
 
 type TicketRow = TicketCardData & {
+  createdAt: string;
+  summary: string | null;
+  bitableRecordId: string | null;
+  firstNote: string | null;
   feishuCardMessageId: string | null;
   feishuSourceChatId: string | null;
   feishuSourceMessageId: string | null;
@@ -76,10 +86,11 @@ type TicketRow = TicketCardData & {
 export async function loadTicketForCard(db: D1Database, ticketId: string): Promise<TicketRow | null> {
   const t = await first<TicketRow>(
     db,
-    `SELECT t.id, t.ticketNo, t.status, t.customerCompany, t.orderNo, t.contactName, t.productModel, t.serialNumber, t.faultType,
-            t.feishuCardMessageId, t.feishuSourceChatId, t.feishuSourceMessageId,
+    `SELECT t.id, t.ticketNo, t.status, t.ticketType, t.customerCompany, t.orderNo, t.contactName, t.productModel, t.serialNumber, t.faultType,
+            t.createdAt, t.summary, t.bitableRecordId, t.feishuCardMessageId, t.feishuSourceChatId, t.feishuSourceMessageId,
             p.nameEn AS productName, service.displayName AS serviceName, sales.displayName AS salesName, sales.feishuOpenId AS salesOpenId,
-            (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt DESC, u.rowid DESC LIMIT 1) AS latestNote
+            (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt DESC, u.rowid DESC LIMIT 1) AS latestNote,
+            (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt, u.rowid LIMIT 1) AS firstNote
      FROM tickets t
      LEFT JOIN products p ON p.id = t.productId
      LEFT JOIN users service ON service.id = t.assignedServiceId
@@ -121,7 +132,28 @@ async function deliver(env: Env, payload: Payload) {
     }
   }
 
-  // 4. Repeat faults alert the whole after-sales group.
+  // 4. A new owner hears privately that the ticket is now theirs.
+  if (change.kind === "assigned" && change.newOwnerIds.length) {
+    const owners = await all<{ feishuOpenId: string }>(
+      env.DB,
+      `SELECT feishuOpenId FROM users WHERE feishuOpenId IS NOT NULL AND id IN (${change.newOwnerIds.map(() => "?").join(",")})`,
+      ...change.newOwnerIds
+    );
+    const link = env.APP_BASE_URL ? ` ${env.APP_BASE_URL}/tickets/${t.id}` : "";
+    for (const o of owners) await sendText(env, "open_id", o.feishuOpenId, `You are now responsible for ticket ${t.ticketNo} (${t.customerCompany || "—"}).${link}`);
+  }
+
+  // 5. Product requests go to the requirement pool, once.
+  if (change.kind === "type" && change.toPool && !t.bitableRecordId) {
+    const pool = await first<{ value: string }>(env.DB, "SELECT value FROM appOptions WHERE optionKey = ? LIMIT 1", POOL_URL_OPTION_KEY);
+    const target = pool ? parsePoolUrl(pool.value) : null;
+    if (target) {
+      const recordId = await addBitableRecord(env, target.appToken, target.tableId, poolRecordFields(t, env.APP_BASE_URL ?? null));
+      await env.DB.prepare("UPDATE tickets SET bitableRecordId=? WHERE id=?").bind(recordId || "unknown", t.id).run();
+    }
+  }
+
+  // 6. Repeat faults alert the whole after-sales group.
   if (change.kind === "fault" && change.repeat) {
     await sendText(
       env,
@@ -131,6 +163,8 @@ async function deliver(env: Env, payload: Payload) {
     );
   }
 }
+
+const TICKET_TYPE_LABEL: Record<string, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
 
 function describe(change: TicketChange, t: TicketRow): string {
   switch (change.kind) {
@@ -144,6 +178,10 @@ function describe(change: TicketChange, t: TicketRow): string {
       return `fault type confirmed: ${t.faultType}.`;
     case "product":
       return "product line updated.";
+    case "type":
+      return `type is now ${TICKET_TYPE_LABEL[change.ticketType] ?? change.ticketType}.`;
+    case "assigned":
+      return `after-sales owner: ${t.serviceName ?? "unassigned"}.`;
     default:
       return "updated.";
   }

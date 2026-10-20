@@ -1,14 +1,8 @@
 import { all, first, id } from "../../lib/db";
 import { normalizeSerial } from "../../lib/devices";
 import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
-import {
-  canAssignSalesSide,
-  canAssignServiceSide,
-  canConfirmFault,
-  canUseTickets,
-  type TicketStatus
-} from "../../lib/ticketAccess";
-import { addTicketNote, changeTicketStatus, confirmTicketFault, createTicket } from "../../lib/ticketService";
+import { canConfirmFault, canUseTickets, type TicketStatus } from "../../lib/ticketAccess";
+import { addTicketNote, assignTicket, changeTicketStatus, confirmTicketFault, createTicket, setTicketType } from "../../lib/ticketService";
 import { afterTicketChange } from "../../lib/feishu/sync";
 import { body, createApp } from "./_shared";
 
@@ -36,7 +30,7 @@ const TICKET_SELECT = `
 ticketRoutes.get("/tickets", async (c) => {
   const where: string[] = [];
   const params: unknown[] = [];
-  for (const [query, column] of [["status", "t.status"], ["productId", "t.productId"], ["faultType", "t.faultType"], ["productModel", "t.productModel"]] as const) {
+  for (const [query, column] of [["status", "t.status"], ["productId", "t.productId"], ["faultType", "t.faultType"], ["productModel", "t.productModel"], ["ticketType", "t.ticketType"]] as const) {
     const value = c.req.query(query);
     if (value) {
       where.push(`${column} = ?`);
@@ -96,7 +90,7 @@ async function repeatInfo(db: D1Database, productId: string | null, faultType: s
 // and the questionnaire is validated exactly like the public submission.
 ticketRoutes.post("/tickets", async (c) => {
   const d = await body<any>(c);
-  const created = await createTicket(c.env, d, { requireProduct: true, validateQuestionnaire: true });
+  const created = await createTicket(c.env, d, { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") });
   afterTicketChange(c, created.id, { kind: "created" });
   return c.json(created);
 });
@@ -241,25 +235,21 @@ ticketRoutes.post("/tickets/:id/notes", async (c) => {
 });
 
 // Assign/backfill responsible people. ADMIN may set both sides; SERVICE may set
-// the service side; SALES may set the sales side.
+// the service side; SALES may set the sales side. Changes go on the timeline and
+// the new owner is told in Feishu.
 ticketRoutes.patch("/tickets/:id/assign", async (c) => {
-  const user = c.get("user");
   const d = await body<{ assignedSalesId?: string | null; assignedServiceId?: string | null }>(c);
-  const ticket = await first<any>(c.env.DB, "SELECT * FROM tickets WHERE id=?", c.req.param("id"));
-  if (!ticket) return c.json({ error: "Not found" }, 404);
-  const sets: string[] = [];
-  const binds: unknown[] = [];
-  if (d.assignedSalesId !== undefined && canAssignSalesSide(user)) {
-    sets.push("assignedSalesId=?");
-    binds.push(d.assignedSalesId || null);
-  }
-  if (d.assignedServiceId !== undefined && canAssignServiceSide(user)) {
-    sets.push("assignedServiceId=?");
-    binds.push(d.assignedServiceId || null);
-  }
-  if (!sets.length) return c.json({ error: "Nothing to update" }, 400);
-  sets.push("updatedAt=CURRENT_TIMESTAMP");
-  binds.push(ticket.id);
-  await c.env.DB.prepare(`UPDATE tickets SET ${sets.join(", ")} WHERE id=?`).bind(...binds).run();
+  const result = await assignTicket(c.env.DB, c.get("user"), c.req.param("id"), d);
+  const newOwnerIds = [result.newServiceOwnerId, result.newSalesOwnerId].filter((v): v is string => Boolean(v) && v !== c.get("user").id);
+  if (result.changed) afterTicketChange(c, c.req.param("id"), { kind: "assigned", newOwnerIds });
+  return c.json({ ok: true });
+});
+
+// After-sales classify the ticket (fault / product request / other) and may
+// set its one-line summary. Product requests go to the requirement pool.
+ticketRoutes.patch("/tickets/:id/type", async (c) => {
+  const d = await body<{ ticketType?: string; summary?: string }>(c);
+  const result = await setTicketType(c.env.DB, c.get("user"), c.req.param("id"), d);
+  afterTicketChange(c, c.req.param("id"), { kind: "type", ticketType: result.ticketType, toPool: result.becameProductRequest });
   return c.json({ ok: true });
 });

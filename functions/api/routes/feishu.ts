@@ -1,9 +1,10 @@
 import type { Context } from "hono";
 import { all, first, id } from "../../lib/db";
-import { triageMessages } from "../../lib/aiTriage";
+import { TICKET_TYPES, triageMessages } from "../../lib/aiTriage";
 import { bindCard, dismissedCard, draftCard, promptCard } from "../../lib/feishu/cards";
-import { feishuEnabled, getMessageText, messageContentToText, sendCard, updateCard } from "../../lib/feishu/client";
+import { feishuEnabled, getMessageText, listBitableFields, messageContentToText, sendCard, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
+import { checkPoolFields, parsePoolUrl, POOL_URL_OPTION_KEY } from "../../lib/feishu/requirementPool";
 import { pushTicketChange } from "../../lib/feishu/sync";
 import { canUseTickets } from "../../lib/ticketAccess";
 import {
@@ -12,11 +13,13 @@ import {
   confirmTicketFault,
   createTicket,
   FAULT_TYPE_OPTION_KEY,
+  setTicketType,
   takeTicket,
   TicketError
 } from "../../lib/ticketService";
 import type { TicketStatus } from "../../lib/ticketAccess";
 import type { AppUser, Env } from "../../lib/types";
+import { loadUserAiConfig } from "../../lib/userAi";
 import { body, createApp } from "./_shared";
 
 // Feishu bot endpoints (docs/adr/0002-feishu-as-after-sales-work-surface.md).
@@ -103,6 +106,11 @@ async function handleTicketRequest(env: Env, event: any) {
   const message = event.message;
   const requesterOpenId = String(event.sender?.sender_id?.open_id ?? "");
   const ownText = messageContentToText(message.message_type, message.content);
+  // "绑定" / "bind" in a direct message: just send the link-your-account card.
+  if (message.chat_type === "p2p" && requesterOpenId && /^(绑定|bind)$/i.test(ownText.trim())) {
+    await sendBindLink(env, requesterOpenId);
+    return;
+  }
   const quoted = message.parent_id ? await getMessageText(env, message.parent_id).catch(() => "") : "";
   const text = [quoted, ownText].filter(Boolean).join("\n— ").slice(0, 4000) || "(no text)";
 
@@ -122,16 +130,31 @@ async function handleTicketRequest(env: Env, event: any) {
 }
 
 // "Create ticket" on the prompt: turn that card into the form, with AI
-// suggestions when configured.
-async function openDraftForm(env: Env, draftId: string, cardMessageId: string | null) {
+// suggestions when the person who pressed it has their own AI key set up.
+async function openDraftForm(env: Env, draftId: string, cardMessageId: string | null, user: AppUser) {
   const draft = await first<any>(env.DB, "SELECT * FROM feishuDrafts WHERE id = ?", draftId);
   if (!draft || !cardMessageId) return;
   const types = await faultTypes(env.DB);
-  const triage = draft.aiSummary ? { summary: draft.aiSummary, faultType: draft.aiFaultType } : await triageMessages(env, draft.text, types);
+  const triage = draft.aiSummary
+    ? { summary: draft.aiSummary, ticketType: draft.aiTicketType, faultType: draft.aiFaultType }
+    : await triageMessages(await loadUserAiConfig(env, user.id), draft.text, types);
   if (triage && !draft.aiSummary) {
-    await env.DB.prepare("UPDATE feishuDrafts SET aiSummary = ?, aiFaultType = ? WHERE id = ?").bind(triage.summary, triage.faultType, draftId).run();
+    await env.DB.prepare("UPDATE feishuDrafts SET aiSummary = ?, aiTicketType = ?, aiFaultType = ? WHERE id = ?")
+      .bind(triage.summary, triage.ticketType, triage.faultType, draftId)
+      .run();
   }
-  await updateCard(env, cardMessageId, draftCard({ draftId, text: draft.text, aiSummary: triage?.summary ?? null, aiFaultType: triage?.faultType ?? null, faultTypes: types }));
+  await updateCard(
+    env,
+    cardMessageId,
+    draftCard({
+      draftId,
+      text: draft.text,
+      aiSummary: triage?.summary ?? null,
+      aiTicketType: triage?.ticketType ?? null,
+      aiFaultType: triage?.faultType ?? null,
+      faultTypes: types
+    })
+  );
 }
 
 // ── Card callbacks: buttons and forms on our cards ────────────────────────
@@ -182,7 +205,7 @@ feishuRoutes.post("/feishu/card", async (c) => {
       case "open_draft": {
         if (!canUseTickets(user)) return c.json(toast("warning", "Your role cannot create tickets."));
         const messageId = event.context?.open_message_id ?? null;
-        runLater(c, () => openDraftForm(env, String(value.draftId), messageId));
+        runLater(c, () => openDraftForm(env, String(value.draftId), messageId, user));
         return c.json(toast("info", "Opening the ticket form…"));
       }
       case "dismiss_draft": {
@@ -217,6 +240,7 @@ async function confirmDraft(
   const contactName = String(form.contactName ?? "").trim();
   if (!contactName) return toast("warning", "Enter the customer contact name.");
 
+  const summary = String(form.summary ?? "").trim();
   const created = await createTicket(
     env,
     {
@@ -226,20 +250,30 @@ async function confirmDraft(
       contactInfo: "Feishu group",
       feishuSourceChatId: draft.sourceChatId,
       feishuSourceMessageId: draft.sourceMessageId,
+      summary,
       // The customer's own words go on the timeline, recorded as the confirming user.
       initialNote: { actorId: user.id, text: `From Feishu: ${draft.text}` }
     },
-    { requireProduct: false, validateQuestionnaire: false }
+    { requireProduct: false, validateQuestionnaire: false, creator: user }
   );
   await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ?").bind(created.id, draftId).run();
-  // Fault type is optional here, and only after-sales/admin may confirm it.
+  // Type and fault type are optional here, and only after-sales/admin may set them.
+  const ticketType = TICKET_TYPES.find((t) => t === form.ticketType);
   const fault = String(form.faultType ?? "").trim();
-  if (fault) await confirmTicketFault(env.DB, user, created.id, fault).catch(() => undefined);
+  let toPool = false;
+  if (ticketType && ticketType !== "FAULT") {
+    toPool = await setTicketType(env.DB, user, created.id, { ticketType }).then((r) => r.becameProductRequest).catch(() => false);
+  } else if (fault) {
+    await confirmTicketFault(env.DB, user, created.id, fault).catch(() => undefined);
+  } else if (ticketType === "FAULT") {
+    await setTicketType(env.DB, user, created.id, { ticketType }).catch(() => undefined);
+  }
 
   runLater(c, async () => {
     await pushTicketChange(env, created.id, { kind: "created" });
+    if (toPool) await pushTicketChange(env, created.id, { kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true });
     if (cardMessageId) {
-      await updateCard(env, cardMessageId, draftCard({ draftId, text: draft.text, aiSummary: null, aiFaultType: null, faultTypes: [], createdTicketNo: created.ticketNo }));
+      await updateCard(env, cardMessageId, draftCard({ draftId, text: draft.text, aiSummary: null, aiTicketType: null, aiFaultType: null, faultTypes: [], createdTicketNo: created.ticketNo }));
     }
   });
   return toast("success", `Ticket ${created.ticketNo} created.`);
@@ -265,4 +299,25 @@ feishuRoutes.post("/feishu/bind", async (c) => {
     c.env.DB.prepare("UPDATE feishuBindTokens SET usedAt = CURRENT_TIMESTAMP WHERE token = ?").bind(token)
   ]);
   return c.json({ ok: true });
+});
+
+// ── Requirement pool settings (admin): check the Bitable is reachable ──────
+
+feishuRoutes.get("/feishu/requirement-pool/check", async (c) => {
+  if (c.get("user").role !== "ADMIN") return c.json({ error: "Admin access required" }, 403);
+  const env = c.env as Env;
+  const row = await first<{ value: string }>(env.DB, "SELECT value FROM appOptions WHERE optionKey = ? LIMIT 1", POOL_URL_OPTION_KEY);
+  if (!row) return c.json({ ok: false, error: "No requirement pool link saved yet." });
+  const target = parsePoolUrl(row.value);
+  if (!target) return c.json({ ok: false, error: "This is not a Bitable table link (…/base/<id>?table=tbl…). Open the table in Feishu and copy the link from the address bar." });
+  if (!env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET) return c.json({ ok: false, error: "The Feishu bot is not configured on this server." });
+  try {
+    const check = checkPoolFields(await listBitableFields(env, target.appToken, target.tableId));
+    return c.json({ ok: check.missing.length === 0 && check.notText.length === 0, ...check });
+  } catch (error) {
+    return c.json({
+      ok: false,
+      error: `Feishu refused: ${error instanceof Error ? error.message : String(error)}. Add the bot as an editor of the base and make sure the app has the bitable:app permission.`
+    });
+  }
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setAiFetch } from "../lib/aiTriage";
 import { setFeishuFetch } from "../lib/feishu/client";
 import { drainFeishuOutbox } from "../lib/feishu/sync";
 import { createHarness, seedProduct, type Harness } from "./harness";
@@ -27,6 +28,8 @@ function fakeFeishu(): typeof fetch {
     const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
     if (path.startsWith("/auth/v3/tenant_access_token")) return json({ code: 0, tenant_access_token: "t-1", expire: 7200 });
     if (failing) return json({ code: 99991400, msg: "rate limited" });
+    if (path.startsWith("/bitable/") && init?.method === "POST") return json({ code: 0, data: { record: { record_id: `rec_${++nextId}` } } });
+    if (path.startsWith("/bitable/")) return json({ code: 0, data: { items: [{ field_name: "工单号", type: 1 }, { field_name: "提交日期", type: 5 }] } });
     if (path.startsWith("/im/v1/messages/om_parent") && (init?.method ?? "GET") === "GET") {
       return json({ code: 0, data: { items: [{ msg_type: "text", body: { content: JSON.stringify({ text: "Charger on PO-2026-0901 keeps going offline" }) } }] } });
     }
@@ -49,7 +52,8 @@ beforeEach(async () => {
     FEISHU_APP_SECRET: "secret",
     FEISHU_VERIFICATION_TOKEN: "vt",
     FEISHU_SERVICE_CHAT_ID: SERVICE_CHAT,
-    APP_BASE_URL: "https://portal.example"
+    APP_BASE_URL: "https://portal.example",
+    AI_KEY_SECRET: "test-ai-master"
   });
   calls = [];
   failing = false;
@@ -60,6 +64,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   setFeishuFetch(null);
+  setAiFetch(null);
   await h.close();
 });
 
@@ -196,6 +201,10 @@ describe("working a ticket from the group card", () => {
     expect(afterTake).toMatchObject({ status: "IN_PROGRESS", assignedServiceId: h.users.SERVICE.id });
 
     await cardAction("ou_service", { action: "update", ticketId }, { note: "Replaced the network module" });
+    // A ticket cannot be resolved before it is classified.
+    const unclassified = await cardAction("ou_service", { action: "update", ticketId }, { status: "RESOLVED" });
+    expect(unclassified.body.toast).toMatchObject({ type: "error", content: "Choose the ticket type before resolving it." });
+    expect((await h.request("SERVICE", "PATCH", `/tickets/${ticketId}/type`, { ticketType: "OTHER" })).status).toBe(200);
     await cardAction("ou_service", { action: "update", ticketId }, { status: "RESOLVED" });
     await h.settle();
 
@@ -231,5 +240,114 @@ describe("working a ticket from the group card", () => {
     await h.request("SERVICE", "PATCH", `/tickets/${ticketId}/status`, { status: "IN_PROGRESS" });
     await h.settle();
     expect(calls).toEqual([]);
+  });
+});
+
+describe("AI keys, types, the requirement pool and owners", () => {
+  const POOL = "https://acme.feishu.cn/base/bascnPool1?table=tblReq1&view=vew1";
+  let aiCalls: string[];
+  const dm = (openId: string, text: string, messageId: string) =>
+    push("/feishu/events", {
+      schema: "2.0",
+      header: { event_id: `e-${messageId}`, token: "vt", event_type: "im.message.receive_v1" },
+      event: {
+        sender: { sender_id: { open_id: openId }, sender_type: "user" },
+        message: { message_id: messageId, chat_id: "oc_dm", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text }) }
+      }
+    });
+  const lastDraftId = async () => (await h.db.prepare("SELECT id FROM feishuDrafts ORDER BY rowid DESC LIMIT 1").first<{ id: string }>())!.id;
+
+  beforeEach(async () => {
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_admin' WHERE id = ?").bind(h.users.ADMIN.id).run();
+    aiCalls = [];
+    setAiFetch((async (_url: string, init: RequestInit) => {
+      aiCalls.push((init.headers as Record<string, string>).Authorization);
+      const body = JSON.parse(String(init.body));
+      const content = body.max_tokens <= 20 ? '{"ok": true}' : '{"summary":"客户希望支持 OCPP 2.0.1","ticketType":"PRODUCT_REQUEST","faultType":"none"}';
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+    }) as unknown as typeof fetch);
+  });
+
+  it("uses the AI key of whoever presses Create, and none for someone without a key", async () => {
+    await h.request("SERVICE", "PUT", "/me/ai", { provider: "QWEN", apiKey: "sk-service-key-1" });
+    aiCalls = [];
+
+    await dm("ou_admin", "能不能支持 OCPP 2.0.1", "om_a1");
+    await h.settle();
+    await cardAction("ou_admin", { action: "open_draft", draftId: await lastDraftId() }, {}, "e-a-open", "om_p1");
+    await h.settle();
+    expect(aiCalls).toEqual([]); // the admin has no key
+
+    await dm("ou_service", "能不能支持 OCPP 2.0.1", "om_s1");
+    await h.settle();
+    calls = [];
+    await cardAction("ou_service", { action: "open_draft", draftId: await lastDraftId() }, {}, "e-s-open", "om_p2");
+    await h.settle();
+    expect(aiCalls).toEqual(["Bearer sk-service-key-1"]);
+    const form = JSON.stringify(JSON.parse(messages((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_p2")[0].body.content));
+    expect(form).toContain('"initial_option":"PRODUCT_REQUEST"');
+    expect(form).toContain("客户希望支持 OCPP 2.0.1");
+  });
+
+  it("a product request created from Feishu is owned by its creator and written once to the requirement pool", async () => {
+    await h.request("ADMIN", "PUT", "/options/requirementPoolUrl", { values: [POOL] });
+    await dm("ou_service", "希望 App 能远程升级固件", "om_s2");
+    await h.settle();
+    const draftId = await lastDraftId();
+    calls = [];
+    const res = await cardAction(
+      "ou_service",
+      { action: "confirm_draft", draftId },
+      { contactName: "Ana", customerCompany: "ACME", ticketType: "PRODUCT_REQUEST", summary: "远程升级固件", faultType: "Offline / no network" }
+    );
+    expect(res.body.toast.type).toBe("success");
+    await h.settle();
+
+    const ticket = await h.db.prepare("SELECT * FROM tickets").first<any>();
+    expect(ticket).toMatchObject({ ticketType: "PRODUCT_REQUEST", faultType: null, summary: "远程升级固件", assignedServiceId: h.users.SERVICE.id });
+    const writes = calls.filter((c) => c.path.startsWith("/bitable/v1/apps/bascnPool1/tables/tblReq1/records") && c.method === "POST");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].body.fields).toMatchObject({ 工单号: ticket.ticketNo, 客户: "ACME", 摘要: "远程升级固件", 客户原话: "希望 App 能远程升级固件", 售后负责人: "Test SERVICE" });
+    expect(ticket.bitableRecordId).toMatch(/^rec_/);
+
+    // Classifying it again does not write a second row.
+    await h.request("SERVICE", "PATCH", `/tickets/${ticket.id}/type`, { ticketType: "OTHER" });
+    await h.request("SERVICE", "PATCH", `/tickets/${ticket.id}/type`, { ticketType: "PRODUCT_REQUEST" });
+    await h.settle();
+    expect(calls.filter((c) => c.path.startsWith("/bitable/") && c.method === "POST")).toHaveLength(1);
+  });
+
+  it("admins can check the pool table's columns", async () => {
+    expect((await h.request("SERVICE", "GET", "/feishu/requirement-pool/check")).status).toBe(403);
+    expect((await h.request("ADMIN", "GET", "/feishu/requirement-pool/check")).body).toMatchObject({ ok: false, error: "No requirement pool link saved yet." });
+    await h.request("ADMIN", "PUT", "/options/requirementPoolUrl", { values: ["https://acme.feishu.cn/wiki/abc"] });
+    expect((await h.request("ADMIN", "GET", "/feishu/requirement-pool/check")).body.error).toContain("not a Bitable table link");
+    await h.request("ADMIN", "PUT", "/options/requirementPoolUrl", { values: [POOL] });
+    const check = (await h.request("ADMIN", "GET", "/feishu/requirement-pool/check")).body;
+    expect(check.ok).toBe(false);
+    expect(check.notText).toEqual(["提交日期"]);
+    expect(check.missing).toContain("客户原话");
+  });
+
+  it("a direct message saying 绑定 gets the link card instead of the ticket prompt", async () => {
+    await dm("ou_someone", "绑定", "om_bind");
+    await h.settle();
+    const sent = messages((c) => c.body?.msg_type === "interactive");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body.receive_id).toBe("ou_someone");
+    expect(sent[0].body.content).toContain("feishu/bind?token=");
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<{ n: number }>())?.n).toBe(0);
+  });
+
+  it("the new owner is told privately when a ticket is handed over", async () => {
+    const id = (await h.request("SERVICE", "POST", "/tickets", { contactName: "Li", contactInfo: "x", productId: await seedProduct(h.db), answers: {} })).body.id;
+    await h.settle();
+    calls = [];
+    await h.request("SERVICE", "PATCH", `/tickets/${id}/assign`, { assignedServiceId: h.users.ADMIN.id });
+    await h.settle();
+    const toAdmin = messages((c) => c.body?.receive_id === "ou_admin" && c.body.msg_type === "text");
+    expect(toAdmin).toHaveLength(1);
+    expect(JSON.parse(toAdmin[0].body.content).text).toContain(`https://portal.example/tickets/${id}`);
   });
 });

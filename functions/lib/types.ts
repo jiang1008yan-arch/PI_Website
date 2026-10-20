@@ -20,10 +20,9 @@ export type Env = {
   FEISHU_VERIFICATION_TOKEN?: string;
   FEISHU_ENCRYPT_KEY?: string;
   FEISHU_SERVICE_CHAT_ID?: string;
-  // Qwen (Alibaba Cloud Model Studio) key for AI suggestions on "turn into
-  // ticket"; optional. QWEN_MODEL overrides the default qwen-plus.
-  DASHSCOPE_API_KEY?: string;
-  QWEN_MODEL?: string;
+  // Master secret that encrypts users' own AI provider keys (functions/lib/aiKeys.ts).
+  // Without it nobody can save a key and there are no AI suggestions.
+  AI_KEY_SECRET?: string;
 };
 
 export type AppUser = {

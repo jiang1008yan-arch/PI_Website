@@ -5,6 +5,7 @@ export type TicketCardData = {
   id: string;
   ticketNo: string;
   status: "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+  ticketType?: string | null;
   customerCompany: string;
   orderNo: string;
   contactName: string;
@@ -33,6 +34,8 @@ const NEXT: Record<TicketCardData["status"], TicketCardData["status"][]> = {
   CLOSED: []
 };
 
+export const TYPE_TEXT: Record<string, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
+
 const TEMPLATE: Record<TicketCardData["status"], string> = { NEW: "red", IN_PROGRESS: "orange", RESOLVED: "green", CLOSED: "grey" };
 
 const plain = (content: string) => ({ tag: "plain_text", content });
@@ -55,14 +58,15 @@ export function ticketCard(t: TicketCardData, portalUrl: string | null) {
   const facts = [
     `**Production order:** ${esc(t.orderNo) || "—"}`,
     `**Product:** ${esc(t.productName) || "—"}${t.productModel ? ` · ${esc(t.productModel)}` : ""}${t.serialNumber ? ` · SN ${esc(t.serialNumber)}` : ""}`,
-    `**Fault type:** ${esc(t.faultType) || "not confirmed"}`,
+    `**Type:** ${TYPE_TEXT[t.ticketType ?? ""] ?? "not classified"}${t.ticketType === "FAULT" ? ` · ${esc(t.faultType) || "fault type not confirmed"}` : ""}`,
     `**Contact:** ${esc(t.contactName)}`,
     `**After-sales:** ${esc(t.serviceName) || "unassigned"} · **Sales:** ${esc(t.salesName) || "—"}`
   ].join("\n");
   const elements: unknown[] = [md(facts)];
   if (t.latestNote) elements.push(md(`**Latest:** ${esc(t.latestNote)}`));
   if (t.repeat) elements.push(md(`**Repeat fault:** ${t.repeat.count} times on this product in ${t.repeat.windowDays} days`));
-  if (t.status === "NEW") elements.push(callbackButton("Take", { action: "take", ticketId: t.id }, { type: "primary" }));
+  // Whoever created the ticket usually owns it already; Take is for unowned ones.
+  if (!t.serviceName && t.status !== "CLOSED") elements.push(callbackButton("Take", { action: "take", ticketId: t.id }, { type: "primary" }));
   const next = NEXT[t.status];
   if (t.status !== "CLOSED") {
     elements.push({
@@ -115,6 +119,7 @@ export type DraftCardData = {
   draftId: string;
   text: string;
   aiSummary: string | null;
+  aiTicketType: string | null;
   aiFaultType: string | null;
   faultTypes: string[];
   createdTicketNo?: string | null;
@@ -141,11 +146,25 @@ export function draftCard(d: DraftCardData) {
       { tag: "input", name: "customerCompany", placeholder: plain("Customer company"), max_length: 200 },
       { tag: "input", name: "orderNo", placeholder: plain("Production order no., e.g. PO-2026-0901"), max_length: 100 },
       { tag: "input", name: "contactName", placeholder: plain("Customer contact name (required)"), max_length: 200 },
+      {
+        tag: "input",
+        name: "summary",
+        placeholder: plain("One-line summary (optional)"),
+        max_length: 300,
+        ...(d.aiSummary ? { default_value: d.aiSummary.slice(0, 300) } : {})
+      },
+      {
+        tag: "select_static",
+        name: "ticketType",
+        placeholder: plain("Ticket type (optional)"),
+        ...(d.aiTicketType && TYPE_TEXT[d.aiTicketType] ? { initial_option: d.aiTicketType } : {}),
+        options: Object.entries(TYPE_TEXT).map(([value, text]) => ({ text: plain(text), value }))
+      },
       ...(d.faultTypes.length
         ? [{
             tag: "select_static",
             name: "faultType",
-            placeholder: plain("Fault type (optional)"),
+            placeholder: plain("Fault type (faults only, optional)"),
             ...(d.aiFaultType && d.faultTypes.includes(d.aiFaultType) ? { initial_option: d.aiFaultType } : {}),
             options: d.faultTypes.map((f) => ({ text: plain(f), value: f }))
           }]

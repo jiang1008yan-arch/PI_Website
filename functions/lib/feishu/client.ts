@@ -72,6 +72,17 @@ export async function updateCard(env: Env, messageId: string, card: unknown): Pr
   await call(env, "PATCH", `/im/v1/messages/${encodeURIComponent(messageId)}`, { content: JSON.stringify(card) });
 }
 
+// Bitable (the requirement pool). The bot must be an editor of the base.
+export async function listBitableFields(env: Env, appToken: string, tableId: string): Promise<{ field_name: string; type: number }[]> {
+  const data = await call(env, "GET", `/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields?page_size=100`);
+  return data.items ?? [];
+}
+
+export async function addBitableRecord(env: Env, appToken: string, tableId: string, fields: Record<string, string>): Promise<string> {
+  const data = await call(env, "POST", `/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`, { fields });
+  return String(data.record?.record_id ?? "");
+}
+
 export async function getMessageText(env: Env, messageId: string): Promise<string> {
   const data = await call(env, "GET", `/im/v1/messages/${encodeURIComponent(messageId)}`);
   const item = data.items?.[0];
