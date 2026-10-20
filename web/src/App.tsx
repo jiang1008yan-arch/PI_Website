@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AdminRoute, ProtectedRoute, RoleRoute } from "./auth/ProtectedRoute";
 import { Layout } from "./components/Layout";
+import { AiSettingsPage } from "./pages/AiSettings";
 import { ApprovedPisPage } from "./pages/ApprovedPisPage";
 import { ChangePasswordPage } from "./pages/ChangePassword";
 import { CommerceQueuePage } from "./pages/CommerceQueuePage";
@@ -16,6 +17,7 @@ import { PiDetailPage } from "./pages/PiDetailPage";
 import { PiPage } from "./pages/PiPage";
 import { ProductsPage } from "./pages/Products";
 import { PublicTicketForm } from "./pages/PublicTicketForm";
+import { RequirementPoolPage } from "./pages/RequirementPoolPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TemplatesPage } from "./pages/Templates";
 import { TicketDetailPage } from "./pages/TicketDetail";
@@ -31,6 +33,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route path="/account/ai" element={<AiSettingsPage />} />
           {/* PI + contract pages are for ADMIN/SALES; SERVICE is ticket-only. */}
           <Route element={<RoleRoute allow={["ADMIN", "SALES"]} />}>
             <Route path="/pi/en" element={<PiPage language="EN" />} />
@@ -62,6 +65,7 @@ export default function App() {
             <Route path="/reviews" element={<ReviewPage />} />
             <Route path="/permissions" element={<PermissionsPage />} />
             <Route path="/excel-templates" element={<TemplatesPage />} />
+            <Route path="/requirement-pool" element={<RequirementPoolPage />} />
           </Route>
         </Route>
       </Route>

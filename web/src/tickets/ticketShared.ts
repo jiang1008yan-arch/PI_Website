@@ -1,4 +1,4 @@
-import type { TicketStatus } from "../types";
+import type { TicketStatus, TicketType } from "../types";
 
 export const STATUS_ORDER: TicketStatus[] = ["NEW", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 
@@ -14,6 +14,12 @@ export const STATUS_BADGE: Record<TicketStatus, string> = {
   IN_PROGRESS: "bg-amber-50 text-amber-700",
   RESOLVED: "bg-green-50 text-green-700",
   CLOSED: "bg-slate-100 text-slate-600"
+};
+
+export const TICKET_TYPE_LABEL: Record<TicketType, string> = {
+  FAULT: "Fault",
+  PRODUCT_REQUEST: "Product request",
+  OTHER: "Question / other"
 };
 
 // Mirrors functions/lib/ticketAccess.ts TRANSITIONS.

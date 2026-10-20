@@ -4,8 +4,8 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
-import type { MatchedPi, RepeatInfo, Ticket, TicketField, TicketStatus, TicketUpdate, User } from "../types";
-import { STATUS_BADGE, STATUS_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
+import type { MatchedPi, RepeatInfo, Ticket, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
+import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
 import { TicketPiPanel } from "../tickets/TicketPiPanel";
 
 type Detail = {
@@ -92,6 +92,12 @@ export function TicketDetailPage() {
     parsedAnswers = {};
   }
   const transitions = TRANSITIONS[ticket.status] ?? [];
+  // A ticket is classified (and a fault confirmed) before it can be resolved.
+  const resolveBlocker = !ticket.ticketType
+    ? "Choose the ticket type before resolving."
+    : ticket.ticketType === "FAULT" && !ticket.faultType
+      ? "Confirm the fault type before resolving."
+      : "";
   const salesUsers = users.filter((u) => u.role === "SALES" || u.role === "ADMIN");
   const serviceUsers = users.filter((u) => u.role === "SERVICE" || u.role === "ADMIN");
 
@@ -182,6 +188,8 @@ export function TicketDetailPage() {
         </div>
 
         <div className="space-y-6">
+          <TicketTypeSection ticket={ticket} canManage={canManage} onChanged={load} />
+
           <Section title="Status">
             <div className={`inline-block rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE[ticket.status]}`}>
               {STATUS_LABEL[ticket.status]}
@@ -194,12 +202,14 @@ export function TicketDetailPage() {
                       key={to}
                       type="button"
                       className="btn-secondary w-full"
-                      disabled={busy}
+                      disabled={busy || (to === "RESOLVED" && Boolean(resolveBlocker))}
+                      title={to === "RESOLVED" ? resolveBlocker : undefined}
                       onClick={() => changeStatus(to)}
                     >
                       Move to {STATUS_LABEL[to]}
                     </button>
                   ))}
+                  {transitions.includes("RESOLVED") && resolveBlocker && <p className="text-xs text-amber-700">{resolveBlocker}</p>}
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-[#8595b6]">No further transitions.</p>
@@ -243,6 +253,69 @@ export function TicketDetailPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// What the ticket is about. Only faults count in fault statistics; product
+// requests also go to the product managers' requirement pool.
+function TicketTypeSection({ ticket, canManage, onChanged }: { ticket: Ticket; canManage: boolean; onChanged: () => Promise<void> }) {
+  const [type, setType] = useState<TicketType | "">(ticket.ticketType ?? "");
+  const [summary, setSummary] = useState(ticket.summary ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setType(ticket.ticketType ?? "");
+    setSummary(ticket.summary ?? "");
+  }, [ticket.id, ticket.ticketType, ticket.summary]);
+
+  async function save() {
+    setError("");
+    setBusy(true);
+    try {
+      await api.patch(`/tickets/${ticket.id}/type`, { ticketType: type, summary });
+      await onChanged();
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? "Could not save the ticket type.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!canManage) {
+    return (
+      <Section title="Type">
+        <dl className="space-y-2 text-sm">
+          <Info label="Ticket type" value={ticket.ticketType ? TICKET_TYPE_LABEL[ticket.ticketType] : "Not classified yet"} />
+          <Info label="Summary" value={ticket.summary} />
+        </dl>
+      </Section>
+    );
+  }
+  const changed = type !== (ticket.ticketType ?? "") || summary.trim() !== (ticket.summary ?? "");
+  return (
+    <Section title="Type">
+      <div className="space-y-3">
+        <Field label="Ticket type">
+          <select value={type} onChange={(e) => setType(e.target.value as TicketType | "")}>
+            <option value="">Not classified yet</option>
+            {(Object.keys(TICKET_TYPE_LABEL) as TicketType[]).map((t) => (
+              <option key={t} value={t}>{TICKET_TYPE_LABEL[t]}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="One-line summary">
+          <input value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={300} placeholder="What the customer reports or asks for" />
+        </Field>
+        {type === "PRODUCT_REQUEST" && ticket.ticketType !== "PRODUCT_REQUEST" && (
+          <p className="text-xs text-[#63749b]">Saving sends this request to the product managers' requirement pool in Feishu.</p>
+        )}
+        {type && type !== "FAULT" && ticket.faultType && <p className="text-xs text-amber-700">The confirmed fault type will be cleared.</p>}
+        <button type="button" className="btn-secondary" disabled={busy || !type || !changed} onClick={save}>
+          Save type
+        </button>
+        {error && <div className="text-sm text-red-700">{error}</div>}
+      </div>
+    </Section>
   );
 }
 

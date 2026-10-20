@@ -146,9 +146,13 @@ export type Ticket = {
   serialNumber?: string | null;
   faultType?: string | null;
   faultConfirmedAt?: string | null;
+  ticketType?: TicketType | null;
+  summary?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
+
+export type TicketType = "FAULT" | "PRODUCT_REQUEST" | "OTHER";
 
 // An approved Chinese PI a ticket's production order number points at.
 export type MatchedPi = {

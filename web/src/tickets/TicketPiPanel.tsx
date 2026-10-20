@@ -163,7 +163,9 @@ export function TicketPiPanel({
 
         <div className="space-y-3 border-t pt-4">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-[#8595b6]">Confirmed fault type</h3>
-          {canManage ? (
+          {ticket.ticketType === "PRODUCT_REQUEST" || ticket.ticketType === "OTHER" ? (
+            <p className="text-sm text-[#63749b]">Only faults have a fault type. Change the ticket type to Fault to confirm one.</p>
+          ) : canManage ? (
             <>
               <SelectWithManage label="Fault type" value={fault} options={faultTypes} disabled={busy} canManage onChange={setFault} onManage={() => setManaging(true)} />
               <button type="button" className="btn-secondary" disabled={busy || !fault || fault === ticket.faultType} onClick={confirmFault}>
