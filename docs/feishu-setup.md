@@ -32,6 +32,30 @@ Set `APP_BASE_URL` (e.g. `https://portal.example.com`) as a plain variable — l
 
 The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_CHAT_ID` are all set.
 
+Two more shared secrets (long random strings):
+- `CRON_SECRET` — lets the cron Worker run the scheduled jobs (next section).
+- `DEVICE_INGEST_SECRET` — lets the charger backend push device status (section 3b).
+
+## 2a. Scheduled jobs (cron Worker)
+
+Cloudflare Pages cannot run anything on a timer, so a tiny separate Worker (`workers/cron`) calls
+`POST /api/internal/cron` every 30 minutes (see [ADR 0003](adr/0003-cron-worker-for-pages.md)). Deploy it once:
+
+```bash
+npx wrangler deploy --config workers/cron/wrangler.toml
+```
+
+Then set its secret to the same value as the portal's `CRON_SECRET`, and put the portal's address in `PORTAL_URL`
+in `workers/cron/wrangler.toml`:
+
+```bash
+npx wrangler secret put CRON_SECRET --config workers/cron/wrangler.toml
+```
+
+The jobs: purge expired PIs, retry failed Feishu pushes, grey out Feishu requests left for 6 hours, remind owners about
+tickets not updated for 24 hours, the Monday summary, and device offline alerts. Locally, run them by hand:
+`curl -X POST http://localhost:8788/api/internal/cron -H "x-cron-secret: <CRON_SECRET>"`.
+
 ## 3. Day-to-day use
 
 - Add the bot to the internal after-sales group and to each customer's external group.
@@ -41,8 +65,16 @@ The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_
 - **Create a ticket from a customer's message:** reply to that message and @ the bot. You get the question card privately;
   **创建工单** turns it into a short form (with an AI suggestion, if enabled — AI runs only at this point), and nothing is created
   until you press **Create ticket**. A customer who @s the bot directly gets the question card in the internal group instead.
-- The customer group only ever sees "ticket registered" and "ticket resolved". Everything else stays in the internal group,
-  where each ticket has one card (Take / status / note) that updates in place, and the ticket's sales person is @-mentioned on changes.
+- The customer group only ever sees "ticket registered" and "ticket resolved".
+- **Whoever creates a ticket owns it, and works it privately:** the ticket's card (status / note) is sent in a private message to its
+  after-sales owner and updates in place; a hand-over moves the card to the new owner. The sales person gets private notes about
+  changes. The after-sales group is not told about every ticket.
+- **The after-sales group gets:** a summary every Monday from 9:00 Beijing time (last week's new / resolved tickets, every open ticket
+  by owner, overdue ones in red, repeat faults), repeat-fault alerts, device alerts, and requests from customers who @ the bot.
+- **Reminders:** an owner whose open ticket has not been updated for 24 hours gets one private reminder a day listing such tickets.
+- **Requests expire:** a "create a ticket?" card or form not submitted within 6 hours turns grey; @ the bot again.
+- **Find in the form:** type part of a production order, customer or SN and press **Find** to pick from what is already in the
+  system; a production order or SN written in the message is filled in automatically.
 - The first time someone presses a card button the bot DMs them a one-time link to tie their Feishu account to their portal
   account; sending **绑定** (or "bind") to the bot in a direct message also gets the link. Only after-sales and admins can take or
   update tickets; sales can create them.
@@ -67,6 +99,30 @@ Product managers keep their requirement pool in a Feishu Bitable; each ticket cl
    **Administration → Requirement Pool**; press **Check table** — it lists missing or wrongly typed columns.
 5. To notify product managers, use the base's own **Automations → When a record is added → Send a Feishu message**.
    Filtering, exporting and assigning requests are all done in Bitable.
+
+## 3b. Device status from the charger backend
+
+The charger backend pushes device status by SN; nothing has to be registered first.
+
+```
+POST https://<portal>/api/devices/status
+x-device-token: <DEVICE_INGEST_SECRET>
+content-type: application/json
+
+{ "events": [
+  { "serialNumber": "CHG-0901-0001", "status": "FAULT", "faultCode": "E12", "faultText": "RCD tripped",
+    "occurredAt": "2026-10-20T08:00:00Z" },
+  { "serialNumber": "CHG-0901-0002", "status": "ONLINE" }
+] }
+```
+
+- `status` is `ONLINE`, `OFFLINE` or `FAULT`; `occurredAt` is ISO 8601 (defaults to now); up to 500 events per request.
+  A single event object or a bare array also works. The reply lists accepted / rejected events and alerts raised.
+- A **fault** raises an alert at once; **offline** raises one after 2 hours (checked by the scheduled job). One alert per SN until
+  it reports `ONLINE` again.
+- Alerts go to the after-sales group with the SN, customer, production order and PI (when the SN is registered on an approved PI)
+  and **创建工单**: whoever presses it fills in the form (already holding SN / order / customer) and owns the ticket.
+- Fault Analytics → **Device monitoring** shows open alerts (and their tickets) and the latest events.
 
 ## 4. Trying it locally first (recommended)
 

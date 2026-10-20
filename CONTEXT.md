@@ -33,6 +33,11 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Product request** — a ticket in which the customer asks for a new or changed product capability. Written once to the requirement pool.
 - **Requirement pool** — the product managers' Feishu Bitable where product requests collect; they filter, export, assign and get notified there, not in this system.
 - **Owner** — the after-sales (and sales) person responsible for a ticket. Whoever creates a ticket owns it; any after-sales can hand it over, and every change is logged on the ticket.
+- **Weekly summary** — the Monday (9:00 Beijing) card in the after-sales group: last week's numbers and every open ticket by owner. Replaces a group message per ticket.
+- **Update reminder** — one private message a day to an owner whose open tickets have gone 24 hours without an update.
+- **Request expiry** — a Feishu "create a ticket?" request not submitted within 6 hours is greyed out; device-alert requests do not expire.
+- **Lookup** — type-ahead over existing production orders (approved PIs), customer names (PIs and tickets) and registered SNs; picking one fills the related fields. _Avoid_: free-typing values the system already has.
+- **Device status / device alert** — the latest ONLINE / OFFLINE / FAULT state per SN pushed by the charger backend; a fault, or offline for 2 hours, opens one alert per SN in the after-sales group until the device is back online.
 - **Personal AI key** — a user's own Qwen or DeepSeek key, saved encrypted and used only for that user's AI suggestions. _Avoid_: a shared company key.
 
 ## PI status state machine
