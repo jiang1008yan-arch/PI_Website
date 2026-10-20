@@ -105,6 +105,12 @@ ticketRoutes.post("/tickets", async (c) => {
   return c.json(created);
 });
 
+// Catalog products a ticket can be about: identity columns of ACTIVE products
+// only, never price or templates.
+ticketRoutes.get("/tickets/products", async (c) =>
+  c.json(await all(c.env.DB, "SELECT id, code, nameEn, nameZh FROM products WHERE status='ACTIVE' ORDER BY nameEn"))
+);
+
 // Lightweight stats: tickets by status and by product. Visible to all ticket
 // roles; hit on every Home load.
 ticketRoutes.get("/tickets/stats", async (c) => {

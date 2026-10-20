@@ -16,8 +16,6 @@ export const canRegisterSn = (user: AppUser) => user.role === "ADMIN" || user.ro
 export const canManageFaultTypes = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
 export const canChangeStatus = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
 export const canWriteNote = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
-export const canGenerateLink = (user: AppUser) =>
-  user.role === "ADMIN" || user.role === "SERVICE" || user.role === "SALES";
 // Who may set each side of a ticket's assignment: ADMIN both, SALES the sales
 // side, SERVICE the service side.
 export const canAssignSalesSide = (user: AppUser) => user.role === "ADMIN" || user.role === "SALES";

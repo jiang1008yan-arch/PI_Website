@@ -7,9 +7,6 @@ export type Env = {
   JWT_SECRET: string;
   ALLOW_DEFAULT_ADMIN?: string;
   R2_PUBLIC_BASE?: string;
-  // 需求2 — Cloudflare Turnstile secret for the public ticket form. When unset
-  // (e.g. local dev) verification is skipped; in production it must be set.
-  TURNSTILE_SECRET?: string;
   // Public origin of the portal (e.g. https://portal.example.com), used in links
   // the Feishu bot sends.
   APP_BASE_URL?: string;

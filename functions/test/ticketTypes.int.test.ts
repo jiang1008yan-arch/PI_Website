@@ -31,15 +31,6 @@ describe("creator owns the ticket", () => {
     expect((await ticketOf(await create("SERVICE", { assignedServiceId: h.users.ADMIN.id }))).ticket.assignedServiceId).toBe(h.users.ADMIN.id);
   });
 
-  it("a customer's submission through a link is owned by the people on the link, else its creator", async () => {
-    const link = await h.request("ADMIN", "POST", "/ticket-links", { customerCompany: "ACME", orderNo: "PO-9", assignedSalesId: h.users.SALES.id });
-    expect(link.status).toBe(200);
-    const sent = await h.request(null, "POST", "/public/tickets", { token: link.body.token, contactName: "Ana", contactInfo: "a@x", productId, answers: {} });
-    expect(sent.status).toBe(200);
-    const row = await h.db.prepare("SELECT assignedSalesId, assignedServiceId FROM tickets WHERE ticketNo = ?").bind(sent.body.ticketNo).first<any>();
-    expect(row).toEqual({ assignedSalesId: h.users.SALES.id, assignedServiceId: h.users.ADMIN.id });
-  });
-
   it("any after-sales can change the owner, and every change is logged", async () => {
     const id = await create("SERVICE");
     expect((await h.request("SERVICE", "PATCH", `/tickets/${id}/assign`, { assignedServiceId: h.users.ADMIN.id })).status).toBe(200);

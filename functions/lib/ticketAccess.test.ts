@@ -5,7 +5,6 @@ import {
   canAssignServiceSide,
   canChangeStatus,
   canConfirmFault,
-  canGenerateLink,
   canManageFaultTypes,
   canRegisterSn,
   canUseTickets,
@@ -29,7 +28,7 @@ const COMMERCE = user("COMMERCE");
 describe("role predicates", () => {
   it("tickets are closed to commerce, and commerce can do nothing on them", () => {
     expect([canUseTickets(ADMIN), canUseTickets(SALES), canUseTickets(SERVICE), canUseTickets(COMMERCE)]).toEqual([true, true, true, false]);
-    expect([canChangeStatus(COMMERCE), canWriteNote(COMMERCE), canGenerateLink(COMMERCE)]).toEqual([false, false, false]);
+    expect([canChangeStatus(COMMERCE), canWriteNote(COMMERCE)]).toEqual([false, false]);
   });
 
   it("status changes and notes: ADMIN and SERVICE only", () => {
@@ -44,7 +43,6 @@ describe("role predicates", () => {
   });
 
   it("link generation: all three roles", () => {
-    expect([canGenerateLink(ADMIN), canGenerateLink(SERVICE), canGenerateLink(SALES)]).toEqual([true, true, true]);
   });
 
   it("sales-side assignment: ADMIN and SALES", () => {

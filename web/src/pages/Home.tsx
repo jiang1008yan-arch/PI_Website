@@ -103,7 +103,7 @@ export function HomePage() {
     { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
   ];
   const ticketModules: HomeModule[] = [
-    { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests, links and status counts", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
+    { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests from Feishu and the team, with status counts", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
     { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange", art: "grid" },
     ...(role === "ADMIN" || role === "SERVICE"
       ? [{ to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" } as HomeModule]

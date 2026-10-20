@@ -12,9 +12,7 @@ import { fileRoutes } from "./routes/files";
 import { senderProfileRoutes } from "./routes/senderProfile";
 import { piRoutes } from "./routes/pi";
 import { ticketRoutes } from "./routes/tickets";
-import { ticketLinkRoutes } from "./routes/ticketLinks";
 import { ticketFieldRoutes } from "./routes/ticketFields";
-import { publicTicketRoutes } from "./routes/publicTickets";
 import { feishuRoutes } from "./routes/feishu";
 import { aiSettingsRoutes } from "./routes/aiSettings";
 import { internalRoutes } from "./routes/internal";
@@ -37,9 +35,6 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   if (c.req.path === "/api/auth/login") return next();
-  // 需求2 — public ticket form endpoints are open (token + Turnstile gated
-  // inside the handlers), mirroring the login whitelist.
-  if (c.req.path.startsWith("/api/public/")) return next();
   if (c.req.method === "GET" && c.req.path.startsWith("/api/files/")) return next();
   // Feishu pushes events and card callbacks; the handlers check its signature
   // and verification token instead of a portal login.
@@ -69,9 +64,7 @@ app.route("/", fileRoutes);
 app.route("/", senderProfileRoutes);
 app.route("/", piRoutes);
 app.route("/", ticketRoutes);
-app.route("/", ticketLinkRoutes);
 app.route("/", ticketFieldRoutes);
-app.route("/", publicTicketRoutes);
 app.route("/", feishuRoutes);
 app.route("/", aiSettingsRoutes);
 app.route("/", internalRoutes);

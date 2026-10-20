@@ -216,21 +216,6 @@ export type TicketAttachment = {
   createdAt: string;
 };
 
-export type TicketLink = {
-  id: string;
-  token: string;
-  customerCompany: string;
-  orderNo: string;
-  createdById: string;
-  createdByRole: Role;
-  assignedSalesId?: string | null;
-  assignedServiceId?: string | null;
-  expiresAt: string;
-  revokedAt?: string | null;
-  createdAt: string;
-  useCount?: number;
-};
-
 export type TicketStats = {
   byStatus: { status: string; n: number }[];
   byProduct: { productId: string; name: string; n: number }[];

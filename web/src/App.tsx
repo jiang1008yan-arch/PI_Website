@@ -16,7 +16,6 @@ import { PermissionsPage } from "./pages/Permissions";
 import { PiDetailPage } from "./pages/PiDetailPage";
 import { PiPage } from "./pages/PiPage";
 import { ProductsPage } from "./pages/Products";
-import { PublicTicketForm } from "./pages/PublicTicketForm";
 import { RequirementPoolPage } from "./pages/RequirementPoolPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TemplatesPage } from "./pages/Templates";
@@ -28,7 +27,6 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/ticket/new" element={<PublicTicketForm />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />

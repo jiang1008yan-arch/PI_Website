@@ -52,7 +52,7 @@ export function CreateTicketPage() {
     (async () => {
       const [f, p, u] = await Promise.all([
         api.get("/ticket-fields"),
-        api.get("/public/products"),
+        api.get("/tickets/products"),
         api.get("/assignable-users")
       ]);
       setFields(parseFields(f.data));
