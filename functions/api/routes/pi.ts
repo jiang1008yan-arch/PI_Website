@@ -38,9 +38,13 @@ import {
   planSubmit,
   planSubmitForReview,
   runTransition,
-  type EffectiveSnapshot
+  WorkflowConflictError,
+  type EffectiveSnapshot,
+  type TransitionPlan
 } from "../../lib/piWorkflow";
-import { admin, body, createApp } from "./_shared";
+import { notifyPiTransition, siteBase, type PiTransition } from "../../lib/feishu/piBot/notifyPi";
+import { stepOf } from "../../lib/feishu/piBot/piCard";
+import { body, createApp } from "./_shared";
 import type { Context } from "hono";
 
 export const piRoutes = createApp();
@@ -62,6 +66,39 @@ function runAfterResponse(c: Context, task: () => Promise<unknown>) {
 }
 
 type PiRowFull = PiRow & Record<string, any>;
+
+// Runs an approval-chain transition. Returns a 409 response when someone else
+// acted on the PI first (website + Feishu card at once), else null. Once
+// committed, the PI Assistant bot tells the next approver / the submitter,
+// after the response.
+async function approvalTransition(c: Context, row: PiRowFull, plan: TransitionPlan, kind: PiTransition) {
+  try {
+    await runTransition(c.env.DB, row.id, plan, c.get("user").id);
+  } catch (error) {
+    if (error instanceof WorkflowConflictError) return c.json({ error: error.message }, 409);
+    throw error;
+  }
+  const args = { piId: row.id, transition: kind, actor: c.get("user"), step: stepOf(row.status), base: siteBase(c.env, c.req.url) };
+  runAfterResponse(c, () => notifyPiTransition(c.env, args));
+  return null;
+}
+
+// The submitter picks the approvers: presales (a PRESALES user, or an admin)
+// and commerce (a COMMERCE user). Either may be left out — then any admin
+// confirms / any commerce user decides, as before picks existed.
+async function approverPickError(db: D1Database, presalesId: string, commerceId: string) {
+  const ids = [presalesId, commerceId].filter(Boolean);
+  if (!ids.length) return null;
+  const rows = await all<{ id: string; role: string }>(
+    db,
+    `SELECT id, role FROM users WHERE id IN (${ids.map(() => "?").join(",")})`,
+    ...ids
+  );
+  const roleOf = (userId: string) => rows.find((r) => r.id === userId)?.role ?? "";
+  if (presalesId && !["PRESALES", "ADMIN"].includes(roleOf(presalesId))) return "The presales approver must be a Presales user or an admin";
+  if (commerceId && roleOf(commerceId) !== "COMMERCE") return "The commerce approver must be a Commerce user";
+  return null;
+}
 
 // Loads the PI row plus, for a linked EN PI, its ZH PI's status and revision
 // flag — an EN PI follows its approved ZH PI's lock (see piCapabilities).
@@ -115,13 +152,17 @@ function parseFieldValues(raw: string | null | undefined): any[] {
   }
 }
 
+// ZH PIs awaiting presales confirmation by the caller: a PRESALES user sees
+// those picked for them; an admin sees those picked for them or unassigned.
 piRoutes.get("/pi/review-queue", async (c) => {
-  admin(c);
+  const user = c.get("user");
+  if (user.role !== "ADMIN" && user.role !== "PRESALES") return c.json({ error: "Forbidden" }, 403);
+  const mine = user.role === "ADMIN" ? "(pi.assignedToId IS NULL OR pi.assignedToId = ?)" : "pi.assignedToId = ?";
   return c.json(
     await all(
       c.env.DB,
-      "SELECT pi.*, users.displayName as createdByName, reviewer.displayName as assignedToName FROM pi LEFT JOIN users ON users.id=pi.createdById LEFT JOIN users reviewer ON reviewer.id=pi.assignedToId WHERE pi.language='ZH' AND pi.status='PENDING_REVIEW' AND pi.archivedAt IS NULL AND (pi.assignedToId IS NULL OR pi.assignedToId = ?) ORDER BY pi.updatedAt DESC",
-      c.get("user").id
+      `SELECT pi.*, users.displayName as createdByName, reviewer.displayName as assignedToName FROM pi LEFT JOIN users ON users.id=pi.createdById LEFT JOIN users reviewer ON reviewer.id=pi.assignedToId WHERE pi.language='ZH' AND pi.status='PENDING_REVIEW' AND pi.archivedAt IS NULL AND ${mine} ORDER BY pi.updatedAt DESC`,
+      user.id
     )
   );
 });
@@ -207,7 +248,10 @@ piRoutes.get("/pi/commerce-queue", async (c) => {
        LEFT JOIN pi linked ON linked.id = pi.linkedPiId
        LEFT JOIN users creator ON creator.id = pi.createdById
        WHERE pi.language = 'ZH' AND pi.status = 'PENDING_COMMERCE'
-       ORDER BY pi.updatedAt DESC`
+         AND (? = 'ADMIN' OR pi.commerceId IS NULL OR pi.commerceId = ?)
+       ORDER BY pi.updatedAt DESC`,
+      user.role,
+      user.id
     )
   );
 });
@@ -412,13 +456,18 @@ piRoutes.post("/pi/:id/submit-for-review", async (c) => {
   if (!row) return c.json({ error: "Chinese PI not found" }, 404);
   const denied = deny(c, canSubmitForReview(c.get("user"), row));
   if (denied) return denied;
+  const presalesId = String(d.assignedToId ?? "");
+  const commerceId = String(d.commerceId ?? "");
+  const pickError = await approverPickError(c.env.DB, presalesId, commerceId);
+  if (pickError) return c.json({ error: pickError }, 400);
   const items = await loadPiItems(c.env.DB, row.id);
-  await runTransition(
-    c.env.DB,
-    row.id,
-    planSubmitForReview(row, items, { assignedToId: d.assignedToId ?? null }),
-    c.get("user").id
+  const conflict = await approvalTransition(
+    c,
+    row,
+    planSubmitForReview(row, items, { assignedToId: presalesId || null, commerceId: commerceId || null }),
+    "SUBMITTED"
   );
+  if (conflict) return conflict;
   // One PI, one production order: warn (not block) when another ZH PI already
   // carries this number — older data may legitimately repeat it.
   const orderNo = String(row.productionOrderNo ?? "").trim();
@@ -439,12 +488,8 @@ piRoutes.post("/pi/:id/approve", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canApprovePi(c.get("user"), row));
   if (denied) return denied;
-  await runTransition(
-    c.env.DB,
-    row.id,
-    planApprove(row, { pi: d.pi, items: d.items }),
-    c.get("user").id
-  );
+  const conflict = await approvalTransition(c, row, planApprove(row, { pi: d.pi, items: d.items }), "APPROVED");
+  if (conflict) return conflict;
   // 需求4 (方案A) hook point — when the company backend contract is ready,
   // enqueue the approved ZH PI here: enqueueOutbox(c.env.DB, "PI_ZH", row.id, {...}).
   // TODO: enqueueOutbox(...).
@@ -457,7 +502,8 @@ piRoutes.post("/pi/:id/reject", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canRejectPi(c.get("user"), row));
   if (denied) return denied;
-  await runTransition(c.env.DB, row.id, planReject(row, { note: d.note }), c.get("user").id);
+  const conflict = await approvalTransition(c, row, planReject(row, { note: d.note }), "REJECTED");
+  if (conflict) return conflict;
   return c.json({ ok: true });
 });
 
@@ -580,7 +626,8 @@ piRoutes.post("/pi/:id/commerce-approve", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canCommerceDecide(c.get("user"), row));
   if (denied) return denied;
-  await runTransition(c.env.DB, row.id, planCommerceApprove(row, new Date()), c.get("user").id);
+  const conflict = await approvalTransition(c, row, planCommerceApprove(row, new Date()), "APPROVED");
+  if (conflict) return conflict;
   // ERP hook point (not built this phase): once an ERP contract exists, hand the
   // approved ZH/EN pair over here, e.g. enqueueOutbox(c.env.DB, "PI_ZH", row.id, {...}).
   // TODO: ERP hand-off.
@@ -595,7 +642,8 @@ piRoutes.post("/pi/:id/commerce-reject", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canCommerceDecide(c.get("user"), row));
   if (denied) return denied;
-  await runTransition(c.env.DB, row.id, planCommerceReject(row, { note }), c.get("user").id);
+  const conflict = await approvalTransition(c, row, planCommerceReject(row, { note }), "REJECTED");
+  if (conflict) return conflict;
   return c.json({ ok: true });
 });
 

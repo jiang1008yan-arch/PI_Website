@@ -3,7 +3,7 @@ import type { SetURLSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Language, Pi, PiItem, User } from "../types";
 import { getMeta } from "./lineItemFields";
-import { canDeletePiByStatus, canEditPiDirectly, isReviewerEditMode } from "../../../shared/piCapabilities";
+import { canActOnPresales, canDeletePiByStatus, canEditPiDirectly, isReviewerEditMode } from "../../../shared/piCapabilities";
 import { isConfirmedReceivedPi, piDisplayName } from "./labels";
 import { isPiDirty, type PiSnapshot } from "./piDiff";
 import { parsePiItems } from "./piItemCodec";
@@ -32,7 +32,9 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [events, setEvents] = useState<any[]>([]);
   const [items, setItems] = useState<PiItem[]>([]);
   const [header, setHeader] = useState<any>({ language, date: today(), customerCompany: "" });
+  // Approvers picked at submit: presales (assignedToId) and commerce ("" = any).
   const [assignedToId, setAssignedToId] = useState("");
+  const [commerceId, setCommerceId] = useState("");
   const [canonical, setCanonical] = useState<PiSnapshot | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -51,7 +53,9 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [resyncing, setResyncing] = useState(false);
   const canResyncZh = canSyncLinkedZh(language, current, linkedZh);
 
-  const canEditPendingZh = Boolean(user && current && isReviewerEditMode(user.role, language, current.status));
+  const canEditPendingZh = Boolean(
+    user && current && isReviewerEditMode(user.role, language, current.status) && canActOnPresales(user.role, user.id, current)
+  );
   const canConfirmReceivedZh = canEditPendingZh;
   // An EN PI is locked together with its approved ZH PI (until a revision starts).
   const linkedZhApproved = language === "EN" && current?.linkedPiStatus === "APPROVED";
@@ -170,6 +174,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setCurrent(res.data.pi);
     setHeader(res.data.pi);
     setAssignedToId((cur) => res.data.pi.assignedToId ?? cur);
+    setCommerceId((cur) => res.data.pi.commerceId ?? cur);
     const hydrated = await hydrateFieldOptions(parsePiItems(res.data.items));
     setItems(hydrated);
     setEvents(res.data.events ?? []);
@@ -272,7 +277,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     if (!id) return;
     const res = await api.post(
       language === "ZH" ? `/pi/${id}/submit-for-review` : `/pi/${id}/submit`,
-      language === "ZH" ? { assignedToId } : {}
+      language === "ZH" ? { assignedToId, commerceId } : {}
     );
     await open(id);
     await reload();
@@ -391,7 +396,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     // PI list
     pis, activePis, listLoading,
     // Current PI state
-    current, header, items, events, canonical, assignedToId, rejectNote,
+    current, header, items, events, canonical, assignedToId, commerceId, rejectNote,
     // UI flags
     exporting, confirming, rejecting, saving, exportError, resyncing, submitNotice,
     // Linked ZH (需求1)
@@ -400,7 +405,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     locked, canEditPendingZh, canConfirmReceivedZh, hasBufferedEdits, isDirty,
     total, totalCurrency,
     // Setters
-    setHeader, setItems, setAssignedToId, setRejectNote, setExportError, setLinkedNotice, setSubmitNotice,
+    setHeader, setItems, setAssignedToId, setCommerceId, setRejectNote, setExportError, setLinkedNotice, setSubmitNotice,
     // Actions
     reload, open, reset, clearState, selectPi, save, submit,
     confirmReceivedPi, rejectReview, deleteDraft, downloadExcel, resyncZh, startRevision, abandonRevision

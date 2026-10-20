@@ -15,7 +15,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply sales-portal-db --remote",
     "typecheck": "tsc -p tsconfig.base.json --noEmit && npm --workspace web run typecheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dev:feishu": "node scripts/feishu-dev-bridge.mjs"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.7.0",
@@ -36,7 +37,8 @@
     "drizzle-kit": "^0.30.5",
     "typescript": "^5.8.2",
     "vitest": "^2.1.9",
-    "wrangler": "^3.114.0"
+    "wrangler": "^3.114.0",
+    "@larksuiteoapi/node-sdk": "1.74.0"
   },
   "optionalDependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.60.2"

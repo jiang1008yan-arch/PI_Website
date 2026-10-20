@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE";
+export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE" | "PRESALES";
 export type Language = "EN" | "ZH";
 export type PiStatus = "DRAFT" | "PENDING_REVIEW" | "PENDING_COMMERCE" | "REJECTED" | "APPROVED" | "SUBMITTED";
 export type ProductStatus = "ACTIVE" | "DISCONTINUED";
@@ -84,6 +84,8 @@ export type Pi = {
   otherRequirements?: string;
   rejectionNote?: string;
   assignedToId?: string | null;
+  // ZH: the commerce approver picked at submit (null = any commerce user).
+  commerceId?: string | null;
   submittedSnapshot?: string | null;
   createdById?: string;
   createdAt?: string;

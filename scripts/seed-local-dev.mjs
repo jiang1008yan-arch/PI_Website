@@ -5,8 +5,8 @@
 //   npm run db:migrate:local
 //   node scripts/seed-local-dev.mjs
 //
-// Test accounts (local only): admin_dev, sales_dev, service_dev, commerce_dev,
-// all with the password below.
+// Test accounts (local only): admin_dev, sales_dev, presales_dev, service_dev,
+// commerce_dev, all with the password below.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,8 +15,9 @@ import bcrypt from "bcryptjs";
 
 const PASSWORD = "LocalDev@2026";
 const USERS = [
-  ["usr_dev_admin", "admin_dev", "Dev Admin (Presales)", "ADMIN"],
+  ["usr_dev_admin", "admin_dev", "Dev Admin", "ADMIN"],
   ["usr_dev_sales", "sales_dev", "Dev Sales", "SALES"],
+  ["usr_dev_presales", "presales_dev", "Dev Presales", "PRESALES"],
   ["usr_dev_service", "service_dev", "Dev After-Sales", "SERVICE"],
   ["usr_dev_commerce", "commerce_dev", "Dev Commerce", "COMMERCE"]
 ];

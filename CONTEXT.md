@@ -17,8 +17,9 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 
 ## Approval and revision
 
-- **Presales confirmation** — the first approval step on a ZH PI, done by an ADMIN (the "recipient"), who may edit the PI while confirming. Shown in the UI as "Confirm Received". _Avoid_: review approval.
-- **Commerce approval** — the second and final approval step, done by a COMMERCE user, who may approve or reject but never edit. A PI is **approved** only after this step.
+- **Presales confirmation** — the first approval step on a ZH PI, done by the **presales approver** the submitter picked (a `PRESALES` user, stored in `pi.assignedToId`) or by any ADMIN, who may edit the PI while confirming. Without a pick, any ADMIN confirms. Shown in the UI as "Confirm Received". _Avoid_: review approval.
+- **Presales** (`PRESALES` role) — technical staff who confirm the ZH PIs picked for them. They read every ZH PI, edit only in review mode at their step, and have no ticket access.
+- **Commerce approval** — the second and final approval step, done by the **commerce approver** the submitter picked (`pi.commerceId`; none picked = any COMMERCE user), who may approve or reject but never edit. A PI is **approved** only after this step.
 - **Commerce** (`COMMERCE` role) — the business staff who give commerce approval and download the EN/ZH Excel files. Distinct from ADMIN; an ADMIN may never give commerce approval.
 - **Revision** — a change to an already-approved PI pair (ZH + linked EN), started with a mandatory reason and sent through presales confirmation and commerce approval again. Numbered Rev 1, Rev 2, … under the same PI No.
 - **Effective version** — the most recently approved content of a PI. While a revision is in progress the effective version stays the previous approved content; it is replaced only when the revision gets commerce approval.
@@ -53,11 +54,11 @@ A PI moves through these statuses. Transitions are gated by language, ownership,
                 |                                  |                   │
             SUBMITTED                       PENDING_REVIEW             │
                                                    |                   │
-                                   presales confirmation (ADMIN)       │
+                    presales confirmation (picked PRESALES / ADMIN)    │
                                           /                \           │
                                 PENDING_COMMERCE        REJECTED ──────┤
                                           |                ^           │
-                              commerce approval (COMMERCE) │           │
+                       commerce approval (picked COMMERCE) │           │
                                    /                \      │           │
                               APPROVED            reject ──┘           │
                                   │                                    │
@@ -73,10 +74,12 @@ A PI moves through these statuses. Transitions are gated by language, ownership,
 
 ## Review workflow
 
-ZH PIs in PENDING_REVIEW are claimed for review by an admin (`assignedToId`). The reviewer may edit the PI in place, but:
+ZH PIs in PENDING_REVIEW wait for the presales approver picked at submit (`assignedToId`; any admin may also act). The reviewer may edit the PI in place, but:
 
 - **Review mode** — Edits live only in client-side React state. Direct `PATCH /pi/:id` is denied by `canPatchPi` for PENDING_REVIEW. Edits are committed only on **Approve** (overwriting the PI row) or recorded as **suggestedChanges** on **Reject**.
 - **Submitted snapshot vs live row** — On `submit-for-review`, the workflow freezes the current header + items into `pi.submittedSnapshot`. The submitter's view reads from the snapshot; the admin's view (and Excel export) reads from the live PI row. The two diverge after an approve-with-edits; the submitter can toggle between them.
+- **Concurrency** — approval transitions carry the status they expect. The runner makes the status UPDATE conditional on it and adds a `workflowGuard` insert (`CHECK (ok = 1)` fed by `changes()`), so when someone else acted first (e.g. on the website and in a Feishu card at once) the whole D1 batch rolls back and the route answers 409.
+- **PI Assistant** — a second Feishu bot (`functions/lib/feishu/piBot`) sends each step's approval card to the picked approver, takes Approve / Reject from the card through the same `piAccess` checks and workflow, and closes earlier cards. It identifies people by `users.feishuUnionId`, set by "Sign in with Feishu".
 - **Event log** — `piReviewEvents.action` records `SUBMITTED | APPROVED | REJECTED` only. "Approved with edits" is derived by comparing the snapshot against the current row, not stored as a distinct action.
 
 ## PI workflow

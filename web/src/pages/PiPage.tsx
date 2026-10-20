@@ -171,7 +171,9 @@ export function PiPage({ language }: { language: Language }) {
       api.get("/options/customerType")
     ]);
     setRecipients(users.data);
-    editor.setAssignedToId(editor.assignedToId || users.data[0]?.id || "");
+    // Default the presales pick to the first Presales user (else an admin).
+    const presalesFirst = [...users.data].sort((a: User, b: User) => Number(b.role === "PRESALES") - Number(a.role === "PRESALES"));
+    editor.setAssignedToId(editor.assignedToId || presalesFirst.find((u: User) => u.role !== "COMMERCE")?.id || "");
     setSourceOptions(sources.data.map((row: any) => row.value));
     setTypeOptions(types.data.map((row: any) => row.value));
   };
@@ -475,18 +477,30 @@ export function PiPage({ language }: { language: Language }) {
 
         <div className="flex flex-wrap items-end gap-2">
           {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && (
-            <Field label="Send to">
-              <select value={editor.assignedToId} onChange={(e) => editor.setAssignedToId(e.target.value)}>
-                {recipients.map((recipient) => <option key={recipient.id} value={recipient.id}>{recipient.displayName}</option>)}
-              </select>
-            </Field>
+            <>
+              <Field label="Presales approver">
+                <select value={editor.assignedToId} onChange={(e) => editor.setAssignedToId(e.target.value)}>
+                  {recipients.filter((r) => r.role === "PRESALES" || r.role === "ADMIN").map((r) => (
+                    <option key={r.id} value={r.id}>{r.displayName}{r.role === "ADMIN" ? " (Admin)" : ""}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Commerce approver">
+                <select value={editor.commerceId} onChange={(e) => editor.setCommerceId(e.target.value)}>
+                  <option value="">Any commerce user</option>
+                  {recipients.filter((r) => r.role === "COMMERCE").map((r) => (
+                    <option key={r.id} value={r.id}>{r.displayName}</option>
+                  ))}
+                </select>
+              </Field>
+            </>
           )}
           {!editor.locked && !editor.canConfirmReceivedZh && (
             <button className="btn-primary" disabled={editor.saving}>
               {editor.saving ? "Saving..." : language === "EN" ? "Save" : "Save Draft"}
             </button>
           )}
-          {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && <button type="button" className="btn-secondary" onClick={editor.submit}>Send to Recipient</button>}
+          {language === "ZH" && !editor.locked && !editor.canConfirmReceivedZh && <button type="button" className="btn-secondary" title="Sends the PI to the presales approver, then commerce" onClick={editor.submit}>Submit for Approval</button>}
           {editor.canConfirmReceivedZh && (
             <>
               <button type="button" className="btn-primary" disabled={editor.confirming || editor.rejecting} onClick={editor.confirmReceivedPi}>

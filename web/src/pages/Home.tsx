@@ -33,7 +33,7 @@ export function HomePage() {
   // Badge the After-Sales card with NEW tickets the user hasn't looked at yet;
   // opening the ticket list (or the ticket) clears them.
   useEffect(() => {
-    if (role === "COMMERCE") return;
+    if (role === "COMMERCE" || role === "PRESALES") return;
     api
       .get("/tickets", { params: { status: "NEW" } })
       .then((res) => {
@@ -62,7 +62,7 @@ export function HomePage() {
   // Badge the "Pending Reviews" card with the number of waiting Chinese PIs the
   // admin hasn't opened yet; opening the Pending Reviews page clears it (需求3).
   useEffect(() => {
-    if (role !== "ADMIN") return;
+    if (role !== "ADMIN" && role !== "PRESALES") return;
     api
       .get("/pi/review-queue")
       .then((res) => {
@@ -119,6 +119,11 @@ export function HomePage() {
     { to: "/requirement-pool", title: "Requirement Pool", desc: "Send product requests to the product managers' Feishu table", Icon: Lightbulb, tone: "orange", art: "blocks" }
   ];
 
+  // PRESALES confirms the Chinese PIs picked for them; they open each PI from the queue.
+  const presalesModules: HomeModule[] = [
+    { to: "/reviews", title: "Pending Reviews", desc: "Chinese PIs waiting for your presales confirmation", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews }
+  ];
+
   const commerceModules: HomeModule[] = [
     { to: "/commerce", title: "Pending Commerce Approval", desc: "Approve or reject Chinese PIs after presales confirmation", Icon: BadgeCheck, tone: "orange", art: "stamp", badge: pendingCommerce },
     { to: "/pi/approved", title: "Approved PIs", desc: "Search approved PIs and download Chinese and English Excel", Icon: Archive, tone: "cyan", art: "shield" },
@@ -131,10 +136,13 @@ export function HomePage() {
   if (role === "COMMERCE") {
     sections.push({ id: "commerce", title: "Commerce", subtitle: "Commerce approval and approved PIs", modules: commerceModules });
   }
+  if (role === "PRESALES") {
+    sections.push({ id: "presales", title: "Presales", subtitle: "Presales confirmation of Chinese PIs", modules: presalesModules });
+  }
   if (role === "ADMIN" || role === "SALES") {
     sections.push({ id: "pi", title: "Proforma Invoices", subtitle: "Create, review and export PIs", modules: piModules });
   }
-  if (role !== "COMMERCE") {
+  if (role !== "COMMERCE" && role !== "PRESALES") {
     sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
   }
   if (role === "ADMIN") {

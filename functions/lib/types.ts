@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE";
+export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE" | "PRESALES";
 export type Language = "EN" | "ZH";
 
 export type Env = {
@@ -17,6 +17,12 @@ export type Env = {
   FEISHU_VERIFICATION_TOKEN?: string;
   FEISHU_ENCRYPT_KEY?: string;
   FEISHU_SERVICE_CHAT_ID?: string;
+  // PI Assistant bot — a second self-built app for ZH PI approval cards
+  // (functions/lib/feishu/piBot). Unset = that bot is off.
+  FEISHU_PI_APP_ID?: string;
+  FEISHU_PI_APP_SECRET?: string;
+  FEISHU_PI_ENCRYPT_KEY?: string;
+  FEISHU_PI_VERIFICATION_TOKEN?: string;
   // Master secret that encrypts users' own AI provider keys (functions/lib/aiKeys.ts).
   // Without it nobody can save a key and there are no AI suggestions.
   AI_KEY_SECRET?: string;

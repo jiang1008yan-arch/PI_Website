@@ -4,7 +4,7 @@ import type { Role } from "../../lib/types";
 import { admin, body, createApp } from "./_shared";
 import { passwordError } from "./auth";
 
-const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE"];
+const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE", "PRESALES"];
 const normalizeRole = (value: unknown): Role => (ROLES.includes(value as Role) ? (value as Role) : "SALES");
 
 export const userRoutes = createApp();
@@ -14,9 +14,14 @@ userRoutes.get("/users", async (c) => {
   return c.json(await all(c.env.DB, "SELECT id, username, displayName, role, createdAt FROM users ORDER BY createdAt DESC"));
 });
 
+// Approver candidates for a ZH PI submission: the Presales picker lists
+// PRESALES users (and admins), the Commerce picker lists COMMERCE users.
 userRoutes.get("/review-recipients", async (c) => {
   return c.json(
-    await all(c.env.DB, "SELECT id, username, displayName, role FROM users WHERE role = 'ADMIN' ORDER BY displayName, username")
+    await all(
+      c.env.DB,
+      "SELECT id, username, displayName, role FROM users WHERE role IN ('PRESALES', 'ADMIN', 'COMMERCE') ORDER BY displayName, username"
+    )
   );
 });
 

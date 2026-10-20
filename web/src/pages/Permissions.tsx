@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
 import type { Role, User } from "../types";
 
-const ROLES: Role[] = ["SALES", "SERVICE", "COMMERCE", "ADMIN"];
+const ROLES: Role[] = ["SALES", "PRESALES", "COMMERCE", "SERVICE", "ADMIN"];
 
 export function PermissionsPage() {
   const [users, setUsers] = useState<User[]>([]);

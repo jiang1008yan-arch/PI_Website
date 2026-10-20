@@ -1,5 +1,7 @@
 import type { AppUser, Language } from "./types";
 import {
+  canActOnCommerce,
+  canActOnPresales,
   canDeletePiByStatus,
   canEditPiDirectly,
   hasEffectiveVersion,
@@ -15,7 +17,10 @@ export type PiRow = {
   language: Language;
   status: PiStatus;
   createdById: string;
+  // ZH: the presales approver picked at submit (PENDING_REVIEW) / the recipient.
   assignedToId?: string | null;
+  // ZH: the commerce approver picked at submit.
+  commerceId?: string | null;
   linkedPiId?: string | null;
   // ZH only: 1 while a revision of an approved PI is in progress.
   revisionInProgress?: number | boolean | null;
@@ -50,8 +55,10 @@ function commerceCanSeeZh(status: PiStatus, revisionInProgress: unknown): boolea
   return status === "PENDING_COMMERCE" || hasEffectiveVersion(status, { revisionInProgress: Boolean(revisionInProgress) });
 }
 
-// Editor read (GET /pi/:id): the live row, for its owner or an admin.
+// Editor read (GET /pi/:id): the live row, for its owner or an admin. PRESALES
+// works across every Chinese PI (they edit in review mode at their step).
 export function canReadPi(user: AppUser, pi: PiRow): Verdict {
+  if (user.role === "PRESALES" && pi.language === "ZH") return ALLOW;
   if (!ownerOrAdmin(user, pi)) return deny("Forbidden", 403);
   return ALLOW;
 }
@@ -59,7 +66,7 @@ export function canReadPi(user: AppUser, pi: PiRow): Verdict {
 // Read-only detail page (GET /pi/:id/view) for a ZH PI and its linked EN PI.
 export function canViewPi(user: AppUser, pi: PiRow): Verdict {
   if (pi.language !== "ZH") return deny("Chinese PI not found", 404);
-  if (isAdmin(user)) return ALLOW;
+  if (isAdmin(user) || user.role === "PRESALES") return ALLOW;
   if (user.role === "SALES") {
     return owns(user, pi) || pi.assignedToId === user.id ? ALLOW : deny("Forbidden", 403);
   }
@@ -104,12 +111,14 @@ export function canSubmitForReview(user: AppUser, pi: PiRow): Verdict {
   return ALLOW;
 }
 
-// Presales confirmation (the first step): ADMIN on a ZH PENDING_REVIEW PI.
+// Presales confirmation (the first step) on a ZH PENDING_REVIEW PI: the
+// PRESALES user picked at submit, or any ADMIN.
 export function canApprovePi(user: AppUser, pi: PiRow): Verdict {
-  if (!isAdmin(user)) return deny("Forbidden", 403);
+  if (!isAdmin(user) && user.role !== "PRESALES") return deny("Forbidden", 403);
   if (pi.language !== "ZH" || pi.status !== "PENDING_REVIEW") {
     return deny("PI is not pending review", 400);
   }
+  if (!canActOnPresales(user.role, user.id, pi)) return deny("This PI is waiting for another presales approver", 403);
   return ALLOW;
 }
 
@@ -123,6 +132,7 @@ export function canCommerceDecide(user: AppUser, pi: PiRow): Verdict {
   if (!isCommerceDecisionMode(user.role, pi.language, pi.status)) {
     return deny("PI is not awaiting commerce approval", 400);
   }
+  if (!canActOnCommerce(user.role, user.id, pi)) return deny("This PI is waiting for another commerce approver", 403);
   return ALLOW;
 }
 
@@ -168,5 +178,5 @@ export function canExportPi(user: AppUser, pi: PiRow, version: ExportVersion = "
 }
 
 export function isReviewerEditMode(user: AppUser, pi: PiRow): boolean {
-  return reviewerEditModeByStatus(user.role, pi.language, pi.status);
+  return reviewerEditModeByStatus(user.role, pi.language, pi.status) && canActOnPresales(user.role, user.id, pi);
 }

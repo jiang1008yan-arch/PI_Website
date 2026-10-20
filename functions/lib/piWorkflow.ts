@@ -25,6 +25,7 @@ export type PiUpdate = {
   status?: PiStatus;
   rejectionNote?: string | null;
   assignedToId?: string | null;
+  commerceId?: string | null;
   submittedSnapshot?: string | null;
   approvedAt?: string | null;
   revisionNo?: number;
@@ -40,8 +41,22 @@ export type TransitionEvent = {
   revisionNo?: number;
 };
 
+// The status the row must still have for the transition to apply. The runner
+// makes the status UPDATE conditional on it and aborts the whole batch when no
+// row matched, so two people acting at once (website + Feishu card) cannot both
+// commit.
+export type ExpectedState = { status: PiStatus };
+
+// Thrown by runTransition when the expected state no longer holds.
+export class WorkflowConflictError extends Error {
+  constructor() {
+    super("This PI was already handled by someone else. Refresh to see its latest state.");
+  }
+}
+
 export type TransitionPlan = {
   piUpdate?: PiUpdate;
+  expect?: ExpectedState;
   headerOverride?: Record<string, unknown>;
   itemsReplace?: PiItemInput[];
   // Header/item writes to another PI in the same atomic batch — used to
@@ -53,7 +68,7 @@ export type TransitionPlan = {
 
 // Columns the workflow is the sole writer of.
 const WORKFLOW_COLUMNS = [
-  "status", "rejectionNote", "assignedToId", "submittedSnapshot",
+  "status", "rejectionNote", "assignedToId", "commerceId", "submittedSnapshot",
   "approvedAt", "revisionNo", "revisionInProgress", "revisionReason", "effectiveSnapshot"
 ] as const;
 
@@ -91,7 +106,7 @@ export function planSubmit(_row: PiRow): TransitionPlan {
 export function planSubmitForReview(
   row: WidePiRow,
   items: unknown[],
-  payload: { assignedToId?: string | null } = {}
+  payload: { assignedToId?: string | null; commerceId?: string | null } = {}
 ): TransitionPlan {
   const snapshot: SubmittedSnapshot = {
     header: snapshotHeader(row),
@@ -102,8 +117,10 @@ export function planSubmitForReview(
       status: "PENDING_REVIEW",
       rejectionNote: null,
       assignedToId: payload.assignedToId ?? null,
+      commerceId: payload.commerceId ?? null,
       submittedSnapshot: JSON.stringify(snapshot)
     },
+    expect: { status: row.status },
     event: { action: "SUBMITTED", revisionNo: workingRevision(row) }
   };
 }
@@ -117,6 +134,7 @@ export function planApprove(
   const headerOverride = payload.pi ? sanitizeHeaderOverride(payload.pi) : undefined;
   return {
     piUpdate: { status: "PENDING_COMMERCE" },
+    expect: { status: "PENDING_REVIEW" },
     ...(headerOverride && Object.keys(headerOverride).length ? { headerOverride } : {}),
     ...(payload.items !== undefined ? { itemsReplace: payload.items } : {}),
     event: { action: "APPROVED", step: "PRESALES", revisionNo: workingRevision(row) }
@@ -128,6 +146,7 @@ export function planReject(row: WidePiRow, payload: { note?: string } = {}): Tra
   const note = String(payload.note ?? "").trim();
   return {
     piUpdate: { status: "REJECTED", rejectionNote: note },
+    expect: { status: "PENDING_REVIEW" },
     event: { action: "REJECTED", note: note || null, step: "PRESALES", revisionNo: workingRevision(row) }
   };
 }
@@ -140,13 +159,14 @@ export function planCommerceApprove(row: WidePiRow, now: Date): TransitionPlan {
   if (row.revisionInProgress) {
     Object.assign(piUpdate, { revisionNo, revisionInProgress: 0, revisionReason: null, effectiveSnapshot: null });
   }
-  return { piUpdate, event: { action: "APPROVED", step: "COMMERCE", revisionNo } };
+  return { piUpdate, expect: { status: "PENDING_COMMERCE" }, event: { action: "APPROVED", step: "COMMERCE", revisionNo } };
 }
 
 export function planCommerceReject(row: WidePiRow, payload: { note?: string } = {}): TransitionPlan {
   const note = String(payload.note ?? "").trim();
   return {
     piUpdate: { status: "REJECTED", rejectionNote: note },
+    expect: { status: "PENDING_COMMERCE" },
     event: { action: "REJECTED", note: note || null, step: "COMMERCE", revisionNo: workingRevision(row) }
   };
 }
@@ -282,8 +302,18 @@ export async function runTransition(
 
   const stmts: D1PreparedStatement[] = [];
 
-  const updateStmt = buildPiUpdate(db, plan.piUpdate, plan.headerOverride, piId);
-  if (updateStmt) stmts.push(updateStmt);
+  const updateStmt = buildPiUpdate(db, plan.piUpdate, plan.headerOverride, piId, plan.expect);
+  if (updateStmt) {
+    stmts.push(updateStmt);
+    // workflowGuard has CHECK (ok = 1): if the conditional UPDATE matched no row,
+    // changes() is 0, the INSERT fails and D1 rolls back the whole batch.
+    if (plan.expect) {
+      stmts.push(
+        db.prepare("INSERT INTO workflowGuard (ok) VALUES (changes())"),
+        db.prepare("DELETE FROM workflowGuard")
+      );
+    }
+  }
 
   if (plan.itemsReplace !== undefined) {
     stmts.push(...piItemReplaceStatements(db, piId, plan.itemsReplace));
@@ -311,14 +341,23 @@ export async function runTransition(
     );
   }
 
-  if (stmts.length) await db.batch(stmts);
+  if (!stmts.length) return;
+  try {
+    await db.batch(stmts);
+  } catch (error) {
+    if (plan.expect && /CHECK constraint failed: ok = 1/.test(String((error as Error)?.message))) {
+      throw new WorkflowConflictError();
+    }
+    throw error;
+  }
 }
 
 function buildPiUpdate(
   db: D1Database,
   workflow: PiUpdate | undefined,
   headerOverride: Record<string, unknown> | undefined,
-  piId: string
+  piId: string,
+  expect?: ExpectedState
 ): D1PreparedStatement | null {
   const sets: string[] = [];
   const binds: unknown[] = [];
@@ -342,5 +381,10 @@ function buildPiUpdate(
   if (!sets.length) return null;
   sets.push("updatedAt=CURRENT_TIMESTAMP");
   binds.push(piId);
-  return db.prepare(`UPDATE pi SET ${sets.join(", ")} WHERE id=?`).bind(...binds);
+  let where = "id=?";
+  if (expect) {
+    where += " AND status=?";
+    binds.push(expect.status);
+  }
+  return db.prepare(`UPDATE pi SET ${sets.join(", ")} WHERE ${where}`).bind(...binds);
 }

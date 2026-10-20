@@ -10,7 +10,7 @@
 // Types are string-literal unions, structurally identical to the Role/Language/
 // PiStatus declared in each bundle, so callers pass their own typed values.
 
-export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE";
+export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE" | "PRESALES";
 export type Language = "EN" | "ZH";
 export type PiStatus = "DRAFT" | "SUBMITTED" | "PENDING_REVIEW" | "PENDING_COMMERCE" | "APPROVED" | "REJECTED";
 
@@ -30,10 +30,25 @@ export function canEditPiDirectly(language: Language, status: PiStatus, ctx: PiC
   return status === "DRAFT" || status === "REJECTED";
 }
 
-// Is this an admin editing a ZH PI during presales confirmation? Edits are
-// buffered client-side and committed only on confirm — never a direct PATCH.
+// Could this role be editing a ZH PI during presales confirmation, by status
+// alone? Edits are buffered client-side and committed only on confirm — never a
+// direct PATCH. Whether *this* user holds the step is canActOnPresales.
 export function isReviewerEditMode(role: Role, language: Language, status: PiStatus): boolean {
-  return role === "ADMIN" && language === "ZH" && status === "PENDING_REVIEW";
+  return (role === "ADMIN" || role === "PRESALES") && language === "ZH" && status === "PENDING_REVIEW";
+}
+
+// Presales confirmation is done by the PRESALES user the submitter picked
+// (pi.assignedToId), or by any ADMIN. This is assignment, not ownership; both
+// bundles need the same answer, so it lives here.
+export function canActOnPresales(role: Role, userId: string, pi: { assignedToId?: string | null }): boolean {
+  if (role === "ADMIN") return true;
+  return role === "PRESALES" && Boolean(pi.assignedToId) && pi.assignedToId === userId;
+}
+
+// Commerce approval is done by the COMMERCE user the submitter picked
+// (pi.commerceId); PIs submitted before picks existed are open to any commerce user.
+export function canActOnCommerce(role: Role, userId: string, pi: { commerceId?: string | null }): boolean {
+  return role === "COMMERCE" && (!pi.commerceId || pi.commerceId === userId);
 }
 
 // Is this a commerce user looking at a ZH PI that awaits their decision?

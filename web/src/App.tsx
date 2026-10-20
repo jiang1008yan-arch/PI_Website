@@ -35,8 +35,14 @@ export default function App() {
           {/* PI + contract pages are for ADMIN/SALES; SERVICE is ticket-only. */}
           <Route element={<RoleRoute allow={["ADMIN", "SALES"]} />}>
             <Route path="/pi/en" element={<PiPage language="EN" />} />
-            <Route path="/pi/zh" element={<PiPage language="ZH" />} />
             <Route path="/pi/confirmed-received" element={<ConfirmedReceivedPisPage />} />
+          </Route>
+          {/* PRESALES opens Chinese PIs from the review queue to confirm them. */}
+          <Route element={<RoleRoute allow={["ADMIN", "SALES", "PRESALES"]} />}>
+            <Route path="/pi/zh" element={<PiPage language="ZH" />} />
+          </Route>
+          <Route element={<RoleRoute allow={["ADMIN", "PRESALES"]} />}>
+            <Route path="/reviews" element={<ReviewPage />} />
           </Route>
           <Route element={<RoleRoute allow={["ADMIN", "SALES", "COMMERCE"]} />}>
             <Route path="/contracts" element={<ContractsPage />} />
@@ -60,7 +66,6 @@ export default function App() {
           <Route element={<AdminRoute />}>
             <Route path="/ticket-fields-config" element={<TicketFieldsConfigPage />} />
             <Route path="/products" element={<ProductsPage />} />
-            <Route path="/reviews" element={<ReviewPage />} />
             <Route path="/permissions" element={<PermissionsPage />} />
             <Route path="/excel-templates" element={<TemplatesPage />} />
             <Route path="/requirement-pool" element={<RequirementPoolPage />} />

@@ -126,8 +126,17 @@ content-type: application/json
 
 ## 4. Trying it locally first (recommended)
 
-Feishu must reach the server over public HTTPS. Instead of deploying (the deployed site shares the production
-database), run the portal locally and expose it with a temporary Cloudflare tunnel. Only the local database is touched.
+**Easiest: long connection, no public address.** Feishu can deliver events and card clicks over a connection the
+portal opens *to* Feishu. `npm run dev:feishu` runs that bridge (`scripts/feishu-dev-bridge.mjs`, official SDK) for both
+bots and forwards everything to the local portal. In each app's **Events & callbacks**, choose
+"使用长连接接收事件 / 回调" (long connection) for both events and callbacks — the bridge must be running when you save,
+Feishu checks the connection. Put only the app id, secret and Verification Token in `.dev.vars` (leave the Encrypt Key
+empty: long-connection events arrive decrypted). Card links and "Sign in with Feishu" then point at
+`http://localhost:8788`, which works on the computer running the portal. Steps 7–9 below apply unchanged.
+
+**Alternative: a public tunnel.** Feishu must then reach the server over public HTTPS. Instead of deploying (the deployed
+site shares the production database), run the portal locally and expose it with a temporary Cloudflare tunnel. Only
+the local database is touched — but anyone with the tunnel address can reach the local portal while it runs.
 
 1. Install the tunnel tool once: `winget install --id Cloudflare.cloudflared`.
 2. Local portal with test data: `npm run db:migrate:local`, `node scripts/seed-local-dev.mjs`, `npm run build`, `npm run dev:api` (port 8788).
@@ -165,6 +174,26 @@ database), run the portal locally and expose it with a temporary Cloudflare tunn
 9. If a card button shows an error code, see the code table in Feishu's
    [card callback docs](https://open.feishu.cn/document/feishu-cards/card-callback-communication) (e.g. 200671 = server error,
    200673 = bad card JSON) and check the `npm run dev:api` terminal output.
+
+## 4a. The PI Assistant bot (ZH PI approvals)
+
+A second self-built app, separate from the after-sales bot. It sends each approval step's card to the approver the
+submitter picked (presales, then commerce), takes **Approve** / **Reject (reason)** from the card, closes earlier
+cards, and tells the submitter the result. Its "Edit on website" link signs people in with Feishu.
+
+1. Create a self-built app (e.g. "PI Assistant") with **Bot**, and request: `im:message`, `im:message:send_as_bot`,
+   `im:message.p2p_msg:readonly`, `im:message:update`.
+2. **Security settings → Redirect URL**: `https://<portal-domain>/api/auth/feishu/callback`
+   (locally: `http://localhost:8788/api/auth/feishu/callback`).
+3. **Events & callbacks**: event 接收消息 v2.0 and callback 卡片回传交互 — "send to developer server" with request URL
+   `https://<portal-domain>/api/feishu/pi/events` for both, or long connection locally (section 4).
+4. Secrets: `FEISHU_PI_APP_ID`, `FEISHU_PI_APP_SECRET`, `FEISHU_PI_VERIFICATION_TOKEN`, `FEISHU_PI_ENCRYPT_KEY`
+   (set the encrypt key in production; leave it empty with the local long-connection bridge).
+5. Publish a version. Each approver links their account once: **Sign in with Feishu** on the login page (or the
+   card's "Edit on website"), then their portal username and password. Cards reach only linked users.
+
+People are identified by `union_id` (the same in every company app), so this link is separate from the after-sales
+bot's account link (which stores that app's `open_id`).
 
 ## 5. Verify in a test tenant before going live
 

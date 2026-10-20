@@ -40,7 +40,7 @@ export type Harness = {
   close: () => Promise<void>;
 };
 
-const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE"];
+const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE", "PRESALES"];
 
 /** A fresh, empty in-memory D1 (no migrations applied) and R2 bucket. */
 export async function createD1(): Promise<{ db: D1Database; files: R2Bucket; close: () => Promise<void> }> {
