@@ -32,6 +32,14 @@ export function CreateTicketPage() {
   const [lineKey, setLineKey] = useState("");
   const [serialNumber, setSerialNumber] = useState("");
   const lineOptions = usePiLines(piId);
+  // SNs come from other systems: only those registered on the picked PI.
+  const [piSerials, setPiSerials] = useState<string[]>([]);
+  useEffect(() => {
+    setPiSerials([]);
+    setSerialNumber("");
+    if (!piId) return;
+    api.get(`/lookup/pi/${piId}/devices`).then((res) => setPiSerials(res.data)).catch(() => setPiSerials([]));
+  }, [piId]);
   const line = lineOptions.find((o) => o.key === lineKey) ?? null;
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [assignedSalesId, setAssignedSalesId] = useState("");
@@ -69,6 +77,7 @@ export function CreateTicketPage() {
   );
 
   function applyPi(next: { piId: string; productionOrderNo: string; customerCompany: string }) {
+    if (next.piId === piId) return;
     setPiId(next.piId);
     setLineKey("");
     setOrderNo(next.productionOrderNo);
@@ -136,18 +145,16 @@ export function CreateTicketPage() {
                 placeholder="Type part of the order, PI no. or customer"
               />
             </Field>
-            <Field label="Device SN (optional)">
-              <LookupInput
-                kind="sn"
-                className="font-mono"
-                value={serialNumber}
-                onChange={setSerialNumber}
-                onPick={(m) => applyPi(m)}
-                maxLength={64}
-                placeholder="Type part of the SN"
-              />
-            </Field>
-            <div className="hidden sm:block" />
+            {piSerials.length > 0 && (
+              <Field label="Device SN (optional)">
+                <select className="font-mono" value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)}>
+                  <option value="">Not specified</option>
+                  {piSerials.map((sn) => (
+                    <option key={sn} value={sn}>{sn}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Contact name *">
               <input value={contactName} onChange={(e) => setContactName(e.target.value)} maxLength={200} required />
             </Field>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { markSeen } from "../pi/notifications";
 import { FileSearch } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
@@ -50,6 +51,10 @@ export function PiDetailPage() {
     }
   }
   useEffect(() => { void load(); }, [id]);
+  // Opening a PI counts as seeing it for the home badges.
+  useEffect(() => {
+    if (id) markSeen(["pendingReviews", "pendingCommerce", "confirmedReceived"], user?.id, [id]);
+  }, [id, user?.id]);
 
   const status = (data?.zh.current ?? data?.zh.effective)?.pi.status;
   const underReview = status === "PENDING_REVIEW" || status === "PENDING_COMMERCE";

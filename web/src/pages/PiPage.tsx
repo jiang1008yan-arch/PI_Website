@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { markSeen } from "../pi/notifications";
 import { Calendar, ChevronLeft, FileCheck2, FileText, Plus } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
@@ -62,6 +63,12 @@ export function PiPage({ language }: { language: Language }) {
   // The list and the editor are separate views of the same workspace: the page
   // opens on the list and only swaps to the editor when you create or open a PI.
   const [editing, setEditing] = useState(false);
+  // Opening a PI here counts as seeing it for the home badges (review queue,
+  // commerce queue, confirmed received), not only opening those pages.
+  const openedId = editor.current?.id;
+  useEffect(() => {
+    if (openedId) markSeen(["pendingReviews", "pendingCommerce", "confirmedReceived"], user?.id, [openedId]);
+  }, [openedId, user?.id]);
   const inEditor = editing || Boolean(editor.current) || Boolean(linkedPiId);
   useEffect(() => { setEditing(false); }, [language]);
   function startNew() {

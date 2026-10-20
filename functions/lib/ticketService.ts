@@ -3,7 +3,7 @@ import { TICKET_TYPES, type TicketType } from "./aiTriage";
 import { canAssignSalesSide, canAssignServiceSide, canChangeStatus, canConfirmFault, canWriteNote, isValidTransition, type TicketStatus } from "./ticketAccess";
 import { validateAnswers, type TicketFieldRow } from "./ticketAnswers";
 import { nextTicketNumber } from "./ticketNumber";
-import { normalizeSerial } from "./devices";
+import { isKnownSerial, normalizeSerial } from "./devices";
 import type { AppUser, Env } from "./types";
 
 // Ticket operations shared by the web routes and the Feishu bot, so both
@@ -76,6 +76,8 @@ export async function createTicket(
     answers = validated.answers;
   }
 
+  const serialNumber = normalizeSerial(input.serialNumber).slice(0, 64) || null;
+  if (serialNumber && !(await isKnownSerial(db, serialNumber))) throw new TicketError("That SN is not known to the system.", 400);
   const owners = ownersForCreator(opts.creator, input);
   const date = new Date().toISOString().slice(0, 10);
   const { seq, ticketNo } = await nextTicketNumber(env, date);
@@ -103,7 +105,7 @@ export async function createTicket(
       input.feishuSourceMessageId || null,
       String(input.summary ?? "").trim().slice(0, 300) || null,
       String(input.productModel ?? "").trim().slice(0, 300) || null,
-      normalizeSerial(input.serialNumber).slice(0, 64) || null
+      serialNumber
     )
     .run();
   if (input.initialNote?.text.trim()) {

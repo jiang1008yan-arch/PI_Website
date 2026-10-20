@@ -106,6 +106,17 @@ describe("tickets use the picked values", () => {
       device: { serialNumber: "CHG-0901-0001" }
     });
     expect((await h.request("SALES", "PATCH", `/tickets/${id}/customer`, { orderNo: "PO-2026-0902" })).status).toBe(403);
+    // SNs come from other systems: an SN the system does not know is refused.
+    expect((await h.request("SERVICE", "PATCH", `/tickets/${id}/product`, { serialNumber: "TYPED-BY-HAND" })).body.error).toBe("That SN is not known to the system.");
+    const typed = await h.request("SERVICE", "POST", "/tickets", { contactName: "A", contactInfo: "a", productId, serialNumber: "TYPED-BY-HAND", answers: {} });
+    expect(typed.status).toBe(400);
+    // One reported by the charger backend is known, even if not registered on a PI.
+    await h.db.prepare("INSERT INTO deviceStatus (serialNumber, status, lastEventAt) VALUES ('BACKEND-ONLY-1', 'ONLINE', '2026-10-20 00:00:00')").run();
+    expect((await h.request("SERVICE", "PATCH", `/tickets/${id}/product`, { serialNumber: "BACKEND-ONLY-1" })).status).toBe(200);
+    // Leaving fields out keeps them; the PI's own SNs are listed for picking.
+    expect((await h.request("SERVICE", "GET", `/tickets/${id}`)).body.ticket).toMatchObject({ serialNumber: "BACKEND-ONLY-1", productModel: "AC7-T2-EU" });
+    expect((await h.request("SALES", "GET", "/lookup/pi/pi_ZH-001/devices")).body).toEqual(["CHG-0901-0001"]);
+    expect((await h.request("SALES", "GET", "/lookup/pi/pi_ZH-004/devices")).body).toEqual([]);
     await h.request("SERVICE", "PATCH", `/tickets/${id}/customer`, { customerCompany: "Nordic EV AB", orderNo: "PO-2026-0902" });
     const detail = (await h.request("SERVICE", "GET", `/tickets/${id}`)).body;
     expect(detail.ticket).toMatchObject({ customerCompany: "Nordic EV AB", orderNo: "PO-2026-0902" });

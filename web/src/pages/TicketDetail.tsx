@@ -7,8 +7,10 @@ import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
 import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
+import { markSeen } from "../pi/notifications";
 import { TicketActivity } from "../tickets/TicketActivity";
-import { TicketPiPanel } from "../tickets/TicketPiPanel";
+import { TicketEquipment } from "../tickets/TicketEquipment";
+import { TicketFault } from "../tickets/TicketFault";
 
 type Detail = {
   ticket: Ticket;
@@ -35,6 +37,10 @@ export function TicketDetailPage() {
     const res = await api.get(`/tickets/${id}`);
     setData(res.data);
   }
+
+  useEffect(() => {
+    markSeen(["newTickets"], user?.id, [id]);
+  }, [id, user?.id]);
 
   useEffect(() => {
     load();
@@ -130,6 +136,7 @@ export function TicketDetailPage() {
               <EditableInfo label="Contact name" value={ticket.contactName} canEdit={canManage} maxLength={200} required onSave={(v) => saveCustomerField("contactName", v)} />
               <EditableInfo label="Contact details" value={ticket.contactInfo} canEdit={canManage} maxLength={200} required onSave={(v) => saveCustomerField("contactInfo", v)} />
             </dl>
+            <TicketEquipment ticket={ticket} matchedPis={data.matchedPis ?? []} device={data.device ?? null} canManage={canManage} onChanged={load} />
             <div className="border-t pt-4">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Questionnaire</h3>
               <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -143,19 +150,10 @@ export function TicketDetailPage() {
 
           <TicketActivity ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
 
-          <TicketPiPanel
-            ticket={ticket}
-            matchedPis={data.matchedPis ?? []}
-            device={data.device ?? null}
-            repeat={data.repeat ?? null}
-            canManage={canManage}
-            onChanged={load}
-          />
-
         </div>
 
         <div className="space-y-6">
-          <TicketTypeSection ticket={ticket} canManage={canManage} onChanged={load} />
+          <TicketTypeSection ticket={ticket} repeat={data.repeat ?? null} canManage={canManage} onChanged={load} />
 
           <Section title="Status">
             <div className={`inline-block rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE[ticket.status]}`}>
@@ -311,7 +309,19 @@ function EditableInfo({
 
 // What the ticket is about. Only faults count in fault statistics; product
 // requests also go to the product managers' requirement pool.
-function TicketTypeSection({ ticket, canManage, onChanged }: { ticket: Ticket; canManage: boolean; onChanged: () => Promise<void> }) {
+function TicketTypeSection({
+  ticket,
+  repeat,
+  canManage,
+  onChanged
+}: {
+  ticket: Ticket;
+  repeat: RepeatInfo | null;
+  canManage: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  // Faults (and tickets not classified yet) carry the confirmed fault type.
+  const showFault = ticket.ticketType !== "PRODUCT_REQUEST" && ticket.ticketType !== "OTHER";
   const [type, setType] = useState<TicketType | "">(ticket.ticketType ?? "");
   const [summary, setSummary] = useState(ticket.summary ?? "");
   const [busy, setBusy] = useState(false);
@@ -341,6 +351,7 @@ function TicketTypeSection({ ticket, canManage, onChanged }: { ticket: Ticket; c
           <Info label="Ticket type" value={ticket.ticketType ? TICKET_TYPE_LABEL[ticket.ticketType] : "Not classified yet"} />
           <Info label="Summary" value={ticket.summary} />
         </dl>
+        {showFault && <TicketFault ticket={ticket} repeat={repeat} canManage={false} onChanged={onChanged} />}
       </Section>
     );
   }
@@ -367,6 +378,7 @@ function TicketTypeSection({ ticket, canManage, onChanged }: { ticket: Ticket; c
           Save type
         </button>
         {error && <div className="text-sm text-red-700">{error}</div>}
+        {showFault && <TicketFault ticket={ticket} repeat={repeat} canManage onChanged={onChanged} />}
       </div>
     </Section>
   );

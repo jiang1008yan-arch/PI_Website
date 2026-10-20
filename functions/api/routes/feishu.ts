@@ -155,8 +155,12 @@ async function openDraftForm(env: Env, draftId: string, cardMessageId: string | 
       .bind(triage.summary, triage.ticketType, triage.faultType, draftId)
       .run();
   }
-  // A production order number or SN written in the message fills the form.
+  // A production order number or SN written in the message fills the form;
+  // a known SN is kept on the request (SNs are never typed in the form).
   const refs = await findKnownReferences(env.DB, draft.text);
+  if (refs.device && !draft.serialNumber) {
+    await env.DB.prepare("UPDATE feishuDrafts SET serialNumber = ? WHERE id = ?").bind(refs.device.serialNumber, draftId).run();
+  }
   const prefill: DraftPrefill = {
     // A device alert starts with its SN even when it is not registered on a PI.
     serialNumber: refs.device?.serialNumber ?? draft.serialNumber ?? undefined,
@@ -187,9 +191,12 @@ async function lookupForDraft(env: Env, draftId: string, form: Record<string, un
   if (!draft || !cardMessageId) return;
   const query = formText(form, "lookupQuery");
   const matches = matchOptions(await lookup(env.DB, query, "all"));
-  const prefill: DraftPrefill = Object.fromEntries(
-    ["customerCompany", "orderNo", "serialNumber", "contactName", "summary", "ticketType", "faultType", "lookupQuery"].map((k) => [k, formText(form, k) || undefined])
-  );
+  const prefill: DraftPrefill = {
+    ...Object.fromEntries(
+      ["customerCompany", "orderNo", "contactName", "summary", "ticketType", "faultType", "lookupQuery"].map((k) => [k, formText(form, k) || undefined])
+    ),
+    serialNumber: draft.serialNumber ?? undefined
+  };
   await updateCard(
     env,
     cardMessageId,
@@ -318,7 +325,7 @@ async function confirmDraft(
     {
       customerCompany: picked?.customerCompany ?? String(form.customerCompany ?? ""),
       orderNo: picked?.orderNo ?? String(form.orderNo ?? ""),
-      serialNumber: picked?.serialNumber ?? formText(form, "serialNumber"),
+      serialNumber: picked?.serialNumber ?? draft.serialNumber ?? undefined,
       contactName,
       contactInfo: "Feishu group",
       feishuSourceChatId: draft.sourceChatId,

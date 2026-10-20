@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../components/Form";
+import { useAuth } from "../auth/AuthContext";
+import { markSeen } from "../pi/notifications";
 import { api } from "../api/client";
 import { useCachedList } from "../hooks/useCachedList";
 import type { Ticket, TicketStatus, TicketType } from "../types";
@@ -17,6 +19,12 @@ export function TicketListPanel() {
     `tickets:${status || "all"}`,
     () => api.get("/tickets", { params: status ? { status } : {} }).then((res) => res.data)
   );
+
+  // Seeing the list counts as seeing its new tickets: clear the home badge.
+  const { user } = useAuth();
+  useEffect(() => {
+    markSeen(["newTickets"], user?.id, tickets.filter((t) => t.status === "NEW").map((t) => t.id));
+  }, [tickets, user?.id]);
 
   // Ticket type, then free-text search across ticket number, order, company,
   // product name and summary.

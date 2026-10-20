@@ -95,9 +95,10 @@ describe("device status intake", () => {
     await h.settle();
     const form = JSON.parse(calls.find((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_1")!.body.content);
     const inputs = Object.fromEntries(form.body.elements.find((e: any) => e.tag === "form").elements.filter((e: any) => e.tag === "input").map((e: any) => [e.name, e.default_value]));
-    expect(inputs).toMatchObject({ serialNumber: "CHG-0901-0001", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" });
+    expect(inputs).toMatchObject({ orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" });
+    expect(JSON.stringify(form)).toContain("Device SN:** CHG-0901-0001");
 
-    const created = await cardAction({ action: "confirm_draft", draftId }, { contactName: "Site manager", serialNumber: "CHG-0901-0001", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" }, "om_1");
+    const created = await cardAction({ action: "confirm_draft", draftId }, { contactName: "Site manager", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" }, "om_1");
     expect(created.body.toast.type).toBe("success");
     await h.settle();
     const ticket = await h.db.prepare("SELECT id, serialNumber, assignedServiceId, feishuSourceChatId FROM tickets").first<any>();

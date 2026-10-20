@@ -29,3 +29,13 @@ export function parseSerials(input: string | string[]): ParsedSerials {
 export function normalizeSerial(sn: unknown): string {
   return String(sn ?? "").trim().toUpperCase();
 }
+
+// SNs come from other systems, never typed onto a ticket: an SN is accepted
+// only if it is registered on a PI or has been reported by the charger backend.
+export async function isKnownSerial(db: D1Database, sn: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 FROM devices WHERE serialNumber = ?1 UNION SELECT 1 FROM deviceStatus WHERE serialNumber = ?1 LIMIT 1")
+    .bind(sn)
+    .first();
+  return Boolean(row);
+}

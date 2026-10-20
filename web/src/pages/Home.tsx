@@ -23,21 +23,27 @@ type HomeSection = { id: string; title: string; subtitle: string; modules: HomeM
 export function HomePage() {
   const { user } = useAuth();
   const role = user?.role;
-  const [newTickets, setNewTickets] = useState(0);
+  const [newTickets, setNewTickets] = useState(() => getCachedCount("newTickets", user?.id));
   // Seed from the cached count so the badge paints instantly (no delayed dot),
   // then revalidate against the live list below.
   const [pendingReviews, setPendingReviews] = useState(() => getCachedCount("pendingReviews", user?.id));
   const [confirmedReceived, setConfirmedReceived] = useState(() => getCachedCount("confirmedReceived", user?.id));
   const [pendingCommerce, setPendingCommerce] = useState(() => getCachedCount("pendingCommerce", user?.id));
 
-  // Surface a red dot on the After-Sales card when there are unhandled (NEW) tickets.
+  // Badge the After-Sales card with NEW tickets the user hasn't looked at yet;
+  // opening the ticket list (or the ticket) clears them.
   useEffect(() => {
     if (role === "COMMERCE") return;
     api
-      .get("/tickets/stats")
-      .then((res) => setNewTickets(res.data.byStatus?.find((r: { status: string }) => r.status === "NEW")?.n ?? 0))
+      .get("/tickets", { params: { status: "NEW" } })
+      .then((res) => {
+        const ids = (Array.isArray(res.data) ? res.data : []).map((t: { id: string }) => t.id);
+        const n = unseenCount("newTickets", user?.id, ids);
+        setNewTickets(n);
+        setCachedCount("newTickets", user?.id, n);
+      })
       .catch(() => setNewTickets(0));
-  }, [role]);
+  }, [role, user?.id]);
 
   // Badge "Pending Commerce Approval" with queued PIs this commerce user hasn't opened.
   useEffect(() => {

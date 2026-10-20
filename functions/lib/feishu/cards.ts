@@ -261,6 +261,8 @@ export function draftCard(d: DraftCardData) {
   const faultType = p.faultType ?? d.aiFaultType ?? "";
   const elements: unknown[] = [md(`**Customer message**\n> ${esc(d.text).slice(0, 1500)}`)];
   if (d.aiSummary) elements.push(md(`**AI suggestion** (check before creating): ${esc(d.aiSummary)}`));
+  // The SN is never typed: it comes from the message, a device alert or a pick.
+  if (p.serialNumber) elements.push(md(`**Device SN:** ${esc(p.serialNumber)}`));
   const formElements: unknown[] = [
     textInput("lookupQuery", "Find: type part of a production order, customer or SN", 100, p.lookupQuery),
     callbackButton("Find", { action: "lookup_draft", draftId: d.draftId }, { name: "submit_lookup", submit: true })
@@ -281,7 +283,6 @@ export function draftCard(d: DraftCardData) {
     // Placeholders double as labels: only well-documented component properties are used.
     textInput("customerCompany", "Customer company", 200, p.customerCompany),
     textInput("orderNo", "Production order no., e.g. PO-2026-0901", 100, p.orderNo),
-    textInput("serialNumber", "Device SN (optional)", 64, p.serialNumber),
     textInput("contactName", "Customer contact name (required)", 200, p.contactName),
     textInput("summary", "One-line summary (optional)", 300, p.summary ?? d.aiSummary ?? undefined),
     {

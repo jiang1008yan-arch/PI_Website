@@ -394,7 +394,15 @@ describe("finding existing orders, customers and SNs in the Feishu form", () => 
     await h.settle();
     await cardAction("ou_service", { action: "open_draft", draftId: await lastDraftId() }, {}, "e-open-sn", "om_form_sn");
     await h.settle();
-    expect(inputs(patchedCard("om_form_sn"))).toMatchObject({ serialNumber: "CHG-0901-0001", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" });
+    const card = patchedCard("om_form_sn");
+    expect(inputs(card)).toMatchObject({ orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" });
+    // The SN is shown, not typed, and is kept on the request for the ticket.
+    expect(inputs(card).serialNumber).toBeUndefined();
+    expect(JSON.stringify(card)).toContain("Device SN:** CHG-0901-0001");
+    const draftId = await lastDraftId();
+    await cardAction("ou_service", { action: "confirm_draft", draftId }, { contactName: "Ana", serialNumber: "MADE-UP-999" }, "e-create-sn", "om_form_sn");
+    await h.settle();
+    expect((await h.db.prepare("SELECT serialNumber FROM tickets").first<any>())?.serialNumber).toBe("CHG-0901-0001");
   });
 
   it("Find lists matches and keeps what was typed; a picked match fills the ticket", async () => {

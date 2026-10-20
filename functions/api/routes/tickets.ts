@@ -1,5 +1,5 @@
 import { all, first, id } from "../../lib/db";
-import { normalizeSerial } from "../../lib/devices";
+import { isKnownSerial, normalizeSerial } from "../../lib/devices";
 import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
 import { canConfirmFault, canUseTickets, type TicketStatus } from "../../lib/ticketAccess";
 import {
@@ -211,15 +211,26 @@ ticketRoutes.get("/tickets/:id", async (c) => {
 
 // After-sales record which PI line the issue is about: the catalog product,
 // the concrete generated model, and the device SN if known.
+// The SN must be known to the system (registered on a PI or reported by the
+// charger backend). Fields left out keep their value.
 ticketRoutes.patch("/tickets/:id/product", async (c) => {
   if (!canConfirmFault(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
-  const d = await body<{ productId?: string; productModel?: string; serialNumber?: string }>(c);
-  const ticket = await first<any>(c.env.DB, "SELECT id FROM tickets WHERE id=?", c.req.param("id"));
+  const d = await body<{ productId?: string; productModel?: string | null; serialNumber?: string | null }>(c);
+  const ticket = await first<any>(c.env.DB, "SELECT id, productId, productModel, serialNumber FROM tickets WHERE id=?", c.req.param("id"));
   if (!ticket) return c.json({ error: "Not found" }, 404);
-  const product = d.productId ? await first<{ id: string }>(c.env.DB, "SELECT id FROM products WHERE id=?", String(d.productId)) : null;
-  if (!product) return c.json({ error: "A valid product is required." }, 400);
+  let productId = ticket.productId;
+  if (d.productId !== undefined) {
+    const product = await first<{ id: string }>(c.env.DB, "SELECT id FROM products WHERE id=?", String(d.productId));
+    if (!product) return c.json({ error: "A valid product is required." }, 400);
+    productId = product.id;
+  }
+  const productModel = d.productModel === undefined ? ticket.productModel : String(d.productModel ?? "").trim().slice(0, 300) || null;
+  const serialNumber = d.serialNumber === undefined ? ticket.serialNumber : normalizeSerial(d.serialNumber).slice(0, 64) || null;
+  if (serialNumber && serialNumber !== ticket.serialNumber && !(await isKnownSerial(c.env.DB, serialNumber))) {
+    return c.json({ error: "That SN is not known to the system." }, 400);
+  }
   await c.env.DB.prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
-    .bind(product.id, String(d.productModel ?? "").trim().slice(0, 300) || null, normalizeSerial(d.serialNumber).slice(0, 64) || null, ticket.id)
+    .bind(productId, productModel, serialNumber, ticket.id)
     .run();
   afterTicketChange(c, ticket.id, { kind: "product" });
   return c.json({ ok: true });
