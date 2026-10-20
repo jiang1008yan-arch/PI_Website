@@ -26,9 +26,8 @@ npx wrangler pages secret put FEISHU_APP_ID
 ```
 
 Set the same way: `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY`, `FEISHU_SERVICE_CHAT_ID`
-(the internal after-sales group's `chat_id`, `oc_…`), and optionally `DASHSCOPE_API_KEY` for AI suggestions
-(Qwen via Alibaba Cloud Model Studio / 阿里云百炼: create an API key in the console; the default model is `qwen-plus`,
-override it with the plain variable `QWEN_MODEL`). AI runs only when someone presses **创建工单** on a prompt card.
+(the internal after-sales group's `chat_id`, `oc_…`), and `AI_KEY_SECRET` — a long random string that encrypts the AI keys
+people save for themselves (see section 3). Keep it stable: if it changes, everyone has to enter their AI key again.
 Set `APP_BASE_URL` (e.g. `https://portal.example.com`) as a plain variable — links in bot messages use it.
 
 The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_CHAT_ID` are all set.
@@ -45,7 +44,29 @@ The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_
 - The customer group only ever sees "ticket registered" and "ticket resolved". Everything else stays in the internal group,
   where each ticket has one card (Take / status / note) that updates in place, and the ticket's sales person is @-mentioned on changes.
 - The first time someone presses a card button the bot DMs them a one-time link to tie their Feishu account to their portal
-  account. Only after-sales and admins can take or update tickets; sales can create them.
+  account; sending **绑定** (or "bind") to the bot in a direct message also gets the link. Only after-sales and admins can take or
+  update tickets; sales can create them.
+- **Whoever creates a ticket owns it** (after-sales/admin as the after-sales owner, sales as the sales owner). Any after-sales can hand
+  it over in the portal (ticket page → Assignees); every change is written to the ticket's activity and the new owner gets a Feishu DM.
+- **Ticket type:** Fault / Product request / Question or other. It must be set before a ticket can be resolved (and a fault needs its
+  fault type). Only faults count in Fault Analytics.
+- **AI suggestions are optional and personal.** Each person who wants them saves their own key under the user menu →
+  **AI Assistant**: Qwen (阿里云百炼 → API-KEY, default model `qwen-plus`) or DeepSeek (platform.deepseek.com, default model
+  `deepseek-flash`). The key is checked, stored encrypted and only shown masked. AI runs only when that person presses **创建工单**,
+  and suggests a summary, the ticket type and the fault type; nothing is applied until they press **Create ticket**.
+
+## 3a. Product requests → the requirement pool (Feishu Bitable)
+
+Product managers keep their requirement pool in a Feishu Bitable; each ticket classified as a **Product request** is added there once.
+
+1. In the Feishu Open Platform, add the permission `bitable:app` to the app and publish a new version.
+2. A product manager creates a Bitable with one table whose columns are exactly (all of type Text / 文本):
+   工单号、提交日期、客户、产品、型号、SN、摘要、客户原话、售后负责人、工单链接.
+3. In the base, **Share** → add the app **售后工单Robot** as an editor (可编辑).
+4. Open the table, copy the link from the address bar (`…/base/<id>?table=tbl…`), and paste it in the portal under
+   **Administration → Requirement Pool**; press **Check table** — it lists missing or wrongly typed columns.
+5. To notify product managers, use the base's own **Automations → When a record is added → Send a Feishu message**.
+   Filtering, exporting and assigning requests are all done in Bitable.
 
 ## 4. Trying it locally first (recommended)
 
@@ -66,7 +87,7 @@ database), run the portal locally and expose it with a temporary Cloudflare tunn
    FEISHU_ENCRYPT_KEY=...
    FEISHU_SERVICE_CHAT_ID=oc_...
    APP_BASE_URL=https://<your-tunnel>.trycloudflare.com
-   DASHSCOPE_API_KEY=sk-...   (optional — AI suggestions from Qwen)
+   AI_KEY_SECRET=<a long random string>   (lets people save their own AI keys)
    ```
    The server must already have the Encrypt Key and Verification Token **before** you save the URLs in Feishu,
    because Feishu checks the URL immediately.

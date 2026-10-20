@@ -29,6 +29,11 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Device** — one physical unit delivered under a PI, identified by its **serial number (SN)**. An SN belongs to exactly one PI.
 - **Fault type** — the after-sales-confirmed classification of what went wrong, chosen from a maintained list. Statistics count only confirmed fault types; the customer's self-reported problem type is reference only. _Avoid_: problem type (for the confirmed value).
 - **Repeat fault** — the same fault type on the same catalog product reaching a configured count within a configured window. Judged per product across all its models, even though statistics list each model separately.
+- **Ticket type** — what a ticket is about: Fault, Product request, or Question / other. Set by after-sales (AI may suggest it) and required before a ticket is resolved. Only Fault tickets carry a fault type.
+- **Product request** — a ticket in which the customer asks for a new or changed product capability. Written once to the requirement pool.
+- **Requirement pool** — the product managers' Feishu Bitable where product requests collect; they filter, export, assign and get notified there, not in this system.
+- **Owner** — the after-sales (and sales) person responsible for a ticket. Whoever creates a ticket owns it; any after-sales can hand it over, and every change is logged on the ticket.
+- **Personal AI key** — a user's own Qwen or DeepSeek key, saved encrypted and used only for that user's AI suggestions. _Avoid_: a shared company key.
 
 ## PI status state machine
 
