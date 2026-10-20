@@ -5,7 +5,7 @@ Internal Proforma Invoice web app for English and Chinese PI creation, admin app
 ## Stack
 
 - React 18 + Vite + TypeScript + Tailwind CSS
-- Cloudflare Pages Functions + Hono
+- One Cloudflare Worker (`src/worker.ts`): Hono API, SPA static assets, queue consumer, hourly cron
 - Cloudflare D1 with Drizzle schema and SQL migration
 - Cloudflare R2 for Excel and contract files
 - ExcelJS in the browser for `.xlsx` generation
@@ -16,11 +16,13 @@ Internal Proforma Invoice web app for English and Chinese PI creation, admin app
 ```powershell
 npm install
 npm run build
-wrangler d1 migrations apply sales-portal-db --local
-wrangler pages dev web/dist
+npm run db:migrate:local
+npm run dev
 ```
 
-Seed credentials are created lazily on the first API request:
+`npm run dev` runs `wrangler dev` on http://localhost:8788 and serves the built `web/dist`. Put local secrets in `.dev.vars` (gitignored), e.g. `JWT_SECRET=...` and `ALLOW_DEFAULT_ADMIN=true`.
+
+With `ALLOW_DEFAULT_ADMIN=true`, seed credentials are created lazily on the first API request against an empty database:
 
 - Username: `admin`
 - Password: `Admin@123`
@@ -35,12 +37,13 @@ For frontend-only iteration:
 npm run dev:web
 ```
 
-For Pages Functions + D1/R2 local testing, build the SPA and run Pages dev:
+`npm run dev:web` proxies `/api` to `http://127.0.0.1:8788`, so run `npm run dev` alongside it for the API with local D1/R2.
+
+To trigger the hourly janitor locally:
 
 ```powershell
-npm run build
-wrangler d1 migrations apply sales-portal-db --local
-wrangler pages dev web/dist
+npx wrangler dev --test-scheduled
+# then open http://localhost:8788/__scheduled
 ```
 
 ## Implemented Batches
@@ -49,7 +52,7 @@ wrangler pages dev web/dist
 - Batch 2: categories, products, EN/ZH product fields, product sub-template uploads, PI header templates, contract templates.
 - Batch 3: EN/ZH PI creation, item snapshots, EN submit, ZH send/review/approve/reject workflow.
 - Batch 4: browser-side ExcelJS export using header templates, product sub-templates, token replacement, totals.
-- Batch 5: scheduled janitor for approved Chinese PIs older than 14 days, with PI numbering kept in an independent sequence table so expired PI rows can be hard-deleted.
+- Batch 5: hourly scheduled janitor (Worker cron) that purges DRAFT PIs untouched for 3 days; PI numbering is kept in an independent sequence table. Approved Chinese PIs are kept permanently.
 
 ## Excel Template Notes
 
@@ -69,8 +72,10 @@ Product sub-templates can use `${field.<label>}` tokens, where `<label>` matches
 wrangler d1 create sales-portal-db
 wrangler d1 migrations apply sales-portal-db --remote
 wrangler r2 bucket create sales-portal-files
-wrangler pages secret put JWT_SECRET
+wrangler queues create app-jobs
+wrangler queues create app-jobs-dlq
+wrangler secret put JWT_SECRET
 npm run deploy
 ```
 
-Update `wrangler.toml` with the real D1 database id before deploying.
+Update `wrangler.toml` with the real D1 database id before deploying. See `docs/deploy-and-migrations.md` for the Pages → Worker cutover.

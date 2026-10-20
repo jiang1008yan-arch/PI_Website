@@ -4,11 +4,61 @@
 
 | | 谁更新 | 何时 |
 |---|---|---|
-| **代码**（前端 + Workers 函数） | Cloudflare Pages 的 Git 集成 | push/merge 到 `main` 自动 |
+| **代码**（前端 + API，单个 Worker） | `npm run deploy`（= `npm run build && wrangler deploy`），或 Workers Builds 的 Git 集成 | 手动 / 接入 Workers Builds 后 push 到 `main` 自动 |
 | **D1 表结构**（表/列） | `wrangler d1 migrations apply --remote` | 过去靠人手动，现在由 CI 自动 |
 
-Cloudflare Pages 只部署代码，**不会**应用 D1 迁移。两者一旦脱节（新代码引用了一个迁移才会加的列，
+部署 Worker 只发布代码，**不会**应用 D1 迁移。两者一旦脱节（新代码引用了一个迁移才会加的列，
 而该迁移没在线上跑），线上就会 500、表现为"列表空白 / 按钮点不动"。
+
+## 架构：单个 Worker（已从 Cloudflare Pages 迁移）
+
+站点现在是**一个 Worker + 静态资源**（`wrangler.toml` 的 `main = "src/worker.ts"`）：
+
+- `fetch`：`/api/*` → Hono（`functions/api/[[path]].ts` 导出的 `app`）；其余路径 → `env.ASSETS`（`web/dist`），
+  未命中的前端路由回落到 `index.html`（`not_found_handling = "single-page-application"`）。
+  `run_worker_first = true` 保证 `/api/files/...` 这类下载链接在浏览器直接打开时也进 API，而不是被当成前端路由。
+- `queue`：消费 `app-jobs` 队列（飞书机器人后台任务；目前只记录日志并 ack），失败 3 次进 `app-jobs-dlq`。
+- `scheduled`：每小时（`0 * * * *`）跑 `functions/scheduled.ts` 的清理：删除 3 天未更新的 DRAFT PI。
+  已审批的中文 PI **永久保留**，不归档、不删除。
+
+Pages 不支持 Queue 消费者和 Cron，这是迁移的原因。
+
+### 首次切换（Pages → Worker，只需做一次）
+
+1. **创建队列**（需要已 `wrangler login`）：
+   ```bash
+   npx wrangler queues create app-jobs
+   npx wrangler queues create app-jobs-dlq
+   ```
+2. **设置 Worker 密钥**（Pages 的密钥不会自动带过来，逐个重新设置；值与 Pages 项目里的一致）：
+   ```bash
+   npx wrangler secret put JWT_SECRET
+   npx wrangler secret put TURNSTILE_SECRET
+   ```
+   如果 Pages 项目还设置过其它变量/密钥（如 `ALLOW_DEFAULT_ADMIN`），在 Pages → Settings → Variables 里核对后一并设置。
+   **JWT_SECRET 必须与 Pages 相同**，否则切换后所有人的登录会失效。
+3. **部署**：`npm run deploy`。先用 `https://sales-portal.<子域>.workers.dev` 验证登录、PI 列表/编辑、导出、
+   文件上传下载、刷新深链接、公开工单表单。
+4. **迁移自定义域名**：Pages 项目 → Custom domains → 移除该域名；然后 Worker → Settings → Domains & Routes →
+   Add → Custom domain，填同一个域名（DNS 记录由 Cloudflare 自动改指向 Worker）。
+5. **Turnstile**：若公开工单表单用到 Turnstile，确认站点的 Hostname 列表包含最终访问的域名（测试 workers.dev 时也要临时加上）。
+6. **保留 Pages 项目**直到确认 Worker 稳定，然后再删除。
+   注意：Pages 项目若仍连着 Git，合并本次改动到 `main` 后它会用 dashboard 配置继续构建（`wrangler.toml` 已不再是
+   Pages 配置）——在切完域名前，建议到 Pages → Settings → Builds 暂停自动部署。
+7. （可选）Worker → Settings → Builds 连接本 GitHub 仓库，构建命令 `npm run build`、部署命令 `npx wrangler deploy`，
+   恢复"push 到 `main` 自动部署"。
+
+### 本地开发
+
+```bash
+npm run build
+npm run db:migrate:local
+npm run dev                      # wrangler dev，http://localhost:8788
+npx wrangler dev --test-scheduled # 然后访问 /__scheduled 手动触发一次清理
+```
+
+本地密钥放 `.dev.vars`（已 gitignore），例如 `JWT_SECRET=dev-secret`、`ALLOW_DEFAULT_ADMIN=true`。
+`[ai]` 绑定在本地也会访问 Cloudflare 远端（需要 `wrangler login`），目前代码尚未调用它。
 
 ## 自动迁移（`.github/workflows/d1-migrations.yml`）
 

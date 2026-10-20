@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "backend (wrangler functions)",
+      "name": "worker (wrangler dev)",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:api"],
+      "runtimeArgs": ["run", "dev", "--", "--test-scheduled"],
       "port": 8788
     },
     {
