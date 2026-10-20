@@ -95,7 +95,7 @@ export async function loadTicketForCard(db: D1Database, ticketId: string): Promi
             t.createdAt, t.summary, t.bitableRecordId, t.feishuCardMessageId, t.feishuSourceChatId, t.feishuSourceMessageId,
             t.assignedServiceId, t.feishuCardOwnerId, service.feishuOpenId AS serviceOpenId,
             p.nameEn AS productName, service.displayName AS serviceName, sales.displayName AS salesName, sales.feishuOpenId AS salesOpenId,
-            (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt DESC, u.rowid DESC LIMIT 1) AS latestNote,
+            (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' AND u.isSystem = 0 AND u.note <> '' ORDER BY u.createdAt DESC, u.rowid DESC LIMIT 1) AS latestNote,
             (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt, u.rowid LIMIT 1) AS firstNote
      FROM tickets t
      LEFT JOIN products p ON p.id = t.productId

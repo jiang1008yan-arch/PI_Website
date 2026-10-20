@@ -33,6 +33,8 @@ export type Harness = {
   request: (as: Role | AppUser | null, method: string, path: string, body?: unknown) => Promise<{ status: number; body: any }>;
   /** Sends a raw request (custom headers/body), e.g. a Feishu push. */
   raw: (method: string, path: string, body: string, headers?: Record<string, string>) => Promise<{ status: number; body: any }>;
+  /** Sends any body (e.g. a file) as `as` and returns the raw Response (e.g. a download). */
+  fetchAs: (as: Role | AppUser, method: string, path: string, body?: BodyInit, headers?: Record<string, string>) => Promise<Response>;
   /** Waits for work handlers deferred past the response (executionCtx.waitUntil). */
   settle: () => Promise<void>;
   close: () => Promise<void>;
@@ -40,11 +42,12 @@ export type Harness = {
 
 const ROLES: Role[] = ["ADMIN", "SALES", "SERVICE", "COMMERCE"];
 
-/** A fresh, empty in-memory D1 (no migrations applied). */
-export async function createD1(): Promise<{ db: D1Database; close: () => Promise<void> }> {
-  const mf = new Miniflare({ modules: true, script: "export default {}", d1Databases: ["DB"] });
+/** A fresh, empty in-memory D1 (no migrations applied) and R2 bucket. */
+export async function createD1(): Promise<{ db: D1Database; files: R2Bucket; close: () => Promise<void> }> {
+  const mf = new Miniflare({ modules: true, script: "export default {}", d1Databases: ["DB"], r2Buckets: ["FILES"] });
   const db = (await mf.getD1Database("DB")) as unknown as D1Database;
-  return { db, close: () => mf.dispose() };
+  const files = (await mf.getR2Bucket("FILES")) as unknown as R2Bucket;
+  return { db, files, close: () => mf.dispose() };
 }
 
 /** Applies migrations in filename order; `only` limits which files run. */
@@ -58,11 +61,11 @@ export async function applyMigrations(db: D1Database, only: (file: string) => bo
 }
 
 export async function createHarness(envOverrides: Partial<Env> = {}): Promise<Harness> {
-  const { db, close } = await createD1();
+  const { db, files, close } = await createD1();
   await applyMigrations(db);
   await db.prepare("INSERT OR IGNORE INTO senderProfile (id, corp, address, fromName, phone, email) VALUES (1, '', '', '', '', '')").run();
 
-  const env = { DB: db, FILES: undefined as unknown as R2Bucket, JWT_SECRET: "test-secret", ...envOverrides } as Env;
+  const env = { DB: db, FILES: files, JWT_SECRET: "test-secret", ...envOverrides } as Env;
 
   const users = {} as Record<Role, AppUser>;
   for (const role of ROLES) {
@@ -96,8 +99,15 @@ export async function createHarness(envOverrides: Partial<Env> = {}): Promise<Ha
     return send(method, path, body, { "content-type": "application/json", ...headers });
   }
 
+  async function fetchAs(as: Role | AppUser, method: string, path: string, body?: BodyInit, headers: Record<string, string> = {}) {
+    const user = typeof as === "string" ? users[as] : as;
+    const auth = { authorization: `Bearer ${await signJwt(env, user)}`, ...headers };
+    return app.fetch(new Request(`http://test/api${path}`, { method, headers: auth, body }), env, ctx as unknown as ExecutionContext);
+  }
+
   async function send(method: string, path: string, body: string | undefined, headers: Record<string, string>) {
-    const res = await app.fetch(new Request(`http://test/api${path}`, { method, headers, body }), env, ctx as unknown as ExecutionContext);
+    const hasBody = method !== "GET" && method !== "HEAD";
+    const res = await app.fetch(new Request(`http://test/api${path}`, { method, headers, body: hasBody ? body : undefined }), env, ctx as unknown as ExecutionContext);
     const text = await res.text();
     let parsed: any = text;
     try {
@@ -108,7 +118,7 @@ export async function createHarness(envOverrides: Partial<Env> = {}): Promise<Ha
     return { status: res.status, body: parsed };
   }
 
-  return { env, db, users, request, raw, settle, close };
+  return { env, db, users, request, raw, fetchAs, settle, close };
 }
 
 /** Inserts an ACTIVE product with no fields; returns its id. */

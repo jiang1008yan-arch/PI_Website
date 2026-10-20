@@ -5,12 +5,11 @@ import { TicketListPanel } from "../tickets/TicketListPanel";
 import { TicketLinksPanel } from "../tickets/TicketLinksPanel";
 import { TicketStatsPanel } from "../tickets/TicketStatsPanel";
 
-type Tab = "list" | "links" | "stats";
+type Tab = "list" | "links";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "list", label: "Tickets" },
-  { key: "links", label: "My links" },
-  { key: "stats", label: "Statistics" }
+  { key: "links", label: "My links" }
 ];
 
 export function TicketsPage() {
@@ -23,6 +22,8 @@ export function TicketsPage() {
         title="Ticket Center"
         Icon={LifeBuoy}
       />
+      {/* Counts by status, always in view above the list. */}
+      <TicketStatsPanel />
       <Section
         title={TABS.find((t) => t.key === tab)?.label ?? "Tickets"}
         action={
@@ -37,7 +38,6 @@ export function TicketsPage() {
       >
         {tab === "list" && <TicketListPanel />}
         {tab === "links" && <TicketLinksPanel />}
-        {tab === "stats" && <TicketStatsPanel />}
       </Section>
     </div>
   );

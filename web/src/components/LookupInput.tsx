@@ -30,7 +30,8 @@ export function LookupInput<K extends Kind>({
   placeholder,
   maxLength,
   className,
-  disabled
+  disabled,
+  autoFocus
 }: {
   kind: K;
   value: string;
@@ -40,6 +41,7 @@ export function LookupInput<K extends Kind>({
   maxLength?: number;
   className?: string;
   disabled?: boolean;
+  autoFocus?: boolean;
 }) {
   const [items, setItems] = useState<MatchOf<K>[]>([]);
   const [open, setOpen] = useState(false);
@@ -97,6 +99,7 @@ export function LookupInput<K extends Kind>({
         placeholder={placeholder ?? "Type 2+ characters to search"}
         maxLength={maxLength}
         disabled={disabled}
+        autoFocus={autoFocus}
         autoComplete="off"
         role="combobox"
         aria-expanded={open && items.length > 0}

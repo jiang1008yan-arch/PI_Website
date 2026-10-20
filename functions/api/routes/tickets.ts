@@ -2,7 +2,17 @@ import { all, first, id } from "../../lib/db";
 import { normalizeSerial } from "../../lib/devices";
 import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
 import { canConfirmFault, canUseTickets, type TicketStatus } from "../../lib/ticketAccess";
-import { addTicketNote, assignTicket, changeTicketStatus, confirmTicketFault, createTicket, setTicketCustomer, setTicketType } from "../../lib/ticketService";
+import {
+  addTicketAttachment,
+  addTicketNote,
+  assignTicket,
+  changeTicketStatus,
+  confirmTicketFault,
+  createTicket,
+  MAX_ATTACHMENT_BYTES,
+  setTicketCustomer,
+  setTicketType
+} from "../../lib/ticketService";
 import { afterTicketChange } from "../../lib/feishu/sync";
 import { body, createApp } from "./_shared";
 
@@ -180,6 +190,11 @@ ticketRoutes.get("/tickets/:id", async (c) => {
     ticket.id
   );
   const fields = await all(c.env.DB, "SELECT * FROM ticketFields ORDER BY sortOrder, label");
+  const attachments = await all(
+    c.env.DB,
+    "SELECT id, updateId, fileName, contentType, size, createdAt FROM ticketAttachments WHERE ticketId = ? ORDER BY createdAt, rowid",
+    ticket.id
+  );
   const matchedPis = await approvedPisForOrder(c.env.DB, String(ticket.orderNo ?? ""));
   const serial = normalizeSerial(ticket.serialNumber);
   const device = serial
@@ -191,7 +206,7 @@ ticketRoutes.get("/tickets/:id", async (c) => {
       )
     : null;
   const repeat = await repeatInfo(c.env.DB, ticket.productId, ticket.faultType, new Date());
-  return c.json({ ticket, updates, fields, matchedPis, device, repeat });
+  return c.json({ ticket, updates, fields, matchedPis, device, repeat, attachments });
 });
 
 // After-sales record which PI line the issue is about: the catalog product,
@@ -227,11 +242,57 @@ ticketRoutes.patch("/tickets/:id/status", async (c) => {
   return c.json({ ok: true });
 });
 
+// A progress update, or (with parentId) a follow-up to an earlier one. With
+// withAttachments the text may be empty; the files are uploaded next.
 ticketRoutes.post("/tickets/:id/notes", async (c) => {
-  const d = await body<{ note?: string }>(c);
-  await addTicketNote(c.env.DB, c.get("user"), c.req.param("id"), String(d.note ?? ""));
+  const d = await body<{ note?: string; parentId?: string; withAttachments?: boolean }>(c);
+  const updateId = await addTicketNote(c.env.DB, c.get("user"), c.req.param("id"), String(d.note ?? ""), {
+    parentId: d.parentId || null,
+    withAttachments: Boolean(d.withAttachments)
+  });
   afterTicketChange(c, c.req.param("id"), { kind: "note" });
-  return c.json({ ok: true });
+  return c.json({ ok: true, id: updateId });
+});
+
+// One file per request: the raw body, its content type, and the file name
+// (URI-encoded) in X-File-Name.
+ticketRoutes.post("/tickets/:id/updates/:updateId/attachments", async (c) => {
+  const declared = Number(c.req.header("content-length") ?? 0);
+  if (declared > MAX_ATTACHMENT_BYTES) return c.json({ error: "Files can be at most 20 MB." }, 400);
+  let name = "file";
+  try {
+    name = decodeURIComponent(c.req.header("x-file-name") ?? "file");
+  } catch {
+    // keep the default name
+  }
+  const attachment = await addTicketAttachment(c.env, c.get("user"), c.req.param("id"), c.req.param("updateId"), {
+    name,
+    contentType: c.req.header("content-type") ?? "application/octet-stream",
+    body: await c.req.arrayBuffer()
+  });
+  return c.json(attachment);
+});
+
+// Download (or, with ?inline=1, show) an attachment. Signed-in ticket users only.
+ticketRoutes.get("/tickets/:id/attachments/:attachmentId", async (c) => {
+  const row = await first<{ fileName: string; contentType: string; r2Key: string }>(
+    c.env.DB,
+    "SELECT fileName, contentType, r2Key FROM ticketAttachments WHERE id = ? AND ticketId = ?",
+    c.req.param("attachmentId"),
+    c.req.param("id")
+  );
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const obj = await c.env.FILES.get(row.r2Key);
+  if (!obj) return c.json({ error: "Not found" }, 404);
+  const inline = c.req.query("inline") === "1" && row.contentType.startsWith("image/");
+  return new Response(obj.body, {
+    headers: {
+      "content-type": row.contentType,
+      "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(row.fileName)}`,
+      "cache-control": "private, max-age=3600",
+      "x-content-type-options": "nosniff"
+    }
+  });
 });
 
 // Assign/backfill responsible people. ADMIN may set both sides; SERVICE may set
@@ -245,9 +306,9 @@ ticketRoutes.patch("/tickets/:id/assign", async (c) => {
   return c.json({ ok: true });
 });
 
-// After-sales correct the customer and production order number.
+// After-sales correct the customer, production order number and contact.
 ticketRoutes.patch("/tickets/:id/customer", async (c) => {
-  const d = await body<{ customerCompany?: string; orderNo?: string }>(c);
+  const d = await body<{ customerCompany?: string; orderNo?: string; contactName?: string; contactInfo?: string }>(c);
   if (await setTicketCustomer(c.env.DB, c.get("user"), c.req.param("id"), d)) afterTicketChange(c, c.req.param("id"), { kind: "product" });
   return c.json({ ok: true });
 });

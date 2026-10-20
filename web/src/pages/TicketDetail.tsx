@@ -1,12 +1,13 @@
-import { FormEvent, useEffect, useState } from "react";
+import { KeyboardEvent, useEffect, useState } from "react";
 import { ChevronLeft, LifeBuoy } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
+import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
-import type { MatchedPi, RepeatInfo, Ticket, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
+import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
+import { TicketActivity } from "../tickets/TicketActivity";
 import { TicketPiPanel } from "../tickets/TicketPiPanel";
 
 type Detail = {
@@ -16,6 +17,7 @@ type Detail = {
   matchedPis: MatchedPi[];
   device: { serialNumber: string; piId: string; piNo: string; linkedPiNo?: string | null; linkedPiNoSnapshot?: string | null } | null;
   repeat: RepeatInfo | null;
+  attachments: TicketAttachment[];
 };
 
 export function TicketDetailPage() {
@@ -26,7 +28,6 @@ export function TicketDetailPage() {
 
   const [data, setData] = useState<Detail | null>(null);
   const [users, setUsers] = useState<User[]>([]);
-  const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -54,19 +55,16 @@ export function TicketDetailPage() {
     }
   }
 
-  async function addNote(e: FormEvent) {
-    e.preventDefault();
-    if (!note.trim()) return;
+  // Saves one customer/contact field edited in place.
+  async function saveCustomerField(field: "customerCompany" | "orderNo" | "contactName" | "contactInfo", value: string) {
     setError("");
-    setBusy(true);
     try {
-      await api.post(`/tickets/${id}/notes`, { note: note.trim() });
-      setNote("");
+      await api.patch(`/tickets/${id}/customer`, { [field]: value });
       await load();
+      return true;
     } catch (err: any) {
-      setError(err.response?.data?.error ?? "Could not add note.");
-    } finally {
-      setBusy(false);
+      setError(err.response?.data?.error ?? "Could not save.");
+      return false;
     }
   }
 
@@ -125,12 +123,12 @@ export function TicketDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <Section title="Customer & request">
-            {canManage && <CustomerEditor ticket={ticket} onChanged={load} />}
+            {canManage && <p className="-mt-2 mb-3 text-xs text-[#8595b6]">Double-click a value to change it. Enter saves, Esc cancels.</p>}
             <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Info label="Company" value={ticket.customerCompany} />
-              <Info label="Production order no." value={ticket.orderNo} />
-              <Info label="Contact name" value={ticket.contactName} />
-              <Info label="Contact details" value={ticket.contactInfo} />
+              <EditableInfo label="Company" value={ticket.customerCompany} lookup="customer" canEdit={canManage} maxLength={200} onSave={(v) => saveCustomerField("customerCompany", v)} />
+              <EditableInfo label="Production order no." value={ticket.orderNo} lookup="order" canEdit={canManage} maxLength={100} onSave={(v) => saveCustomerField("orderNo", v)} />
+              <EditableInfo label="Contact name" value={ticket.contactName} canEdit={canManage} maxLength={200} required onSave={(v) => saveCustomerField("contactName", v)} />
+              <EditableInfo label="Contact details" value={ticket.contactInfo} canEdit={canManage} maxLength={200} required onSave={(v) => saveCustomerField("contactInfo", v)} />
             </dl>
             <div className="border-t pt-4">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Questionnaire</h3>
@@ -143,6 +141,8 @@ export function TicketDetailPage() {
             </div>
           </Section>
 
+          <TicketActivity show="latest" ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
+
           <TicketPiPanel
             ticket={ticket}
             matchedPis={data.matchedPis ?? []}
@@ -152,41 +152,7 @@ export function TicketDetailPage() {
             onChanged={load}
           />
 
-          <Section title="Activity">
-            {updates.length === 0 ? (
-              <EmptyState title="No activity yet" description="Status changes and notes will appear here." />
-            ) : (
-              <ol className="space-y-4">
-                {updates.map((u) => (
-                  <li key={u.id} className="border-l-2 border-[#e1e9f8] pl-4">
-                    <div className="text-xs text-[#8595b6]">
-                      {formatDateTime(u.createdAt)} · {u.actorName ?? "System"}
-                    </div>
-                    {u.kind === "STATUS" ? (
-                      <div className="text-sm text-[#294477]">
-                        Status changed{" "}
-                        <span className="font-medium">{STATUS_LABEL[(u.statusFrom as TicketStatus) ?? "NEW"]}</span> →{" "}
-                        <span className="font-medium">{STATUS_LABEL[(u.statusTo as TicketStatus) ?? "NEW"]}</span>
-                      </div>
-                    ) : (
-                      <div className="whitespace-pre-wrap text-sm text-[#07183f]">{u.note}</div>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            )}
-
-            {canManage && (
-              <form onSubmit={addNote} className="border-t pt-4">
-                <Field label="Add a note">
-                  <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} maxLength={4000} />
-                </Field>
-                <button className="btn-primary mt-3" disabled={busy || !note.trim()}>
-                  Add note
-                </button>
-              </form>
-            )}
-          </Section>
+          <TicketActivity show="history" ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
         </div>
 
         <div className="space-y-6">
@@ -258,64 +224,88 @@ export function TicketDetailPage() {
   );
 }
 
-// Correct the customer and production order number, picking from existing
-// approved PIs and customers; the change is logged on the ticket.
-function CustomerEditor({ ticket, onChanged }: { ticket: Ticket; onChanged: () => Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const [customerCompany, setCustomerCompany] = useState(ticket.customerCompany);
-  const [orderNo, setOrderNo] = useState(ticket.orderNo);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    setCustomerCompany(ticket.customerCompany);
-    setOrderNo(ticket.orderNo);
-  }, [ticket.id, ticket.customerCompany, ticket.orderNo]);
+// A value that turns into an input on double-click (with type-ahead for
+// company and production order); Enter or leaving the field saves, Esc cancels.
+function EditableInfo({
+  label,
+  value,
+  canEdit,
+  lookup,
+  maxLength,
+  required,
+  onSave
+}: {
+  label: string;
+  value?: string | null;
+  canEdit: boolean;
+  lookup?: "customer" | "order";
+  maxLength: number;
+  required?: boolean;
+  onSave: (value: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
 
-  async function save() {
-    setError("");
-    setBusy(true);
-    try {
-      await api.patch(`/tickets/${ticket.id}/customer`, { customerCompany, orderNo });
-      setOpen(false);
-      await onChanged();
-    } catch (err: any) {
-      setError(err.response?.data?.error ?? "Could not save.");
-    } finally {
-      setBusy(false);
+  function start() {
+    if (!canEdit) return;
+    setDraft(value ?? "");
+    setEditing(true);
+  }
+  async function commit() {
+    if (saving) return;
+    const next = draft.trim();
+    if (next === (value ?? "") || (required && !next)) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    const ok = await onSave(next);
+    setSaving(false);
+    if (ok) setEditing(false);
+  }
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // A suggestion list handles its own Enter (picking an item).
+    if (e.key === "Enter" && !e.defaultPrevented) {
+      e.preventDefault();
+      void commit();
+    } else if (e.key === "Escape") {
+      setEditing(false);
     }
   }
 
-  if (!open) {
+  if (!editing) {
     return (
-      <div className="mb-3 flex justify-end">
-        <button type="button" className="text-sm font-medium text-primary hover:underline" onClick={() => setOpen(true)}>
-          Edit customer & production order
-        </button>
+      <div>
+        <dt className="text-xs uppercase tracking-wide text-[#8595b6]">{label}</dt>
+        <dd
+          className={`-mx-1 mt-0.5 rounded px-1 text-sm text-[#07183f] ${canEdit ? "cursor-text hover:bg-[#f1f5ff]" : ""}`}
+          title={canEdit ? "Double-click to edit" : undefined}
+          onDoubleClick={start}
+        >
+          {value || "—"}
+        </dd>
       </div>
     );
   }
   return (
-    <div className="mb-4 space-y-3 rounded-lg border border-[#e3ecff] bg-[#f8fbff] p-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Customer company">
-          <LookupInput kind="customer" value={customerCompany} onChange={setCustomerCompany} maxLength={200} />
-        </Field>
-        <Field label="Production order no.">
+    <div onKeyDown={onKeyDown} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && void commit()}>
+      <dt className="text-xs uppercase tracking-wide text-[#8595b6]">{label}</dt>
+      <dd className="mt-0.5">
+        {lookup ? (
           <LookupInput
-            kind="order"
-            value={orderNo}
-            onChange={setOrderNo}
-            onPick={(m) => m.customerCompany && setCustomerCompany(m.customerCompany)}
-            maxLength={100}
-            placeholder="Type part of the order, PI no. or customer"
+            kind={lookup}
+            value={draft}
+            onChange={setDraft}
+            maxLength={maxLength}
+            disabled={saving}
+            autoFocus
+            placeholder={lookup === "order" ? "Type part of the order, PI no. or customer" : undefined}
           />
-        </Field>
-      </div>
-      {error && <div className="text-sm text-red-700">{error}</div>}
-      <div className="flex gap-2">
-        <button type="button" className="btn-primary" disabled={busy} onClick={save}>Save</button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
-      </div>
+        ) : (
+          <input autoFocus className="w-full" value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={maxLength} disabled={saving} />
+        )}
+      </dd>
     </div>
   );
 }

@@ -136,16 +136,70 @@ export async function changeTicketStatus(db: D1Database, user: AppUser, ticketId
   return { from: ticket.status, to };
 }
 
-export async function addTicketNote(db: D1Database, user: AppUser, ticketId: string, rawNote: string) {
+// A progress update, or a follow-up note added to an earlier update
+// (`parentId`). The text may be empty only when files are attached next.
+export async function addTicketNote(
+  db: D1Database,
+  user: AppUser,
+  ticketId: string,
+  rawNote: string,
+  opts: { parentId?: string | null; withAttachments?: boolean } = {}
+): Promise<string> {
   if (!canWriteNote(user)) throw new TicketError("Forbidden", 403);
   const note = String(rawNote ?? "").trim();
-  if (!note) throw new TicketError("Note is required", 400);
+  if (!note && !opts.withAttachments) throw new TicketError("Note is required", 400);
   const ticket = await first<{ id: string }>(db, "SELECT id FROM tickets WHERE id=?", ticketId);
   if (!ticket) throw new TicketError("Not found", 404);
+  let parentId: string | null = null;
+  if (opts.parentId) {
+    const parent = await first<{ id: string; parentId: string | null }>(
+      db,
+      "SELECT id, parentId FROM ticketUpdates WHERE id=? AND ticketId=? AND kind='NOTE' AND isSystem=0",
+      opts.parentId,
+      ticket.id
+    );
+    if (!parent) throw new TicketError("That update no longer exists.", 400);
+    parentId = parent.parentId ?? parent.id; // follow-ups stay one level deep
+  }
+  const updateId = id("tup");
   await db.batch([
-    db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)").bind(id("tup"), ticket.id, user.id, note.slice(0, 4000)),
+    db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, parentId) VALUES (?, ?, ?, 'NOTE', ?, ?)").bind(updateId, ticket.id, user.id, note.slice(0, 4000), parentId),
     db.prepare("UPDATE tickets SET updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticket.id)
   ]);
+  return updateId;
+}
+
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+// A picture or file on an update the user wrote; stored in R2 under the ticket.
+export async function addTicketAttachment(
+  env: Env,
+  user: AppUser,
+  ticketId: string,
+  updateId: string,
+  file: { name: string; contentType: string; body: ArrayBuffer }
+) {
+  if (!canWriteNote(user)) throw new TicketError("Forbidden", 403);
+  const update = await first<{ id: string; actorId: string }>(
+    env.DB,
+    "SELECT id, actorId FROM ticketUpdates WHERE id=? AND ticketId=? AND kind='NOTE' AND isSystem=0",
+    updateId,
+    ticketId
+  );
+  if (!update) throw new TicketError("That update no longer exists.", 400);
+  if (update.actorId !== user.id && user.role !== "ADMIN") throw new TicketError("You can only attach files to your own updates.", 403);
+  if (!file.body.byteLength) throw new TicketError("The file is empty.", 400);
+  if (file.body.byteLength > MAX_ATTACHMENT_BYTES) throw new TicketError("Files can be at most 20 MB.", 400);
+  const fileName = file.name.replace(/[\\/\r\n]/g, "_").trim().slice(0, 200) || "file";
+  const attachmentId = id("att");
+  const r2Key = `tickets/${ticketId}/${attachmentId}`;
+  await env.FILES.put(r2Key, file.body, { httpMetadata: { contentType: file.contentType || "application/octet-stream" } });
+  await env.DB.prepare(
+    "INSERT INTO ticketAttachments (id, ticketId, updateId, fileName, contentType, size, r2Key, uploadedById) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  )
+    .bind(attachmentId, ticketId, updateId, fileName, file.contentType || "application/octet-stream", file.body.byteLength, r2Key, user.id)
+    .run();
+  return { id: attachmentId, fileName, contentType: file.contentType, size: file.body.byteLength };
 }
 
 // "Take" a ticket: become its after-sales owner and start work on it.
@@ -199,7 +253,7 @@ export async function assignTicket(
     db.prepare(`UPDATE tickets SET ${changes.map((ch) => `${ch.column}=?`).join(", ")}, updatedAt=CURRENT_TIMESTAMP WHERE id=?`).bind(...changes.map((ch) => ch.to), ticket.id),
     ...changes.map((ch) =>
       db
-        .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)")
+        .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
         .bind(id("tup"), ticket.id, user.id, `${ch.label}: ${name(ch.from)} → ${name(ch.to)} (changed by ${user.displayName})`)
     )
   ]);
@@ -210,21 +264,40 @@ export async function assignTicket(
   };
 }
 
-// Correct the customer and production order number (e.g. picked from the
-// lookup). After-sales/admin; each change is written to the timeline.
-export async function setTicketCustomer(db: D1Database, user: AppUser, ticketId: string, d: { customerCompany?: unknown; orderNo?: unknown }) {
+const CUSTOMER_FIELDS = [
+  { key: "customerCompany", label: "Customer", max: 200, required: false },
+  { key: "orderNo", label: "Production order no.", max: 100, required: false },
+  { key: "contactName", label: "Contact name", max: 200, required: true },
+  { key: "contactInfo", label: "Contact details", max: 200, required: true }
+] as const;
+type CustomerField = (typeof CUSTOMER_FIELDS)[number]["key"];
+
+// Correct the customer, production order number and contact (edited in place
+// on the ticket page). After-sales/admin; each change goes on the timeline.
+export async function setTicketCustomer(db: D1Database, user: AppUser, ticketId: string, d: Partial<Record<CustomerField, unknown>>) {
   if (!canConfirmFault(user)) throw new TicketError("Forbidden", 403);
-  const ticket = await first<{ id: string; customerCompany: string; orderNo: string }>(db, "SELECT id, customerCompany, orderNo FROM tickets WHERE id=?", ticketId);
+  const ticket = await first<Record<CustomerField, string> & { id: string }>(
+    db,
+    "SELECT id, customerCompany, orderNo, contactName, contactInfo FROM tickets WHERE id=?",
+    ticketId
+  );
   if (!ticket) throw new TicketError("Not found", 404);
-  const customerCompany = d.customerCompany === undefined ? ticket.customerCompany : String(d.customerCompany ?? "").trim().slice(0, 200);
-  const orderNo = d.orderNo === undefined ? ticket.orderNo : String(d.orderNo ?? "").trim().slice(0, 100);
+  const next = { ...ticket };
   const notes: string[] = [];
-  if (customerCompany !== ticket.customerCompany) notes.push(`Customer: ${ticket.customerCompany || "(none)"} → ${customerCompany || "(none)"}`);
-  if (orderNo !== ticket.orderNo) notes.push(`Production order no.: ${ticket.orderNo || "(none)"} → ${orderNo || "(none)"}`);
+  for (const f of CUSTOMER_FIELDS) {
+    if (d[f.key] === undefined) continue;
+    const value = String(d[f.key] ?? "").trim().slice(0, f.max);
+    if (f.required && !value) throw new TicketError(`${f.label} cannot be empty.`, 400);
+    if (value === ticket[f.key]) continue;
+    next[f.key] = value;
+    notes.push(`${f.label}: ${ticket[f.key] || "(none)"} → ${value || "(none)"}`);
+  }
   if (!notes.length) return false;
   await db.batch([
-    db.prepare("UPDATE tickets SET customerCompany=?, orderNo=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(customerCompany, orderNo, ticket.id),
-    ...notes.map((note) => db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)").bind(id("tup"), ticket.id, user.id, note))
+    db
+      .prepare("UPDATE tickets SET customerCompany=?, orderNo=?, contactName=?, contactInfo=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
+      .bind(next.customerCompany, next.orderNo, next.contactName, next.contactInfo, ticket.id),
+    ...notes.map((note) => db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)").bind(id("tup"), ticket.id, user.id, note))
   ]);
   return true;
 }
@@ -257,7 +330,7 @@ export async function setTicketType(
   if (ticketType !== ticket.ticketType) {
     statements.push(
       db
-        .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)")
+        .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
         .bind(id("tup"), ticket.id, user.id, `Ticket type: ${TICKET_TYPE_TEXT[ticketType]}`)
     );
   }
@@ -277,7 +350,7 @@ export async function confirmTicketFault(db: D1Database, user: AppUser, ticketId
       .prepare("UPDATE tickets SET faultType=?, ticketType='FAULT', faultConfirmedById=?, faultConfirmedAt=CURRENT_TIMESTAMP, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
       .bind(faultType, user.id, ticket.id),
     db
-      .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)")
+      .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
       .bind(id("tup"), ticket.id, user.id, `Fault type confirmed: ${faultType}`)
   ]);
   return { productId: ticket.productId, faultType };

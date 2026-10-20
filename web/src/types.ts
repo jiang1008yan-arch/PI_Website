@@ -200,6 +200,19 @@ export type TicketUpdate = {
   statusFrom?: string | null;
   statusTo?: string | null;
   note?: string | null;
+  // 1 for lines the system writes (type, owner, fault, customer changes).
+  isSystem?: number;
+  // A follow-up note belongs to the update it adds to.
+  parentId?: string | null;
+  createdAt: string;
+};
+
+export type TicketAttachment = {
+  id: string;
+  updateId: string;
+  fileName: string;
+  contentType: string;
+  size: number;
   createdAt: string;
 };
 
