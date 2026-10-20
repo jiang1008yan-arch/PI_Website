@@ -141,7 +141,7 @@ export function TicketDetailPage() {
             </div>
           </Section>
 
-          <TicketActivity show="latest" ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
+          <TicketActivity ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
 
           <TicketPiPanel
             ticket={ticket}
@@ -152,7 +152,6 @@ export function TicketDetailPage() {
             onChanged={load}
           />
 
-          <TicketActivity show="history" ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
         </div>
 
         <div className="space-y-6">

@@ -1,7 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Download, FileText, Paperclip, X } from "lucide-react";
 import { api } from "../api/client";
-import { EmptyState, Section } from "../components/Form";
+import { Section } from "../components/Form";
 import type { Ticket, TicketAttachment, TicketStatus, TicketUpdate } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, formatDateTime } from "./ticketShared";
 
@@ -162,6 +162,7 @@ function Composer({ ticket, latestId, onChanged }: { ticket: Ticket; latestId: s
     <div className="space-y-3 border-t pt-4">
       <textarea
         rows={3}
+        className="w-full"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         maxLength={4000}
@@ -200,24 +201,24 @@ function Composer({ ticket, latestId, onChanged }: { ticket: Ticket; latestId: s
   );
 }
 
-// show="latest": where the ticket stands and the most recent progress update
-// (with its pictures, files and follow-up notes), and room to add to it.
-// show="history": every status change and note, oldest first.
+// One place for where the ticket stands: the current status and the most
+// recent progress update (with its pictures, files and follow-up notes), room
+// to add to it, and below it everything earlier, newest first — each entry
+// shown once.
 export function TicketActivity({
-  show,
   ticket,
   updates,
   attachments,
   canManage,
   onChanged
 }: {
-  show: "latest" | "history";
   ticket: Ticket;
   updates: TicketUpdate[];
   attachments: TicketAttachment[];
   canManage: boolean;
   onChanged: () => Promise<void>;
 }) {
+  const [showAll, setShowAll] = useState(false);
   const filesOf = useMemo(() => {
     const map = new Map<string, TicketAttachment[]>();
     for (const a of attachments) map.set(a.updateId, [...(map.get(a.updateId) ?? []), a]);
@@ -230,78 +231,82 @@ export function TicketActivity({
   }, [updates]);
   const topLevel = updates.filter((u) => !u.parentId);
   const latest = [...topLevel].reverse().find((u) => u.kind === "NOTE" && !u.isSystem) ?? null;
-
-  if (show === "latest") {
-    return (
-      <Section title="Latest status">
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE[ticket.status]}`}>{STATUS_LABEL[ticket.status]}</span>
-            {ticket.assignedServiceName && <span className="text-sm text-[#63749b]">Owner: {ticket.assignedServiceName}</span>}
-          </div>
-          {latest ? (
-            <div className="rounded-lg border border-[#e3ecff] bg-[#f8fbff] p-4">
-              <NoteBody ticketId={ticket.id} update={latest} attachments={filesOf(latest.id)} />
-              {followUps(latest.id).length > 0 && (
-                <ol className="mt-3 space-y-3 border-l-2 border-[#dbe6fb] pl-4">
-                  {followUps(latest.id).map((f) => (
-                    <li key={f.id}>
-                      <NoteBody ticketId={ticket.id} update={f} attachments={filesOf(f.id)} />
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          ) : (
-            <p className="text-sm text-[#63749b]">No progress update yet.</p>
-          )}
-          {canManage && <Composer ticket={ticket} latestId={latest?.id ?? null} onChanged={onChanged} />}
-        </div>
-      </Section>
-    );
-  }
+  const earlier = topLevel.filter((u) => u.id !== latest?.id).reverse();
+  const EARLIER_SHOWN = 5;
+  const visible = showAll ? earlier : earlier.slice(0, EARLIER_SHOWN);
 
   return (
-      <Section title="Activity">
-        {topLevel.length === 0 ? (
-          <EmptyState title="No activity yet" description="Status changes and notes will appear here." />
+    <Section title="Status & activity">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE[ticket.status]}`}>{STATUS_LABEL[ticket.status]}</span>
+          {ticket.assignedServiceName && <span className="text-sm text-[#63749b]">Owner: {ticket.assignedServiceName}</span>}
+        </div>
+        {latest ? (
+          <div className="rounded-lg border border-[#e3ecff] bg-[#f8fbff] p-4">
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">Latest update</div>
+            <NoteBody ticketId={ticket.id} update={latest} attachments={filesOf(latest.id)} />
+            {followUps(latest.id).length > 0 && (
+              <ol className="mt-3 space-y-3 border-l-2 border-[#dbe6fb] pl-4">
+                {followUps(latest.id).map((f) => (
+                  <li key={f.id}>
+                    <NoteBody ticketId={ticket.id} update={f} attachments={filesOf(f.id)} />
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
         ) : (
-          <ol className="space-y-4">
-            {topLevel.map((u) => (
-              <li key={u.id} className="border-l-2 border-[#e1e9f8] pl-4">
-                {u.kind === "STATUS" ? (
-                  <>
-                    <div className="text-xs text-[#8595b6]">
-                      {formatDateTime(u.createdAt)} · {u.actorName ?? "System"}
-                    </div>
-                    <div className="text-sm text-[#294477]">
-                      Status changed <span className="font-medium">{STATUS_LABEL[(u.statusFrom as TicketStatus) ?? "NEW"]}</span> →{" "}
-                      <span className="font-medium">{STATUS_LABEL[(u.statusTo as TicketStatus) ?? "NEW"]}</span>
-                    </div>
-                  </>
-                ) : u.isSystem ? (
-                  <>
-                    <div className="text-xs text-[#8595b6]">
-                      {formatDateTime(u.createdAt)} · {u.actorName ?? "System"}
-                    </div>
-                    <div className="text-sm italic text-[#63749b]">{u.note}</div>
-                  </>
-                ) : (
-                  <NoteBody ticketId={ticket.id} update={u} attachments={filesOf(u.id)} />
-                )}
-                {followUps(u.id).length > 0 && (
-                  <ol className="mt-2 space-y-2 border-l-2 border-[#eef3fd] pl-4">
-                    {followUps(u.id).map((f) => (
-                      <li key={f.id}>
-                        <NoteBody ticketId={ticket.id} update={f} attachments={filesOf(f.id)} />
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </li>
-            ))}
-          </ol>
+          <p className="text-sm text-[#63749b]">No progress update yet.</p>
         )}
-      </Section>
+        {canManage && <Composer ticket={ticket} latestId={latest?.id ?? null} onChanged={onChanged} />}
+
+        {earlier.length > 0 && (
+          <div className="border-t pt-4">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#8595b6]">Earlier activity</h3>
+            <ol className="space-y-4">
+              {visible.map((u) => (
+                <li key={u.id} className="border-l-2 border-[#e1e9f8] pl-4">
+                  {u.kind === "STATUS" ? (
+                    <>
+                      <div className="text-xs text-[#8595b6]">
+                        {formatDateTime(u.createdAt)} · {u.actorName ?? "System"}
+                      </div>
+                      <div className="text-sm text-[#294477]">
+                        Status changed <span className="font-medium">{STATUS_LABEL[(u.statusFrom as TicketStatus) ?? "NEW"]}</span> →{" "}
+                        <span className="font-medium">{STATUS_LABEL[(u.statusTo as TicketStatus) ?? "NEW"]}</span>
+                      </div>
+                    </>
+                  ) : u.isSystem ? (
+                    <>
+                      <div className="text-xs text-[#8595b6]">
+                        {formatDateTime(u.createdAt)} · {u.actorName ?? "System"}
+                      </div>
+                      <div className="text-sm italic text-[#63749b]">{u.note}</div>
+                    </>
+                  ) : (
+                    <NoteBody ticketId={ticket.id} update={u} attachments={filesOf(u.id)} />
+                  )}
+                  {followUps(u.id).length > 0 && (
+                    <ol className="mt-2 space-y-2 border-l-2 border-[#eef3fd] pl-4">
+                      {followUps(u.id).map((f) => (
+                        <li key={f.id}>
+                          <NoteBody ticketId={ticket.id} update={f} attachments={filesOf(f.id)} />
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </li>
+              ))}
+            </ol>
+            {earlier.length > EARLIER_SHOWN && (
+              <button type="button" className="mt-3 text-sm font-medium text-primary hover:underline" onClick={() => setShowAll((v) => !v)}>
+                {showAll ? "Show fewer" : `Show all ${earlier.length} entries`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }
