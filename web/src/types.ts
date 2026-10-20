@@ -234,7 +234,6 @@ export type TicketLink = {
 export type TicketStats = {
   byStatus: { status: string; n: number }[];
   byProduct: { productId: string; name: string; n: number }[];
-  problemType: { label: string; counts: Record<string, number> } | null;
 };
 
 export type PublicProduct = { id: string; code: string; nameEn: string; nameZh: string };

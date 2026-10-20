@@ -45,8 +45,8 @@ function Bars({ rows }: { rows: { label: string; n: number }[] }) {
   );
 }
 
-// Fault statistics: confirmed faults by product (the basis for repeat-fault
-// alerts), plus what customers reported and tickets per product for reference.
+// Fault statistics: confirmed faults by product and model (the basis for
+// repeat-fault alerts), plus tickets per product for reference.
 export function FaultStatsPanel() {
   const [stats, setStats] = useState<TicketStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +62,6 @@ export function FaultStatsPanel() {
   if (!stats) return <EmptyState title="No statistics" description="Statistics are unavailable." />;
 
   const productRows = stats.byProduct.map((r) => ({ label: r.name, n: r.n }));
-  const problemRows = stats.problemType ? Object.entries(stats.problemType.counts).map(([label, n]) => ({ label, n })) : [];
 
   return (
     <div className="space-y-8">
@@ -70,17 +69,6 @@ export function FaultStatsPanel() {
         <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Confirmed faults by product and model</h3>
         <p className="mb-3 text-xs text-[#8595b6]">Counts only fault types confirmed by after-sales. Click a row to see its tickets.</p>
         <FaultRankingList />
-      </div>
-
-      <div>
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">
-          {stats.problemType ? `Customer-reported: ${stats.problemType.label}` : "Customer-reported problem type"}
-        </h3>
-        {stats.problemType ? (
-          <Bars rows={problemRows} />
-        ) : (
-          <EmptyState title="No problem-type question" description="An admin can add a dropdown question to the ticket questionnaire to chart what customers report." />
-        )}
       </div>
 
       <div>
