@@ -57,7 +57,7 @@
 15. **设备 SN（只登记）**：只读详情页「设备 SN」区块，SERVICE/ADMIN 逐个添加或粘贴多行；SN 全局唯一，重复提示不覆盖；可按 SN 搜索。设备状态/告警以后再做。
 16. **工单产品**：售后从匹配 PI 的产品行中选一个（带出目录产品 + 具体型号 `generatedModelFor`），有 SN 也记上。
 17. **故障类型**：工单新增售后确认的「故障类型」，清单由 ADMIN/SERVICE 维护（`appOptions`）；AI 给建议、售后确认；统计只用确认值，客户问卷自选仅作参考。
-18. **统计**：「目录产品 × 故障类型」矩阵，可下钻到具体型号和工单列表；取代"第一个下拉题"的隐式统计。
+18. **统计**：排行列表，一行一条「产品 · 型号 · 故障类型 · 次数 · 最近一次 · 重复标记」，可按时间段 / 故障类型 / 产品型号筛选，点一行展开工单；取代"第一个下拉题"的隐式统计。（2026-10-20 由矩阵改为列表，因为矩阵看不到型号、不好读。）重复标记仍按产品判定。
 19. **重复故障**：确认故障类型时显示"该产品近 N 天同类故障已 M 次"及相关工单；达阈值时飞书内部群提醒。N 默认 90、阈值默认 3，ADMIN 可配。
 20. 不做研发/产品经理转派；售后直接处理。
 20a. **位置调整（2026-10-19）**：
@@ -114,17 +114,17 @@
 ### B. 售后反查 + SN + 故障统计
 
 - 数据：`devices`（serialNumber UNIQUE、piId）；`tickets` 加 `piId`、`piItemId`、`serialNumber`、`faultType`、`faultConfirmedById`、`faultConfirmedAt`；故障类型清单与重复阈值放 `appOptions`。
-- `functions/lib/ticketAccess.ts` 加 `canConfirmFault`、`canRegisterSn`；纯函数 `faultStats`（矩阵、重复次数，入参含 `now`）。
-- 路由：`POST/DELETE /pi/:id/devices`；`PATCH /tickets/:id/product`、`PATCH /tickets/:id/fault`；`GET /tickets/stats` 改为矩阵 + 下钻；按生产令号匹配 PI。
-- 前端：工单详情关联 PI 卡片、产品行、故障类型、重复提示；统计矩阵；文案 Order → Production Order No.；首页「已批准 PI 查询」；详情页 SN 区块。
+- `functions/lib/ticketAccess.ts` 加 `canConfirmFault`、`canRegisterSn`；纯函数 `faultStats`（排行列表、重复次数，入参含 `now`）。
+- 路由：`POST/DELETE /pi/:id/devices`；`PATCH /tickets/:id/product`、`PATCH /tickets/:id/fault`；`GET /tickets/fault-ranking?days=` 排行列表；按生产令号匹配 PI。
+- 前端：工单详情关联 PI 卡片、产品行、故障类型、重复提示；故障排行列表；文案 Order → Production Order No.；首页「已批准 PI 查询」；详情页 SN 区块。
 
 ### C. 飞书机器人
 
-- 飞书客户端（token 缓存、发/更新卡片、读消息、签名校验，`fetch` 可注入）；AI 分诊（Claude API，失败降级为空建议）。
+- 飞书客户端（token 缓存、发/更新卡片、读消息、签名校验，`fetch` 可注入）；AI 分诊（通义千问 qwen-plus，百炼 OpenAI 兼容接口，失败降级为空建议）。
 - 路由 `/api/feishu/events`（URL 校验、消息快捷操作、@机器人）、`/api/feishu/card`（按事件 id 去重）、`/api/feishu/bind`；JWT 白名单加 `/api/feishu/`。
 - `users` 加 `feishuOpenId`；`tickets` 加 `feishuCardMessageId`、`feishuChatId`。
 - 推送走 `integrationOutbox`（eventType 复用 `TICKET`）；`scheduled.ts` 补消费者（重试、`attempts/lastError`）。
-- 新密钥：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN`、`FEISHU_ENCRYPT_KEY`、`FEISHU_SERVICE_CHAT_ID`、`ANTHROPIC_API_KEY`。
+- 新密钥：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN`、`FEISHU_ENCRYPT_KEY`、`FEISHU_SERVICE_CHAT_ID`、`DASHSCOPE_API_KEY`（可选 `QWEN_MODEL`）。
 
 ---
 
@@ -136,7 +136,7 @@
 | L2 API + D1 | 路由 + 真实 SQL：审计记录、接口层权限、事务 | vitest + Miniflare 3 |
 | L3 迁移 | 生产脱敏副本上跑 users 重建迁移，核对行数/角色/哈希/外键 | 预发布 D1 |
 | L4 浏览器验收 | 按角色走完整流程 | `wrangler pages dev` + 浏览器 |
-| L5 外部替身 | 假飞书 API、假 Claude API、固定时钟 | 注入 `fetch` / `now` |
+| L5 外部替身 | 假飞书 API、假千问 API、固定时钟 | 注入 `fetch` / `now` |
 | L6 用户试用 | 售前/商务/售后/销售各一人试用 1–2 周 | 预发布环境 |
 
 关键用例：
@@ -144,6 +144,6 @@
 - COMMERCE 不能改、不能售前确认；ADMIN 不能商务批准；SERVICE 只读已批准 ZH、不能导出、看不到 EN。
 - 修订：发起后列表和售后读到旧内容；高亮正确；放弃完全还原；批准后 Rev+1。
 - 保留：固定时钟下 3 年减一天不删、超过删；修订中不删；草稿 3 天清理照旧。
-- 已批准列表分页/搜索（PI 号、生产令号、客户、SN）；SN 重复处理；工单按生产令号匹配；统计矩阵与重复次数。
+- 已批准列表分页/搜索（PI 号、生产令号、客户、SN）；SN 重复处理；工单按生产令号匹配；故障排行列表与重复次数。
 - 飞书：事件/卡片回调 → 工单时间线；未绑定或无权限被拒；重复投递只生效一次；outbox 失败重试；外部群只收回执与已解决。
 - 飞书端到端：飞书测试企业 + 外部测试群走完"转为工单 → 私信确认 → 内部卡片 → 卡片改状态 → 网页时间线 → 外部群已解决"。

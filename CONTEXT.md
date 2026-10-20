@@ -28,7 +28,7 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Ticket** — one customer after-sales issue. Linked to an approved ZH PI through its production order number.
 - **Device** — one physical unit delivered under a PI, identified by its **serial number (SN)**. An SN belongs to exactly one PI.
 - **Fault type** — the after-sales-confirmed classification of what went wrong, chosen from a maintained list. Statistics count only confirmed fault types; the customer's self-reported problem type is reference only. _Avoid_: problem type (for the confirmed value).
-- **Repeat fault** — the same fault type on the same catalog product reaching a configured count within a configured window.
+- **Repeat fault** — the same fault type on the same catalog product reaching a configured count within a configured window. Judged per product across all its models, even though statistics list each model separately.
 
 ## PI status state machine
 

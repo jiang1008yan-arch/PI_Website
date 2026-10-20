@@ -26,7 +26,9 @@ npx wrangler pages secret put FEISHU_APP_ID
 ```
 
 Set the same way: `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY`, `FEISHU_SERVICE_CHAT_ID`
-(the internal after-sales group's `chat_id`, `oc_…`), and optionally `ANTHROPIC_API_KEY` for AI suggestions.
+(the internal after-sales group's `chat_id`, `oc_…`), and optionally `DASHSCOPE_API_KEY` for AI suggestions
+(Qwen via Alibaba Cloud Model Studio / 阿里云百炼: create an API key in the console; the default model is `qwen-plus`,
+override it with the plain variable `QWEN_MODEL`). AI runs only when someone presses **创建工单** on a prompt card.
 Set `APP_BASE_URL` (e.g. `https://portal.example.com`) as a plain variable — links in bot messages use it.
 
 The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_CHAT_ID` are all set.
@@ -64,7 +66,7 @@ database), run the portal locally and expose it with a temporary Cloudflare tunn
    FEISHU_ENCRYPT_KEY=...
    FEISHU_SERVICE_CHAT_ID=oc_...
    APP_BASE_URL=https://<your-tunnel>.trycloudflare.com
-   ANTHROPIC_API_KEY=...   (optional — AI suggestions)
+   DASHSCOPE_API_KEY=sk-...   (optional — AI suggestions from Qwen)
    ```
    The server must already have the Encrypt Key and Verification Token **before** you save the URLs in Feishu,
    because Feishu checks the URL immediately.

@@ -10,4 +10,4 @@ Customers talk to us in Feishu external groups and after-sales staff live in Fei
 
 ## Consequences
 
-Customers without Feishu (WeChat/WhatsApp) cannot use the group flow; the public ticket form link stays as the fallback. Each Feishu user must bind to a system account before their card actions count.
+Customers without Feishu (WeChat/WhatsApp) cannot use the group flow; the public ticket form link stays as the fallback. Each Feishu user must bind to a system account before their card actions count. AI suggestions use Qwen (`qwen-plus` on Alibaba Cloud Model Studio, reachable from mainland China) and are requested only when staff press 创建工单, so ordinary chat costs nothing.
