@@ -10,6 +10,11 @@ export type Env = {
   // 需求2 — Cloudflare Turnstile secret for the public ticket form. When unset
   // (e.g. local dev) verification is skipped; in production it must be set.
   TURNSTILE_SECRET?: string;
+  // Worker bindings (wrangler.toml): SPA static assets, the `app-jobs` queue
+  // producer (Feishu bot jobs), and Workers AI.
+  ASSETS: Fetcher;
+  JOBS: Queue;
+  AI: Ai;
 };
 
 export type AppUser = {

@@ -1,8 +1,8 @@
 name: Apply D1 migrations
 
 # Why this exists:
-# Cloudflare Pages auto-deploys CODE on every push to main, but it does NOT
-# apply D1 database migrations. That gap let the schema drift behind the code
+# Deploying the Worker (Workers Builds on push to main, or `npm run deploy`)
+# ships CODE only; it does NOT apply D1 database migrations. That gap let the schema drift behind the code
 # (e.g. a new column referenced by the Workers functions never got added to the
 # live D1), which surfaced as 500s and "the buttons do nothing". This workflow
 # closes the gap: whenever a migration file lands on main, CI applies any

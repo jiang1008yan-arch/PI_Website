@@ -6,10 +6,10 @@
     "web"
   ],
   "scripts": {
-    "dev:api": "wrangler pages dev web/dist --compatibility-date=2025-04-01 --port 8788",
+    "dev": "wrangler dev",
     "dev:web": "npm --workspace web run dev",
     "build": "npm --workspace web run build",
-    "deploy": "npm run build && wrangler pages deploy web/dist",
+    "deploy": "npm run build && wrangler deploy",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply sales-portal-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply sales-portal-db --remote",

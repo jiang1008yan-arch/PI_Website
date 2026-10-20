@@ -16,7 +16,9 @@ import { ticketLinkRoutes } from "./routes/ticketLinks";
 import { ticketFieldRoutes } from "./routes/ticketFields";
 import { publicTicketRoutes } from "./routes/publicTickets";
 
-const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
+// Exported for the Worker entry (src/worker.ts); onRequest below keeps the old
+// Pages project serving until the custom domain has moved to the Worker.
+export const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
 
 app.use("*", cors());
 app.use("*", async (c, next) => {
