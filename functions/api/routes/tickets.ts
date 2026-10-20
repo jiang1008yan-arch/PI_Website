@@ -1,6 +1,6 @@
 import { all, first, id } from "../../lib/db";
 import { normalizeSerial } from "../../lib/devices";
-import { buildFaultMatrix, isRepeatFault, repeatSettings, repeatWindowStart, type FaultCountRow } from "../../lib/faultStats";
+import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
 import {
   canAssignSalesSide,
   canAssignServiceSide,
@@ -141,28 +141,39 @@ ticketRoutes.get("/tickets/stats", async (c) => {
     for (const r of rows) counts[r.v] = r.n;
     problemType = { label: problemField.label, counts };
   }
-  const faultRows = await all<FaultCountRow>(
-    c.env.DB,
-    `SELECT t.productId AS productId, COALESCE(p.nameEn, '(no product)') AS productName, t.faultType AS faultType, COUNT(*) AS n
-     FROM tickets t LEFT JOIN products p ON p.id = t.productId
-     WHERE t.faultType IS NOT NULL AND t.faultType <> ''
-     GROUP BY t.productId, t.faultType`
-  );
-  return c.json({ byStatus, byProduct, problemType, faultMatrix: buildFaultMatrix(faultRows) });
+  return c.json({ byStatus, byProduct, problemType });
 });
 
-// Statistics drill-down for one product × fault cell: which concrete models.
-ticketRoutes.get("/tickets/fault-breakdown", async (c) => {
-  const productId = c.req.query("productId") ?? "";
-  const faultType = c.req.query("faultType") ?? "";
-  const byModel = await all(
-    c.env.DB,
-    `SELECT COALESCE(NULLIF(productModel, ''), '(model not recorded)') AS model, COUNT(*) AS n
-     FROM tickets WHERE productId IS ? AND faultType = ? GROUP BY model ORDER BY n DESC`,
-    productId || null,
-    faultType
-  );
-  return c.json({ byModel });
+// Confirmed faults ranked by product · model · fault type over a period
+// (?days=30|90|365|all, default the repeat window), each row flagged when its
+// product has reached the repeat-fault threshold for that fault.
+ticketRoutes.get("/tickets/fault-ranking", async (c) => {
+  const settings = await loadRepeatSettings(c.env.DB);
+  const daysParam = c.req.query("days");
+  const days = daysParam === "all" ? null : Number.isInteger(Number(daysParam)) && Number(daysParam) > 0 ? Number(daysParam) : settings.windowDays;
+  const now = new Date();
+  const [tickets, windowCounts] = await Promise.all([
+    all<FaultTicket>(
+      c.env.DB,
+      `SELECT t.id, t.ticketNo, t.customerCompany, t.createdAt, t.productId, p.nameEn AS productName, t.productModel, t.faultType
+       FROM tickets t LEFT JOIN products p ON p.id = t.productId
+       WHERE t.faultType IS NOT NULL AND t.faultType <> '' AND t.createdAt >= ?`,
+      days === null ? "" : repeatWindowStart(now, days)
+    ),
+    all<ProductFaultCount>(
+      c.env.DB,
+      `SELECT productId, faultType, COUNT(*) AS n FROM tickets
+       WHERE faultType IS NOT NULL AND faultType <> '' AND createdAt >= ?
+       GROUP BY productId, faultType`,
+      repeatWindowStart(now, settings.windowDays)
+    )
+  ]);
+  return c.json({
+    rows: buildFaultRanking(tickets, windowCounts, settings),
+    days: days ?? "all",
+    windowDays: settings.windowDays,
+    threshold: settings.threshold
+  });
 });
 
 ticketRoutes.get("/tickets/:id", async (c) => {

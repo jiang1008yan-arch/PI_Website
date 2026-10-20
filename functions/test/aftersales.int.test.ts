@@ -108,7 +108,7 @@ describe("fault types and statistics", () => {
     expect((await h.request("ADMIN", "PUT", "/options/repeatFaultThreshold", { values: ["2"] })).status).toBe(200);
   });
 
-  it("flags a repeat fault at the threshold and builds the product × fault matrix", async () => {
+  it("flags a repeat fault at the threshold and ranks faults by product · model", async () => {
     const ids = [await ticket("PO-1"), await ticket("PO-2"), await ticket("PO-3"), await ticket("PO-4")];
     await h.request("SERVICE", "PATCH", `/tickets/${ids[0]}/fault`, { faultType: "Offline" });
     await h.request("SERVICE", "PATCH", `/tickets/${ids[1]}/fault`, { faultType: "Offline" });
@@ -121,17 +121,32 @@ describe("fault types and statistics", () => {
     await h.db.prepare("UPDATE tickets SET createdAt = '2020-01-01 00:00:00' WHERE id = ?").bind(ids[0]).run();
     expect((await h.request("SERVICE", "GET", `/tickets/${ids[1]}`)).body.repeat).toMatchObject({ count: 2, isRepeat: false });
 
-    const stats = await h.request("SALES", "GET", "/tickets/stats");
-    expect(stats.body.faultMatrix).toEqual({
-      faultTypes: ["Offline", "Screen fault"],
-      products: [{ productId, productName: "Charger P1", total: 4, byFault: { Offline: 3, "Screen fault": 1 } }]
-    });
-
-    const breakdown = await h.request("SALES", "GET", `/tickets/fault-breakdown?productId=${productId}&faultType=Offline`);
-    expect(breakdown.body.byModel).toEqual([
-      { model: "(model not recorded)", n: 2 },
-      { model: "AC-7K-T2", n: 1 }
+    const ranking = await h.request("SALES", "GET", "/tickets/fault-ranking");
+    expect(ranking.body).toMatchObject({ days: 90, windowDays: 90, threshold: 3 });
+    expect(ranking.body.rows.map((r: any) => [r.productName, r.productModel, r.faultType, r.n, r.productTotal, r.isRepeat])).toEqual([
+      ["Charger P1", null, "Offline", 2, 2, false],
+      ["Charger P1", null, "Screen fault", 1, 1, false]
     ]);
+    expect(ranking.body.rows[0].tickets.map((t: any) => t.id).sort()).toEqual([ids[1], ids[2]].sort());
+
+    // The whole history includes the old ticket, on its own model row.
+    const all = await h.request("SALES", "GET", "/tickets/fault-ranking?days=all");
+    expect(all.body.days).toBe("all");
+    expect(all.body.rows.map((r: any) => [r.productModel, r.faultType, r.n])).toEqual([
+      [null, "Offline", 2],
+      [null, "Screen fault", 1],
+      ["AC-7K-T2", "Offline", 1]
+    ]);
+
+    // Back inside the window, the product reaches the threshold across both models.
+    await h.db.prepare("UPDATE tickets SET createdAt = CURRENT_TIMESTAMP WHERE id = ?").bind(ids[0]).run();
+    const flagged = await h.request("SALES", "GET", "/tickets/fault-ranking?days=30");
+    expect(flagged.body.rows.filter((r: any) => r.faultType === "Offline").map((r: any) => [r.productModel, r.n, r.productTotal, r.isRepeat])).toEqual([
+      [null, 2, 3, true],
+      ["AC-7K-T2", 1, 3, true]
+    ]);
+    expect((await h.request("SALES", "GET", "/tickets/stats")).body.faultMatrix).toBeUndefined();
+
     const drill = await h.request("SALES", "GET", `/tickets?productId=${productId}&faultType=Offline`);
     expect(drill.body).toHaveLength(3);
   });

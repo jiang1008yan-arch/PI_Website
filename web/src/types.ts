@@ -170,9 +170,21 @@ export type RepeatInfo = {
   tickets: { id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null }[];
 };
 
-export type FaultMatrix = {
-  faultTypes: string[];
-  products: { productId: string | null; productName: string; total: number; byFault: Record<string, number> }[];
+export type FaultRanking = {
+  rows: {
+    productId: string | null;
+    productName: string;
+    productModel: string | null;
+    faultType: string;
+    n: number;
+    lastAt: string;
+    productTotal: number;
+    isRepeat: boolean;
+    tickets: { id: string; ticketNo: string; customerCompany: string; createdAt: string }[];
+  }[];
+  days: number | "all";
+  windowDays: number;
+  threshold: number;
 };
 
 export type TicketUpdate = {
@@ -206,7 +218,6 @@ export type TicketStats = {
   byStatus: { status: string; n: number }[];
   byProduct: { productId: string; name: string; n: number }[];
   problemType: { label: string; counts: Record<string, number> } | null;
-  faultMatrix: FaultMatrix;
 };
 
 export type PublicProduct = { id: string; code: string; nameEn: string; nameZh: string };

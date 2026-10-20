@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { EmptyState } from "../components/Form";
-import type { FaultMatrix, Ticket, TicketStats } from "../types";
+import type { FaultRanking, TicketStats } from "../types";
 
 // A rotating palette so each bar reads as its own category at a glance.
 const PALETTE = [
@@ -67,9 +67,9 @@ export function FaultStatsPanel() {
   return (
     <div className="space-y-8">
       <div>
-        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Confirmed faults by product</h3>
-        <p className="mb-3 text-xs text-[#8595b6]">Counts only fault types confirmed by after-sales. Click a number to see the models and tickets behind it.</p>
-        <FaultMatrixTable matrix={stats.faultMatrix} />
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Confirmed faults by product and model</h3>
+        <p className="mb-3 text-xs text-[#8595b6]">Counts only fault types confirmed by after-sales. Click a row to see its tickets.</p>
+        <FaultRankingList />
       </div>
 
       <div>
@@ -91,85 +91,124 @@ export function FaultStatsPanel() {
   );
 }
 
-type Cell = { productId: string | null; productName: string; faultType: string };
+const PERIODS = [
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "365", label: "Last 12 months" },
+  { value: "all", label: "All time" }
+];
 
-// Product × confirmed fault type. Darker cells mean more tickets; a cell opens
-// the concrete models and tickets behind the count.
-function FaultMatrixTable({ matrix }: { matrix: FaultMatrix | undefined }) {
-  const [cell, setCell] = useState<Cell | null>(null);
-  const [models, setModels] = useState<{ model: string; n: number }[]>([]);
-  const [tickets, setTickets] = useState<Ticket[]>([]);
+type RankingRow = FaultRanking["rows"][number];
+const rowKey = (r: RankingRow) => `${r.productId}|${r.productModel}|${r.faultType}`;
+
+// Confirmed faults ranked by product · model · fault type, filtered by period,
+// fault type and a product/model search. A row opens its tickets.
+function FaultRankingList() {
+  const [period, setPeriod] = useState<string | null>(null);
+  const [data, setData] = useState<FaultRanking | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [faultType, setFaultType] = useState("");
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!cell) return;
-    const params = { productId: cell.productId ?? "", faultType: cell.faultType };
-    void api.get("/tickets/fault-breakdown", { params }).then((res) => setModels(res.data.byModel));
-    void api.get("/tickets", { params }).then((res) => setTickets(res.data));
-  }, [cell]);
+    setLoading(true);
+    api
+      .get("/tickets/fault-ranking", { params: period ? { days: period } : {} })
+      .then((res) => {
+        setData(res.data);
+        if (!period) setPeriod(String(res.data.days));
+      })
+      .finally(() => setLoading(false));
+  }, [period]);
 
-  if (!matrix || matrix.products.length === 0) {
-    return <EmptyState title="No confirmed faults yet" description="Confirm a fault type on a ticket to start the statistics." />;
-  }
-  const max = Math.max(1, ...matrix.products.flatMap((p) => Object.values(p.byFault)));
+  const faultTypes = useMemo(() => [...new Set((data?.rows ?? []).map((r) => r.faultType))].sort(), [data]);
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (data?.rows ?? []).filter(
+      (r) => (!faultType || r.faultType === faultType) && (!q || `${r.productName} ${r.productModel ?? ""}`.toLowerCase().includes(q))
+    );
+  }, [data, faultType, search]);
+
+  // The default period is the repeat window, which may not be one of the presets.
+  const periods = period && !PERIODS.some((p) => p.value === period) ? [{ value: period, label: `Last ${period} days` }, ...PERIODS] : PERIODS;
 
   return (
     <div className="space-y-4">
-      <div className="overflow-x-auto">
-        <table className="min-w-full border-separate border-spacing-1 text-sm">
-          <thead>
-            <tr>
-              <th className="text-left text-xs font-medium text-[#8595b6]">Product</th>
-              {matrix.faultTypes.map((f) => <th key={f} className="px-2 text-center text-xs font-medium text-[#294477]">{f}</th>)}
-              <th className="px-2 text-center text-xs font-medium text-[#8595b6]">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {matrix.products.map((p) => (
-              <tr key={p.productId ?? "none"}>
-                <td className="whitespace-nowrap pr-3 font-medium text-[#07183f]">{p.productName}</td>
-                {matrix.faultTypes.map((f) => {
-                  const n = p.byFault[f] ?? 0;
-                  const active = cell?.productId === p.productId && cell?.faultType === f;
-                  return (
-                    <td key={f} className="text-center">
-                      {n ? (
-                        <button
-                          type="button"
-                          className={`w-full rounded-md px-2 py-1 font-semibold ${active ? "ring-2 ring-primary" : ""}`}
-                          style={{ backgroundColor: `rgba(47, 107, 216, ${0.12 + 0.6 * (n / max)})`, color: n / max > 0.6 ? "white" : "#07183f" }}
-                          onClick={() => setCell({ productId: p.productId, productName: p.productName, faultType: f })}
-                        >
-                          {n}
-                        </button>
-                      ) : (
-                        <span className="text-[#c4cee4]">·</span>
-                      )}
-                    </td>
-                  );
-                })}
-                <td className="text-center font-semibold text-[#294477]">{p.total}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <select aria-label="Period" value={period ?? ""} onChange={(e) => setPeriod(e.target.value)}>
+          {periods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </select>
+        <select aria-label="Fault type" value={faultType} onChange={(e) => setFaultType(e.target.value)}>
+          <option value="">All fault types</option>
+          {faultTypes.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <input aria-label="Search product or model" placeholder="Search product or model" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
 
-      {cell && (
-        <div className="rounded-lg border border-[#e3ecff] bg-[#f8fbff] p-4 text-sm">
-          <div className="mb-2 font-semibold text-[#07183f]">{cell.productName} · {cell.faultType}</div>
-          <div className="mb-3 flex flex-wrap gap-2">
-            {models.map((m) => (
-              <span key={m.model} className="rounded-full bg-white px-3 py-1 text-xs text-[#294477] ring-1 ring-[#dbe6fb]">{m.model}: {m.n}</span>
-            ))}
-          </div>
-          <ul className="space-y-1">
-            {tickets.map((t) => (
-              <li key={t.id}>
-                <Link className="text-primary underline" to={`/tickets/${t.id}`}>{t.ticketNo}</Link> · {t.customerCompany || "—"}
-                {t.productModel ? ` · ${t.productModel}` : ""} · {t.createdAt?.slice(0, 10)}
-              </li>
-            ))}
-          </ul>
+      {loading && !data ? (
+        <div className="py-8 text-center text-sm text-[#63749b]">Loading…</div>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          title="No confirmed faults"
+          description={data?.rows.length ? "Nothing matches these filters." : "Confirm a fault type on a ticket to start the statistics."}
+        />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#e3ecff] text-left text-xs font-medium text-[#8595b6]">
+                <th className="py-2 pr-3">Product</th>
+                <th className="py-2 pr-3">Model</th>
+                <th className="py-2 pr-3">Fault type</th>
+                <th className="py-2 pr-3 text-right">Count</th>
+                <th className="py-2">Latest</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const key = rowKey(r);
+                const isOpen = open === key;
+                return (
+                  <Fragment key={key}>
+                    <tr
+                      className={`cursor-pointer border-b border-[#eef3fd] hover:bg-[#f8fbff] ${isOpen ? "bg-[#f8fbff]" : ""}`}
+                      onClick={() => setOpen(isOpen ? null : key)}
+                    >
+                      <td className="whitespace-nowrap py-2 pr-3 font-medium text-[#07183f]">{r.productName}</td>
+                      <td className="whitespace-nowrap py-2 pr-3 text-[#294477]">{r.productModel ?? <span className="text-[#8595b6]">Not recorded</span>}</td>
+                      <td className="py-2 pr-3 text-[#294477]">
+                        <span className="mr-2">{r.faultType}</span>
+                        {r.isRepeat && data && (
+                          <span
+                            className="inline-block whitespace-nowrap rounded-full bg-[#fde8ee] px-2 py-0.5 text-xs font-semibold text-[#c01655]"
+                            title={`${r.productName} has had "${r.faultType}" ${r.productTotal} times in the last ${data.windowDays} days (threshold ${data.threshold}), across all models.`}
+                          >
+                            Repeat · {r.productTotal}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 text-right font-semibold text-[#07183f]">{r.n}</td>
+                      <td className="whitespace-nowrap py-2 text-[#294477]">{r.lastAt.slice(0, 10)}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="border-b border-[#eef3fd] bg-[#f8fbff]">
+                        <td colSpan={5} className="px-3 pb-3 pt-1">
+                          <ul className="space-y-1">
+                            {r.tickets.map((t) => (
+                              <li key={t.id}>
+                                <Link className="text-primary underline" to={`/tickets/${t.id}`}>{t.ticketNo}</Link> · {t.customerCompany || "—"} · {t.createdAt.slice(0, 10)}
+                              </li>
+                            ))}
+                          </ul>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

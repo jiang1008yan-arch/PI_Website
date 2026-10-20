@@ -1,25 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { parseSerials } from "./devices";
-import { buildFaultMatrix, isRepeatFault, repeatSettings, repeatWindowStart } from "./faultStats";
+import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart } from "./faultStats";
 
-describe("buildFaultMatrix", () => {
-  it("builds product rows and fault columns ordered by frequency", () => {
-    const matrix = buildFaultMatrix([
-      { productId: "p1", productName: "AC 7kW", faultType: "Offline", n: 2 },
-      { productId: "p1", productName: "AC 7kW", faultType: "Screen", n: 1 },
-      { productId: "p2", productName: "DC 60kW", faultType: "Offline", n: 5 },
-      { productId: null, productName: null, faultType: "Screen", n: 1 }
+describe("buildFaultRanking", () => {
+  const t = (id: string, productId: string | null, productModel: string | null, faultType: string, createdAt: string) => ({
+    id,
+    ticketNo: id.toUpperCase(),
+    customerCompany: "ACME",
+    createdAt,
+    productId,
+    productName: productId ? `Product ${productId}` : null,
+    productModel,
+    faultType
+  });
+  const settings = { windowDays: 90, threshold: 3 };
+
+  it("ranks product · model · fault rows by count, then by most recent", () => {
+    const rows = buildFaultRanking(
+      [
+        t("t1", "p1", "AC-EU", "Offline", "2026-10-01 00:00:00"),
+        t("t2", "p1", "AC-EU", "Offline", "2026-10-05 00:00:00"),
+        t("t3", "p1", " AC-UK ", "Offline", "2026-09-01 00:00:00"),
+        t("t4", "p2", "", "Screen", "2026-10-10 00:00:00"),
+        t("t5", null, null, "Screen", "2026-08-01 00:00:00")
+      ],
+      [],
+      settings
+    );
+    expect(rows.map((r) => [r.productName, r.productModel, r.faultType, r.n, r.lastAt])).toEqual([
+      ["Product p1", "AC-EU", "Offline", 2, "2026-10-05 00:00:00"],
+      ["Product p2", null, "Screen", 1, "2026-10-10 00:00:00"],
+      ["Product p1", "AC-UK", "Offline", 1, "2026-09-01 00:00:00"],
+      ["(no product)", null, "Screen", 1, "2026-08-01 00:00:00"]
     ]);
-    expect(matrix.faultTypes).toEqual(["Offline", "Screen"]);
-    expect(matrix.products.map((p) => [p.productName, p.total, p.byFault])).toEqual([
-      ["DC 60kW", 5, { Offline: 5 }],
-      ["AC 7kW", 3, { Offline: 2, Screen: 1 }],
-      ["(no product)", 1, { Screen: 1 }]
-    ]);
+    expect(rows[0].tickets.map((x) => x.id)).toEqual(["t2", "t1"]);
   });
 
-  it("ignores rows without a confirmed fault type", () => {
-    expect(buildFaultMatrix([{ productId: "p1", productName: "A", faultType: "", n: 4 }])).toEqual({ faultTypes: [], products: [] });
+  it("judges repeat faults per product across its models", () => {
+    const rows = buildFaultRanking(
+      [
+        t("t1", "p1", "AC-EU", "Offline", "2026-10-01 00:00:00"),
+        t("t2", "p1", "AC-UK", "Offline", "2026-10-02 00:00:00"),
+        t("t3", "p2", null, "Offline", "2026-10-03 00:00:00"),
+        t("t4", null, null, "Offline", "2026-10-04 00:00:00")
+      ],
+      [
+        { productId: "p1", faultType: "Offline", n: 4 },
+        { productId: "p2", faultType: "Offline", n: 2 },
+        { productId: null, faultType: "Offline", n: 5 }
+      ],
+      settings
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.tickets[0].id, [r.productTotal, r.isRepeat]]));
+    expect(byId).toEqual({ t1: [4, true], t2: [4, true], t3: [2, false], t4: [5, false] });
+  });
+
+  it("ignores tickets without a confirmed fault type", () => {
+    expect(buildFaultRanking([t("t1", "p1", null, "", "2026-10-01 00:00:00")], [], settings)).toEqual([]);
   });
 });
 

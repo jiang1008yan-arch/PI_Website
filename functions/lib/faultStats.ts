@@ -1,30 +1,68 @@
-// Fault statistics: which catalog products keep showing the same confirmed
+// Fault statistics: which products and models keep showing the same confirmed
 // fault type. Only after-sales-confirmed fault types count.
 
-export type FaultCountRow = { productId: string | null; productName: string | null; faultType: string; n: number };
-
-export type FaultMatrix = {
-  faultTypes: string[];
-  products: { productId: string | null; productName: string; total: number; byFault: Record<string, number> }[];
+export type FaultTicket = {
+  id: string;
+  ticketNo: string;
+  customerCompany: string;
+  createdAt: string;
+  productId: string | null;
+  productName: string | null;
+  productModel: string | null;
+  faultType: string;
 };
 
-// Shapes GROUP BY (product, fault) counts into a product × fault matrix: fault
-// columns ordered by overall frequency, product rows by their total.
-export function buildFaultMatrix(rows: FaultCountRow[]): FaultMatrix {
-  const faultTotals = new Map<string, number>();
-  const byProduct = new Map<string, FaultMatrix["products"][number]>();
-  for (const row of rows) {
-    if (!row.faultType) continue;
-    faultTotals.set(row.faultType, (faultTotals.get(row.faultType) ?? 0) + row.n);
-    const key = row.productId ?? "";
-    const entry = byProduct.get(key) ?? { productId: row.productId, productName: row.productName || "(no product)", total: 0, byFault: {} };
-    entry.byFault[row.faultType] = (entry.byFault[row.faultType] ?? 0) + row.n;
-    entry.total += row.n;
-    byProduct.set(key, entry);
+// Confirmed faults per (catalog product, fault type) inside the repeat window.
+export type ProductFaultCount = { productId: string | null; faultType: string; n: number };
+
+export type FaultRankingRow = {
+  productId: string | null;
+  productName: string;
+  productModel: string | null;
+  faultType: string;
+  n: number;
+  lastAt: string;
+  // Same product and fault within the repeat window, across all its models —
+  // repeat faults are judged per product.
+  productTotal: number;
+  isRepeat: boolean;
+  tickets: Pick<FaultTicket, "id" | "ticketNo" | "customerCompany" | "createdAt">[];
+};
+
+// One row per product · model · fault type, most frequent first, then most
+// recent. A row is a repeat fault when its product has reached the threshold
+// for that fault within the window, whichever models the tickets were on.
+export function buildFaultRanking(tickets: FaultTicket[], windowCounts: ProductFaultCount[], settings: RepeatSettings): FaultRankingRow[] {
+  const productTotals = new Map(windowCounts.map((c) => [JSON.stringify([c.productId, c.faultType]), c.n]));
+  const rows = new Map<string, FaultRankingRow>();
+  for (const t of tickets) {
+    if (!t.faultType) continue;
+    const model = t.productModel?.trim() || null;
+    const key = JSON.stringify([t.productId, model, t.faultType]);
+    let row = rows.get(key);
+    if (!row) {
+      const productTotal = productTotals.get(JSON.stringify([t.productId, t.faultType])) ?? 0;
+      row = {
+        productId: t.productId,
+        productName: t.productName || "(no product)",
+        productModel: model,
+        faultType: t.faultType,
+        n: 0,
+        lastAt: t.createdAt,
+        productTotal,
+        isRepeat: t.productId !== null && isRepeatFault(productTotal, settings),
+        tickets: []
+      };
+      rows.set(key, row);
+    }
+    row.n += 1;
+    if (t.createdAt > row.lastAt) row.lastAt = t.createdAt;
+    row.tickets.push({ id: t.id, ticketNo: t.ticketNo, customerCompany: t.customerCompany, createdAt: t.createdAt });
   }
-  const faultTypes = [...faultTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([f]) => f);
-  const products = [...byProduct.values()].sort((a, b) => b.total - a.total || a.productName.localeCompare(b.productName));
-  return { faultTypes, products };
+  for (const row of rows.values()) row.tickets.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return [...rows.values()].sort(
+    (a, b) => b.n - a.n || b.lastAt.localeCompare(a.lastAt) || a.productName.localeCompare(b.productName) || (a.productModel ?? "").localeCompare(b.productModel ?? "")
+  );
 }
 
 export const DEFAULT_REPEAT_WINDOW_DAYS = 90;
