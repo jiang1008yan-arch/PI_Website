@@ -362,3 +362,57 @@ describe("AI keys, types, the requirement pool and owners", () => {
     expect(row.feishuCardMessageId).not.toBe(oldCard);
   });
 });
+
+describe("finding existing orders, customers and SNs in the Feishu form", () => {
+  const dm = (text: string, messageId: string) =>
+    push("/feishu/events", {
+      schema: "2.0",
+      header: { event_id: `e-${messageId}`, token: "vt", event_type: "im.message.receive_v1" },
+      event: {
+        sender: { sender_id: { open_id: "ou_service" }, sender_type: "user" },
+        message: { message_id: messageId, chat_id: "oc_dm", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text }) }
+      }
+    });
+  const lastDraftId = async () => (await h.db.prepare("SELECT id FROM feishuDrafts ORDER BY rowid DESC LIMIT 1").first<{ id: string }>())!.id;
+  const patchedCard = (messageId: string) => JSON.parse(messages((c) => c.method === "PATCH" && c.path === `/im/v1/messages/${messageId}`).at(-1)!.body.content);
+  const inputs = (card: any) => Object.fromEntries(card.body.elements.find((e: any) => e.tag === "form").elements.filter((e: any) => e.tag === "input").map((e: any) => [e.name, e.default_value]));
+
+  beforeEach(async () => {
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    await h.db
+      .prepare(
+        `INSERT INTO pi (id, piNo, seq, date, language, status, customerCompany, productionOrderNo, createdById, approvedAt)
+         VALUES ('pi_a', 'ZH-001', 1, '2026-10-01', 'ZH', 'APPROVED', 'Iberia Charge SL', 'PO-2026-0901', ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(h.users.SALES.id)
+      .run();
+    await h.db.prepare("INSERT INTO devices (id, serialNumber, piId, createdById) VALUES ('d1', 'CHG-0901-0001', 'pi_a', ?)").bind(h.users.SERVICE.id).run();
+  });
+
+  it("an SN written in the message fills SN, order and customer", async () => {
+    await dm("CHG-0901-0001 一直离线", "om_sn");
+    await h.settle();
+    await cardAction("ou_service", { action: "open_draft", draftId: await lastDraftId() }, {}, "e-open-sn", "om_form_sn");
+    await h.settle();
+    expect(inputs(patchedCard("om_form_sn"))).toMatchObject({ serialNumber: "CHG-0901-0001", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" });
+  });
+
+  it("Find lists matches and keeps what was typed; a picked match fills the ticket", async () => {
+    await dm("客户的桩坏了", "om_find");
+    await h.settle();
+    const draftId = await lastDraftId();
+    expect((await cardAction("ou_service", { action: "lookup_draft", draftId }, { lookupQuery: "0" }, "e-find-short", "om_form")).body.toast.content).toContain("at least 2");
+    const found = await cardAction("ou_service", { action: "lookup_draft", draftId }, { lookupQuery: "iberia", contactName: "Ana" }, "e-find", "om_form");
+    expect(found.body.toast.type).toBe("info");
+    await h.settle();
+    const card = patchedCard("om_form");
+    const picker = card.body.elements.find((e: any) => e.tag === "form").elements.find((e: any) => e.name === "match");
+    expect(picker.options.map((o: any) => o.value)).toEqual(["o:pi_a", "c:Iberia Charge SL"]);
+    expect(inputs(card)).toMatchObject({ contactName: "Ana", lookupQuery: "iberia" });
+
+    await cardAction("ou_service", { action: "confirm_draft", draftId }, { contactName: "Ana", match: "s:CHG-0901-0001" }, "e-create-match", "om_form");
+    await h.settle();
+    const ticket = await h.db.prepare("SELECT customerCompany, orderNo, serialNumber FROM tickets").first<any>();
+    expect(ticket).toEqual({ customerCompany: "Iberia Charge SL", orderNo: "PO-2026-0901", serialNumber: "CHG-0901-0001" });
+  });
+});

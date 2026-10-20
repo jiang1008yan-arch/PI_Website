@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { Field, Section } from "../components/Form";
 import { piDisplayName } from "../pi/labels";
-import { generatedModelFor } from "../pi/modelRule";
 import { OptionSetModal } from "../pi/OptionSetModal";
-import { parsePiItems, type ParsedPiItem } from "../pi/piItemCodec";
 import { SelectWithManage } from "../pi/SelectWithManage";
 import type { MatchedPi, Pi, RepeatInfo, Ticket } from "../types";
 import { formatDateTime } from "./ticketShared";
+import { usePiLines } from "./usePiLines";
+import { LookupInput } from "../components/LookupInput";
 
 type DeviceMatch = { serialNumber: string; piId: string; piNo: string; linkedPiNo?: string | null; linkedPiNoSnapshot?: string | null } | null;
 
@@ -32,7 +32,6 @@ export function TicketPiPanel({
   onChanged: () => Promise<void>;
 }) {
   const pi = matchedPis[0] ?? null;
-  const [lines, setLines] = useState<ParsedPiItem[]>([]);
   const [line, setLine] = useState("");
   const [serial, setSerial] = useState(ticket.serialNumber ?? "");
   const [faultTypes, setFaultTypes] = useState<string[]>([]);
@@ -41,33 +40,11 @@ export function TicketPiPanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Product lines of the matched PI's effective (approved) Chinese version.
-  useEffect(() => {
-    setLines([]);
-    if (!pi) return;
-    api
-      .get(`/pi/${pi.id}/view`)
-      .then((res) => {
-        const zh = res.data.zh.effective ?? res.data.zh.current;
-        setLines(zh ? parsePiItems(zh.items ?? []) : []);
-      })
-      .catch(() => setLines([]));
-  }, [pi?.id]);
-
   const loadFaultTypes = () => api.get("/options/faultType").then((res) => setFaultTypes(res.data.map((r: any) => r.value)));
   useEffect(() => { void loadFaultTypes(); }, []);
   useEffect(() => { setFault(ticket.faultType ?? ""); setSerial(ticket.serialNumber ?? ""); }, [ticket.id, ticket.faultType, ticket.serialNumber]);
 
-  const lineOptions = useMemo(
-    () =>
-      lines.map((item, idx) => ({
-        key: String(idx),
-        productId: item.productId,
-        model: generatedModelFor(item).model,
-        label: `${item.nameZh || item.nameEn || item.code || item.productId}${generatedModelFor(item).model ? ` · ${generatedModelFor(item).model}` : ""} · qty ${item.quantity}`
-      })),
-    [lines]
-  );
+  const lineOptions = usePiLines(pi?.id);
   // Preselect the line matching what is recorded on the ticket.
   useEffect(() => {
     const match = lineOptions.find((o) => o.productId === ticket.productId && (o.model || null) === (ticket.productModel || null));
@@ -145,7 +122,7 @@ export function TicketPiPanel({
                 </select>
               </Field>
               <Field label="Device SN (optional)">
-                <input className="font-mono" value={serial} onChange={(e) => setSerial(e.target.value)} maxLength={64} placeholder="e.g. CHG-2026-0001" />
+                <LookupInput kind="sn" className="font-mono" value={serial} onChange={setSerial} maxLength={64} placeholder="Type part of the SN, e.g. 0001" />
               </Field>
               <button type="button" className="btn-secondary" disabled={busy} onClick={saveProduct}>Save product line</button>
             </>

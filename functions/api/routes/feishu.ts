@@ -1,7 +1,8 @@
 import type { Context } from "hono";
 import { all, first, id } from "../../lib/db";
 import { TICKET_TYPES, triageMessages } from "../../lib/aiTriage";
-import { bindCard, dismissedCard, draftCard, expiredDraftCard, promptCard } from "../../lib/feishu/cards";
+import { bindCard, dismissedCard, draftCard, expiredDraftCard, promptCard, type DraftPrefill } from "../../lib/feishu/cards";
+import { findKnownReferences, lookup, matchOptions, resolveMatch } from "../../lib/lookup";
 import { isDraftExpired } from "../../lib/feishu/drafts";
 import { feishuEnabled, getMessageText, listBitableFields, messageContentToText, sendCard, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
@@ -154,6 +155,13 @@ async function openDraftForm(env: Env, draftId: string, cardMessageId: string | 
       .bind(triage.summary, triage.ticketType, triage.faultType, draftId)
       .run();
   }
+  // A production order number or SN written in the message fills the form.
+  const refs = await findKnownReferences(env.DB, draft.text);
+  const prefill: DraftPrefill = {
+    serialNumber: refs.device?.serialNumber,
+    orderNo: refs.device?.productionOrderNo || refs.order?.productionOrderNo,
+    customerCompany: refs.device?.customerCompany || refs.order?.customerCompany
+  };
   await updateCard(
     env,
     cardMessageId,
@@ -163,7 +171,36 @@ async function openDraftForm(env: Env, draftId: string, cardMessageId: string | 
       aiSummary: triage?.summary ?? null,
       aiTicketType: triage?.ticketType ?? null,
       aiFaultType: triage?.faultType ?? null,
-      faultTypes: types
+      faultTypes: types,
+      prefill
+    })
+  );
+}
+
+const formText = (form: Record<string, unknown>, key: string) => String(form[key] ?? "").trim();
+
+// "Find" on the form: look the typed text up and redraw the card with the
+// matches to pick from, keeping everything already filled in.
+async function lookupForDraft(env: Env, draftId: string, form: Record<string, unknown>, cardMessageId: string | null) {
+  const draft = await first<any>(env.DB, "SELECT * FROM feishuDrafts WHERE id = ?", draftId);
+  if (!draft || !cardMessageId) return;
+  const query = formText(form, "lookupQuery");
+  const matches = matchOptions(await lookup(env.DB, query, "all"));
+  const prefill: DraftPrefill = Object.fromEntries(
+    ["customerCompany", "orderNo", "serialNumber", "contactName", "summary", "ticketType", "faultType", "lookupQuery"].map((k) => [k, formText(form, k) || undefined])
+  );
+  await updateCard(
+    env,
+    cardMessageId,
+    draftCard({
+      draftId,
+      text: draft.text,
+      aiSummary: draft.aiSummary,
+      aiTicketType: draft.aiTicketType,
+      aiFaultType: draft.aiFaultType,
+      faultTypes: await faultTypes(env.DB),
+      prefill,
+      matches
     })
   );
 }
@@ -230,6 +267,19 @@ feishuRoutes.post("/feishu/card", async (c) => {
         if (messageId) runLater(c, () => updateCard(env, messageId, dismissedCard()));
         return c.json(toast("info", "Ignored."));
       }
+      case "lookup_draft": {
+        const messageId = event.context?.open_message_id ?? null;
+        const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null }>(
+          env.DB,
+          "SELECT createdAt, expiredAt, ticketId FROM feishuDrafts WHERE id = ?",
+          String(value.draftId)
+        );
+        if (draft?.ticketId) return c.json(toast("info", "A ticket was already created for this message."));
+        if (draft && isDraftExpired(draft, new Date())) return c.json(await refuseExpired(c, env, String(value.draftId), messageId));
+        if (formText(form, "lookupQuery").length < 2) return c.json(toast("info", "Type at least 2 characters to find."));
+        runLater(c, () => lookupForDraft(env, String(value.draftId), form, messageId));
+        return c.json(toast("info", "Finding matches…"));
+      }
       case "confirm_draft":
         return c.json(await confirmDraft(c, env, user, String(value.draftId), form, event.context?.open_message_id ?? null));
       default:
@@ -259,11 +309,14 @@ async function confirmDraft(
   if (!contactName) return toast("warning", "Enter the customer contact name.");
 
   const summary = String(form.summary ?? "").trim();
+  // A picked match fills the customer, production order and SN it stands for.
+  const picked = formText(form, "match") ? await resolveMatch(env.DB, formText(form, "match")) : null;
   const created = await createTicket(
     env,
     {
-      customerCompany: String(form.customerCompany ?? ""),
-      orderNo: String(form.orderNo ?? ""),
+      customerCompany: picked?.customerCompany ?? String(form.customerCompany ?? ""),
+      orderNo: picked?.orderNo ?? String(form.orderNo ?? ""),
+      serialNumber: picked?.serialNumber ?? formText(form, "serialNumber"),
       contactName,
       contactInfo: "Feishu group",
       feishuSourceChatId: draft.sourceChatId,

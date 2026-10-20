@@ -3,6 +3,7 @@ import { TICKET_TYPES, type TicketType } from "./aiTriage";
 import { canAssignSalesSide, canAssignServiceSide, canChangeStatus, canConfirmFault, canWriteNote, isValidTransition, type TicketStatus } from "./ticketAccess";
 import { validateAnswers, type TicketFieldRow } from "./ticketAnswers";
 import { nextTicketNumber } from "./ticketNumber";
+import { normalizeSerial } from "./devices";
 import type { AppUser, Env } from "./types";
 
 // Ticket operations shared by the web routes and the Feishu bot, so both
@@ -24,6 +25,9 @@ export type NewTicket = {
   contactName: string;
   contactInfo: string;
   productId?: string | null;
+  // The concrete model (from the PI's product line) and device SN, when known.
+  productModel?: string | null;
+  serialNumber?: string | null;
   answers?: unknown;
   assignedSalesId?: string | null;
   assignedServiceId?: string | null;
@@ -79,8 +83,9 @@ export async function createTicket(
   await db
     .prepare(
       `INSERT INTO tickets (id, ticketNo, seq, status, customerCompany, orderNo, contactName, contactInfo, productId, answers,
-                            assignedSalesId, assignedServiceId, linkId, feishuSourceChatId, feishuSourceMessageId, summary)
-       VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`
+                            assignedSalesId, assignedServiceId, linkId, feishuSourceChatId, feishuSourceMessageId, summary,
+                            productModel, serialNumber)
+       VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
     )
     .bind(
       ticketId,
@@ -96,7 +101,9 @@ export async function createTicket(
       owners.assignedServiceId,
       input.feishuSourceChatId || null,
       input.feishuSourceMessageId || null,
-      String(input.summary ?? "").trim().slice(0, 300) || null
+      String(input.summary ?? "").trim().slice(0, 300) || null,
+      String(input.productModel ?? "").trim().slice(0, 300) || null,
+      normalizeSerial(input.serialNumber).slice(0, 64) || null
     )
     .run();
   if (input.initialNote?.text.trim()) {
@@ -201,6 +208,25 @@ export async function assignTicket(
     newServiceOwnerId: changes.find((ch) => ch.column === "assignedServiceId")?.to ?? null,
     newSalesOwnerId: changes.find((ch) => ch.column === "assignedSalesId")?.to ?? null
   };
+}
+
+// Correct the customer and production order number (e.g. picked from the
+// lookup). After-sales/admin; each change is written to the timeline.
+export async function setTicketCustomer(db: D1Database, user: AppUser, ticketId: string, d: { customerCompany?: unknown; orderNo?: unknown }) {
+  if (!canConfirmFault(user)) throw new TicketError("Forbidden", 403);
+  const ticket = await first<{ id: string; customerCompany: string; orderNo: string }>(db, "SELECT id, customerCompany, orderNo FROM tickets WHERE id=?", ticketId);
+  if (!ticket) throw new TicketError("Not found", 404);
+  const customerCompany = d.customerCompany === undefined ? ticket.customerCompany : String(d.customerCompany ?? "").trim().slice(0, 200);
+  const orderNo = d.orderNo === undefined ? ticket.orderNo : String(d.orderNo ?? "").trim().slice(0, 100);
+  const notes: string[] = [];
+  if (customerCompany !== ticket.customerCompany) notes.push(`Customer: ${ticket.customerCompany || "(none)"} → ${customerCompany || "(none)"}`);
+  if (orderNo !== ticket.orderNo) notes.push(`Production order no.: ${ticket.orderNo || "(none)"} → ${orderNo || "(none)"}`);
+  if (!notes.length) return false;
+  await db.batch([
+    db.prepare("UPDATE tickets SET customerCompany=?, orderNo=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(customerCompany, orderNo, ticket.id),
+    ...notes.map((note) => db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)").bind(id("tup"), ticket.id, user.id, note))
+  ]);
+  return true;
 }
 
 // Classify the ticket. Only faults keep a fault type; a one-line summary may

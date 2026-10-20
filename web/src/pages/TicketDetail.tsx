@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
+import { LookupInput } from "../components/LookupInput";
 import type { MatchedPi, RepeatInfo, Ticket, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
 import { TicketPiPanel } from "../tickets/TicketPiPanel";
@@ -124,6 +125,7 @@ export function TicketDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <Section title="Customer & request">
+            {canManage && <CustomerEditor ticket={ticket} onChanged={load} />}
             <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Info label="Company" value={ticket.customerCompany} />
               <Info label="Production order no." value={ticket.orderNo} />
@@ -251,6 +253,68 @@ export function TicketDetailPage() {
             </dl>
           </Section>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Correct the customer and production order number, picking from existing
+// approved PIs and customers; the change is logged on the ticket.
+function CustomerEditor({ ticket, onChanged }: { ticket: Ticket; onChanged: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [customerCompany, setCustomerCompany] = useState(ticket.customerCompany);
+  const [orderNo, setOrderNo] = useState(ticket.orderNo);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setCustomerCompany(ticket.customerCompany);
+    setOrderNo(ticket.orderNo);
+  }, [ticket.id, ticket.customerCompany, ticket.orderNo]);
+
+  async function save() {
+    setError("");
+    setBusy(true);
+    try {
+      await api.patch(`/tickets/${ticket.id}/customer`, { customerCompany, orderNo });
+      setOpen(false);
+      await onChanged();
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? "Could not save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="mb-3 flex justify-end">
+        <button type="button" className="text-sm font-medium text-primary hover:underline" onClick={() => setOpen(true)}>
+          Edit customer & production order
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mb-4 space-y-3 rounded-lg border border-[#e3ecff] bg-[#f8fbff] p-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Customer company">
+          <LookupInput kind="customer" value={customerCompany} onChange={setCustomerCompany} maxLength={200} />
+        </Field>
+        <Field label="Production order no.">
+          <LookupInput
+            kind="order"
+            value={orderNo}
+            onChange={setOrderNo}
+            onPick={(m) => m.customerCompany && setCustomerCompany(m.customerCompany)}
+            maxLength={100}
+            placeholder="Type part of the order, PI no. or customer"
+          />
+        </Field>
+      </div>
+      {error && <div className="text-sm text-red-700">{error}</div>}
+      <div className="flex gap-2">
+        <button type="button" className="btn-primary" disabled={busy} onClick={save}>Save</button>
+        <button type="button" className="btn-secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
       </div>
     </div>
   );

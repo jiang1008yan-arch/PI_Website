@@ -123,7 +123,10 @@ describe("cards", () => {
     expect(select(unknown, "faultType").initial_option).toBeUndefined();
     expect(select(unknown, "ticketType").initial_option).toBeUndefined();
     expect(unknown.find((e) => e.tag === "input" && e.name === "summary").default_value).toBeUndefined();
-    expect(withAi.find((e) => e.tag === "button").behaviors[0].value).toEqual({ action: "confirm_draft", draftId: "d1" });
+    expect(withAi.filter((e) => e.tag === "button").map((b) => b.behaviors[0].value)).toEqual([
+      { action: "lookup_draft", draftId: "d1" },
+      { action: "confirm_draft", draftId: "d1" }
+    ]);
   });
 });
 

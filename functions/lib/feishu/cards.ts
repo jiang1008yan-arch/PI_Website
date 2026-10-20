@@ -174,6 +174,18 @@ export function dismissedCard() {
   };
 }
 
+// Values already in the form, kept when the card is redrawn (e.g. after "Find").
+export type DraftPrefill = {
+  customerCompany?: string;
+  orderNo?: string;
+  contactName?: string;
+  serialNumber?: string;
+  summary?: string;
+  ticketType?: string;
+  faultType?: string;
+  lookupQuery?: string;
+};
+
 export type DraftCardData = {
   draftId: string;
   text: string;
@@ -181,11 +193,24 @@ export type DraftCardData = {
   aiTicketType: string | null;
   aiFaultType: string | null;
   faultTypes: string[];
+  prefill?: DraftPrefill;
+  // Results of "Find": production orders, SNs and customers already in the system.
+  matches?: { value: string; label: string }[] | null;
   createdTicketNo?: string | null;
 };
 
+const textInput = (name: string, label: string, maxLength: number, value?: string) => ({
+  tag: "input",
+  name,
+  placeholder: plain(label),
+  max_length: maxLength,
+  ...(value ? { default_value: value.slice(0, maxLength) } : {})
+});
+
 // The private confirmation card for a "turn into ticket" request. Nothing is
 // created until a staff member submits it; AI suggestions are marked as such.
+// "Find" looks the typed text up among existing production orders, customers
+// and SNs, and redraws the card with a list to pick from.
 export function draftCard(d: DraftCardData) {
   if (d.createdTicketNo) {
     return {
@@ -195,42 +220,53 @@ export function draftCard(d: DraftCardData) {
       body: { elements: [md(`> ${esc(d.text).slice(0, 500)}`)] }
     };
   }
+  const p = d.prefill ?? {};
+  const ticketType = p.ticketType ?? d.aiTicketType ?? "";
+  const faultType = p.faultType ?? d.aiFaultType ?? "";
   const elements: unknown[] = [md(`**Customer message**\n> ${esc(d.text).slice(0, 1500)}`)];
   if (d.aiSummary) elements.push(md(`**AI suggestion** (check before creating): ${esc(d.aiSummary)}`));
-  elements.push({
-    tag: "form",
-    name: "draft_form",
-    elements: [
-      // Placeholders double as labels: only well-documented component properties are used.
-      { tag: "input", name: "customerCompany", placeholder: plain("Customer company"), max_length: 200 },
-      { tag: "input", name: "orderNo", placeholder: plain("Production order no., e.g. PO-2026-0901"), max_length: 100 },
-      { tag: "input", name: "contactName", placeholder: plain("Customer contact name (required)"), max_length: 200 },
-      {
-        tag: "input",
-        name: "summary",
-        placeholder: plain("One-line summary (optional)"),
-        max_length: 300,
-        ...(d.aiSummary ? { default_value: d.aiSummary.slice(0, 300) } : {})
-      },
-      {
-        tag: "select_static",
-        name: "ticketType",
-        placeholder: plain("Ticket type (optional)"),
-        ...(d.aiTicketType && TYPE_TEXT[d.aiTicketType] ? { initial_option: d.aiTicketType } : {}),
-        options: Object.entries(TYPE_TEXT).map(([value, text]) => ({ text: plain(text), value }))
-      },
-      ...(d.faultTypes.length
-        ? [{
+  const formElements: unknown[] = [
+    textInput("lookupQuery", "Find: type part of a production order, customer or SN", 100, p.lookupQuery),
+    callbackButton("Find", { action: "lookup_draft", draftId: d.draftId }, { name: "submit_lookup", submit: true })
+  ];
+  if (d.matches) {
+    formElements.push(
+      d.matches.length
+        ? {
             tag: "select_static",
-            name: "faultType",
-            placeholder: plain("Fault type (faults only, optional)"),
-            ...(d.aiFaultType && d.faultTypes.includes(d.aiFaultType) ? { initial_option: d.aiFaultType } : {}),
-            options: d.faultTypes.map((f) => ({ text: plain(f), value: f }))
-          }]
-        : []),
-      callbackButton("Create ticket", { action: "confirm_draft", draftId: d.draftId }, { type: "primary", name: "submit_draft", submit: true })
-    ]
-  });
+            name: "match",
+            placeholder: plain(`Pick a match (${d.matches.length}) — fills customer, order and SN`),
+            options: d.matches.map((m) => ({ text: plain(m.label.slice(0, 100)), value: m.value }))
+          }
+        : md("No production order, customer or SN matches that. Fill in the fields below.")
+    );
+  }
+  formElements.push(
+    // Placeholders double as labels: only well-documented component properties are used.
+    textInput("customerCompany", "Customer company", 200, p.customerCompany),
+    textInput("orderNo", "Production order no., e.g. PO-2026-0901", 100, p.orderNo),
+    textInput("serialNumber", "Device SN (optional)", 64, p.serialNumber),
+    textInput("contactName", "Customer contact name (required)", 200, p.contactName),
+    textInput("summary", "One-line summary (optional)", 300, p.summary ?? d.aiSummary ?? undefined),
+    {
+      tag: "select_static",
+      name: "ticketType",
+      placeholder: plain("Ticket type (optional)"),
+      ...(TYPE_TEXT[ticketType] ? { initial_option: ticketType } : {}),
+      options: Object.entries(TYPE_TEXT).map(([value, text]) => ({ text: plain(text), value }))
+    },
+    ...(d.faultTypes.length
+      ? [{
+          tag: "select_static",
+          name: "faultType",
+          placeholder: plain("Fault type (faults only, optional)"),
+          ...(d.faultTypes.includes(faultType) ? { initial_option: faultType } : {}),
+          options: d.faultTypes.map((f) => ({ text: plain(f), value: f }))
+        }]
+      : []),
+    callbackButton("Create ticket", { action: "confirm_draft", draftId: d.draftId }, { type: "primary", name: "submit_draft", submit: true })
+  );
+  elements.push({ tag: "form", name: "draft_form", elements: formElements });
   return {
     schema: "2.0",
     config: { update_multi: true },

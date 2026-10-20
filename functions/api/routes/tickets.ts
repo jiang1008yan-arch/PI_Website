@@ -2,7 +2,7 @@ import { all, first, id } from "../../lib/db";
 import { normalizeSerial } from "../../lib/devices";
 import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
 import { canConfirmFault, canUseTickets, type TicketStatus } from "../../lib/ticketAccess";
-import { addTicketNote, assignTicket, changeTicketStatus, confirmTicketFault, createTicket, setTicketType } from "../../lib/ticketService";
+import { addTicketNote, assignTicket, changeTicketStatus, confirmTicketFault, createTicket, setTicketCustomer, setTicketType } from "../../lib/ticketService";
 import { afterTicketChange } from "../../lib/feishu/sync";
 import { body, createApp } from "./_shared";
 
@@ -242,6 +242,13 @@ ticketRoutes.patch("/tickets/:id/assign", async (c) => {
   const result = await assignTicket(c.env.DB, c.get("user"), c.req.param("id"), d);
   const newOwnerIds = [result.newServiceOwnerId, result.newSalesOwnerId].filter((v): v is string => Boolean(v) && v !== c.get("user").id);
   if (result.changed) afterTicketChange(c, c.req.param("id"), { kind: "assigned", newOwnerIds });
+  return c.json({ ok: true });
+});
+
+// After-sales correct the customer and production order number.
+ticketRoutes.patch("/tickets/:id/customer", async (c) => {
+  const d = await body<{ customerCompany?: string; orderNo?: string }>(c);
+  if (await setTicketCustomer(c.env.DB, c.get("user"), c.req.param("id"), d)) afterTicketChange(c, c.req.param("id"), { kind: "product" });
   return c.json({ ok: true });
 });
 

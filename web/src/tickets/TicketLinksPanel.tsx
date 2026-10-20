@@ -5,7 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { EmptyState, ErrorText, Field } from "../components/Form";
 import type { TicketLink, User } from "../types";
 import { formatDateTime } from "./ticketShared";
-import { ProductionOrderHint } from "./ProductionOrderHint";
+import { LookupInput } from "../components/LookupInput";
 
 function publicUrl(token: string) {
   return `${window.location.origin}/ticket/new?t=${token}`;
@@ -97,14 +97,18 @@ export function TicketLinksPanel() {
       <form onSubmit={create} className="space-y-4 rounded-lg border border-[#e8eef9] bg-[#f8fbff] p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <Field label="Customer company">
-            <input value={customerCompany} onChange={(e) => setCustomerCompany(e.target.value)} maxLength={200} />
+            <LookupInput kind="customer" value={customerCompany} onChange={setCustomerCompany} maxLength={200} placeholder="Type to search existing customers" />
           </Field>
-          <div>
-            <Field label="Production order no.">
-              <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} maxLength={100} />
-            </Field>
-            <ProductionOrderHint orderNo={orderNo} onUseCompany={setCustomerCompany} />
-          </div>
+          <Field label="Production order no.">
+            <LookupInput
+              kind="order"
+              value={orderNo}
+              onChange={setOrderNo}
+              onPick={(m) => m.customerCompany && setCustomerCompany(m.customerCompany)}
+              maxLength={100}
+              placeholder="Type part of the order, PI no. or customer"
+            />
+          </Field>
         </div>
         {isAdmin && (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
