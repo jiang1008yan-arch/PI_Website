@@ -110,23 +110,46 @@ describe("cards", () => {
 });
 
 describe("AI triage", () => {
-  const env = {} as Env;
-  const fakeClient = (result: unknown) => ({ beta: { messages: { parse: async () => result } } }) as any;
+  const env = { DASHSCOPE_API_KEY: "sk-test" } as Env;
+  const reply = (content: string, status = 200) =>
+    (async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status })) as unknown as typeof fetch;
 
-  it("returns nothing without an API key or client", async () => {
-    expect(await triageMessages(env, "x", ["Offline"])).toBeNull();
+  it("returns nothing without an API key", async () => {
+    let called = false;
+    const spy = (async () => { called = true; return new Response("{}"); }) as unknown as typeof fetch;
+    expect(await triageMessages({} as Env, "x", ["Offline"], spy)).toBeNull();
+    expect(called).toBe(false);
+  });
+
+  it("calls Qwen's compatible endpoint with JSON output", async () => {
+    let seen: { url: string; init: RequestInit } | null = null;
+    const spy = (async (url: string, init: RequestInit) => {
+      seen = { url, init };
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"summary":"充电桩离线","faultType":"Offline"}' } }] }));
+    }) as unknown as typeof fetch;
+    await triageMessages(env, "charger offline", ["Offline"], spy);
+    expect(seen!.url).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+    expect((seen!.init.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
+    const body = JSON.parse(String(seen!.init.body));
+    expect(body.model).toBe("qwen-plus");
+    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(body.messages[1].content).toContain("<customer_messages>\ncharger offline");
+    await triageMessages({ ...env, QWEN_MODEL: "qwen-max" }, "x", [], spy);
+    expect(JSON.parse(String(seen!.init.body)).model).toBe("qwen-max");
   });
 
   it("keeps the fault type only if it is on the list", async () => {
-    const ok = await triageMessages(env, "x", ["Offline"], fakeClient({ stop_reason: "end_turn", parsed_output: { summary: " Charger offline. ", faultType: "Offline" } }));
-    expect(ok).toEqual({ summary: "Charger offline.", faultType: "Offline" });
-    const none = await triageMessages(env, "x", ["Offline"], fakeClient({ stop_reason: "end_turn", parsed_output: { summary: "s", faultType: "none" } }));
+    const ok = await triageMessages(env, "x", ["Offline"], reply('{"summary":" 充电桩离线。 ","faultType":"Offline"}'));
+    expect(ok).toEqual({ summary: "充电桩离线。", faultType: "Offline" });
+    const none = await triageMessages(env, "x", ["Offline"], reply('{"summary":"s","faultType":"none"}'));
     expect(none).toEqual({ summary: "s", faultType: null });
   });
 
-  it("degrades to no suggestion on refusal or error", async () => {
-    expect(await triageMessages(env, "x", [], fakeClient({ stop_reason: "refusal", parsed_output: null }))).toBeNull();
-    const failing = { beta: { messages: { parse: async () => { throw new Error("down"); } } } } as any;
+  it("degrades to no suggestion on an error status, bad JSON or a network failure", async () => {
+    expect(await triageMessages(env, "x", [], reply("{}", 401))).toBeNull();
+    expect(await triageMessages(env, "x", [], reply("not json"))).toBeNull();
+    expect(await triageMessages(env, "x", [], reply('{"faultType":"Offline"}'))).toBeNull();
+    const failing = (async () => { throw new Error("down"); }) as unknown as typeof fetch;
     expect(await triageMessages(env, "x", [], failing)).toBeNull();
   });
 });

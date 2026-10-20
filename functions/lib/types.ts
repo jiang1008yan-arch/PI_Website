@@ -20,8 +20,10 @@ export type Env = {
   FEISHU_VERIFICATION_TOKEN?: string;
   FEISHU_ENCRYPT_KEY?: string;
   FEISHU_SERVICE_CHAT_ID?: string;
-  // Claude API key for AI suggestions on "turn into ticket"; optional.
-  ANTHROPIC_API_KEY?: string;
+  // Qwen (Alibaba Cloud Model Studio) key for AI suggestions on "turn into
+  // ticket"; optional. QWEN_MODEL overrides the default qwen-plus.
+  DASHSCOPE_API_KEY?: string;
+  QWEN_MODEL?: string;
 };
 
 export type AppUser = {
