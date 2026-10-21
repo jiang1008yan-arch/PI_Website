@@ -3,6 +3,7 @@ import { repeatSettings } from "../faultStats";
 import type { Env } from "../types";
 import { weeklySummaryCard, type WeeklySummary } from "./cards";
 import { sendCard, sendText } from "./client";
+import { feishuTarget } from "./identity";
 
 // Scheduled nudges (run by the cron trigger, see functions/scheduled.ts):
 // - each after-sales owner is reminded, in one private message, about open
@@ -18,13 +19,21 @@ const HOUR = 60 * 60 * 1000;
 const sqlTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
 const parseSqlTime = (value: string) => new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
 
-export type StaleTicket = { id: string; ticketNo: string; customerCompany: string; updatedAt: string; ownerId: string; ownerOpenId: string };
+export type StaleTicket = {
+  id: string;
+  ticketNo: string;
+  customerCompany: string;
+  updatedAt: string;
+  ownerId: string;
+  ownerUnionId: string | null;
+  ownerOpenId: string | null;
+};
 
 // One message per owner listing their stale tickets, oldest first.
 export function groupReminders(rows: StaleTicket[], now: Date, portalUrl: string | null) {
   const byOwner = new Map<string, StaleTicket[]>();
-  for (const row of rows) byOwner.set(row.ownerOpenId, [...(byOwner.get(row.ownerOpenId) ?? []), row]);
-  return [...byOwner.entries()].map(([openId, tickets]) => {
+  for (const row of rows) byOwner.set(row.ownerId, [...(byOwner.get(row.ownerId) ?? []), row]);
+  return [...byOwner.entries()].map(([ownerId, tickets]) => {
     tickets.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     const lines = tickets.map((t) => {
       const hours = Math.floor((now.getTime() - parseSqlTime(t.updatedAt).getTime()) / HOUR);
@@ -32,7 +41,8 @@ export function groupReminders(rows: StaleTicket[], now: Date, portalUrl: string
       return `- ${t.ticketNo} (${t.customerCompany || "—"}): no update for ${age}${portalUrl ? ` ${portalUrl}/tickets/${t.id}` : ""}`;
     });
     return {
-      openId,
+      ownerId,
+      target: feishuTarget({ feishuUnionId: tickets[0].ownerUnionId, feishuOpenId: tickets[0].ownerOpenId }),
       ticketIds: tickets.map((t) => t.id),
       text: `Reminder: ${tickets.length === 1 ? "this ticket has" : `these ${tickets.length} tickets have`} not been updated for over ${REMINDER_AFTER_HOURS} hours. Please add progress or change the status.\n${lines.join("\n")}`
     };
@@ -43,16 +53,18 @@ export async function remindStaleOwners(env: Env, now: Date): Promise<number> {
   const cutoff = sqlTime(new Date(now.getTime() - REMINDER_AFTER_HOURS * HOUR));
   const rows = await all<StaleTicket>(
     env.DB,
-    `SELECT t.id, t.ticketNo, t.customerCompany, t.updatedAt, t.assignedServiceId AS ownerId, u.feishuOpenId AS ownerOpenId
+    `SELECT t.id, t.ticketNo, t.customerCompany, t.updatedAt, t.assignedServiceId AS ownerId,
+            u.feishuUnionId AS ownerUnionId, u.feishuOpenId AS ownerOpenId
      FROM tickets t JOIN users u ON u.id = t.assignedServiceId
-     WHERE t.status IN ('NEW', 'IN_PROGRESS') AND u.feishuOpenId IS NOT NULL
+     WHERE t.status IN ('NEW', 'IN_PROGRESS') AND (u.feishuUnionId IS NOT NULL OR u.feishuOpenId IS NOT NULL)
        AND t.updatedAt < ? AND (t.lastRemindedAt IS NULL OR t.lastRemindedAt < ?)`,
     cutoff,
     cutoff
   );
   const messages = groupReminders(rows, now, env.APP_BASE_URL ?? null);
   for (const m of messages) {
-    await sendText(env, "open_id", m.openId, m.text);
+    if (!m.target) continue;
+    await sendText(env, m.target.type, m.target.id, m.text);
     await env.DB.prepare(`UPDATE tickets SET lastRemindedAt = ? WHERE id IN (${m.ticketIds.map(() => "?").join(",")})`)
       .bind(sqlTime(now), ...m.ticketIds)
       .run();

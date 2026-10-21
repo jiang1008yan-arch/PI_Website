@@ -318,8 +318,8 @@ export function bindCard(link: string) {
     header: { title: plain("Link your Feishu account"), template: "blue" },
     body: {
       elements: [
-        md("Before you can update tickets from Feishu, link this Feishu account to your portal account once."),
-        { tag: "button", text: plain("Link account"), type: "primary", behaviors: [{ type: "open_url", default_url: link }] }
+        md("Your Feishu account is not linked to a portal account yet. Sign in once with Feishu and your portal username and password, or ask an admin to add your Feishu mobile number in Permission Management."),
+        { tag: "button", text: plain("Sign in with Feishu"), type: "primary", behaviors: [{ type: "open_url", default_url: link }] }
       ]
     }
   };

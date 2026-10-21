@@ -86,11 +86,11 @@ describe("owner reminders", () => {
   it("groups and words the reminder", () => {
     const now = new Date("2026-10-21T00:00:00Z");
     const rows = [
-      { id: "a", ticketNo: "TK-A", customerCompany: "X", updatedAt: "2026-10-18 00:00:00", ownerId: "u1", ownerOpenId: "ou_1" },
-      { id: "b", ticketNo: "TK-B", customerCompany: "", updatedAt: "2026-10-19 20:00:00", ownerId: "u2", ownerOpenId: "ou_2" }
+      { id: "a", ticketNo: "TK-A", customerCompany: "X", updatedAt: "2026-10-18 00:00:00", ownerId: "u1", ownerUnionId: "on_1", ownerOpenId: "ou_1" },
+      { id: "b", ticketNo: "TK-B", customerCompany: "", updatedAt: "2026-10-19 20:00:00", ownerId: "u2", ownerUnionId: null, ownerOpenId: "ou_2" }
     ];
     const msgs = groupReminders(rows, now, null);
-    expect(msgs.map((m) => m.openId)).toEqual(["ou_1", "ou_2"]);
+    expect(msgs.map((m) => m.target)).toEqual([{ type: "union_id", id: "on_1" }, { type: "open_id", id: "ou_2" }]);
     expect(msgs[0].text).toContain("TK-A (X): no update for 3 days");
     expect(msgs[1].text).toContain("TK-B (—): no update for 28 hours");
   });
@@ -127,11 +127,11 @@ describe("Feishu request expiry", () => {
   it("greys out requests left for six hours, and refuses them afterwards", async () => {
     const now = new Date();
     await h.db
-      .prepare("INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_old', 'ou_service', 'oc_dm', 'om_src', 'hi', 'om_prompt_old', ?)")
+      .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_old', 'ou_service', 'oc_dm', 'om_src', 'hi', 'om_prompt_old', ?)")
       .bind(hoursAgo(now, 7))
       .run();
     await h.db
-      .prepare("INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_new', 'ou_service', 'oc_dm', 'om_src2', 'hi', 'om_prompt_new', ?)")
+      .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_new', 'ou_service', 'oc_dm', 'om_src2', 'hi', 'om_prompt_new', ?)")
       .bind(hoursAgo(now, 1))
       .run();
     expect(isDraftExpired({ createdAt: hoursAgo(now, 7) }, now)).toBe(true);

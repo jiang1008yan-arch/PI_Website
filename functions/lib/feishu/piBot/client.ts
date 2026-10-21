@@ -110,3 +110,15 @@ export async function userFromCode(app: FeishuApp, code: string, redirectUri: st
   );
   return { unionId: info.data.union_id, openId: info.data.open_id, name: info.data.name ?? "" };
 }
+
+// The Feishu directory's union id for a mobile number (null: no such active
+// member, or outside the app's contacts range). Needs the
+// contact:user.id:readonly permission ("obtain user ID via email or mobile").
+export async function unionIdForMobile(app: FeishuApp, mobile: string): Promise<string | null> {
+  const data = await call(app, "POST", "/contact/v3/users/batch_get_id?user_id_type=union_id", {
+    mobiles: [mobile],
+    include_resigned: false
+  });
+  const match = (data.data?.user_list ?? []).find((u: any) => u.user_id);
+  return match ? String(match.user_id) : null;
+}

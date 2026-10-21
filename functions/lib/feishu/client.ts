@@ -43,7 +43,7 @@ async function call(env: Env, method: string, path: string, body?: unknown): Pro
   return data.data ?? {};
 }
 
-export type ReceiveIdType = "chat_id" | "open_id";
+export type ReceiveIdType = "chat_id" | "open_id" | "union_id";
 
 export async function sendCard(env: Env, type: ReceiveIdType, receiveId: string, card: unknown): Promise<string> {
   const data = await call(env, "POST", `/im/v1/messages?receive_id_type=${type}`, {

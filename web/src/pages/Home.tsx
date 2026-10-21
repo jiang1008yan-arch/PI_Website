@@ -111,7 +111,7 @@ export function HomePage() {
   ];
   const adminModules: HomeModule[] = [
     { to: "/reviews", title: "Pending Reviews", desc: "Presales confirmation of Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
-    { to: "/commerce", title: "Commerce Queue", desc: "Watch PIs awaiting commerce approval", Icon: BadgeCheck, tone: "violet", art: "stamp" },
+    { to: "/commerce", title: "Commerce Queue", desc: "Approve or reject PIs awaiting commerce approval", Icon: BadgeCheck, tone: "violet", art: "stamp" },
     { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
     { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
     { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" },

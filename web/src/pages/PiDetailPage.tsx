@@ -76,7 +76,7 @@ export function PiDetailPage() {
     [highlight, shownPair, shown]
   );
 
-  const isCommerceDecision = user?.role === "COMMERCE" && status === "PENDING_COMMERCE";
+  const isCommerceDecision = (user?.role === "COMMERCE" || user?.role === "ADMIN") && status === "PENDING_COMMERCE";
   const canDownload = user?.role !== "SERVICE" && (user?.role === "ADMIN" || user?.role === "COMMERCE" || tab === "EN");
   const owner = zh?.pi.createdById === user?.id;
   const canStartRevision = status === "APPROVED" && !data?.revisionInProgress && (user?.role === "ADMIN" || owner);

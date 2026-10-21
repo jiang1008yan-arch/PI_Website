@@ -75,9 +75,11 @@ tickets not updated for 24 hours, the Monday summary, and device offline alerts.
 - **Requests expire:** a "create a ticket?" card or form not submitted within 6 hours turns grey; @ the bot again.
 - **Find in the form:** type part of a production order, customer or SN and press **Find** to pick from what is already in the
   system; a production order or SN written in the message is filled in automatically.
-- The first time someone presses a card button the bot DMs them a one-time link to tie their Feishu account to their portal
-  account; sending **绑定** (or "bind") to the bot in a direct message also gets the link. Only after-sales and admins can take or
-  update tickets; sales can create them.
+- **Who is who:** both bots know a person by one Feishu identity (`union_id`), linked either by an admin entering the
+  person's Feishu mobile number in Permission Management, or by the person signing in with Feishu once (portal username and
+  password on first use). Someone unlinked who presses a card button, or sends **bind** to the bot, gets the "Sign in with
+  Feishu" link. Only after-sales and admins create, take or update tickets; sales only read the tickets in their name.
+- **Unreachable owner:** when a ticket's after-sales owner has not linked Feishu, the linked admins get a short notice.
 - **Whoever creates a ticket owns it** (after-sales/admin as the after-sales owner, sales as the sales owner). Any after-sales can hand
   it over in the portal (ticket page → Assignees); every change is written to the ticket's activity and the new owner gets a Feishu DM.
 - **Ticket type:** Fault / Product request / Question or other. It must be set before a ticket can be resolved (and a fault needs its
@@ -182,18 +184,20 @@ submitter picked (presales, then commerce), takes **Approve** / **Reject (reason
 cards, and tells the submitter the result. Its "Edit on website" link signs people in with Feishu.
 
 1. Create a self-built app (e.g. "PI Assistant") with **Bot**, and request: `im:message`, `im:message:send_as_bot`,
-   `im:message.p2p_msg:readonly`, `im:message:update`.
+   `im:message.p2p_msg:readonly`, `im:message:update`, and **通过手机号或邮箱获取用户 ID** (`contact:user.id:readonly`)
+   with the contacts data range set to all staff — the portal uses it to link people from their mobile number.
 2. **Security settings → Redirect URL**: `https://<portal-domain>/api/auth/feishu/callback`
    (locally: `http://localhost:8788/api/auth/feishu/callback`).
 3. **Events & callbacks**: event 接收消息 v2.0 and callback 卡片回传交互 — "send to developer server" with request URL
    `https://<portal-domain>/api/feishu/pi/events` for both, or long connection locally (section 4).
 4. Secrets: `FEISHU_PI_APP_ID`, `FEISHU_PI_APP_SECRET`, `FEISHU_PI_VERIFICATION_TOKEN`, `FEISHU_PI_ENCRYPT_KEY`
    (set the encrypt key in production; leave it empty with the local long-connection bridge).
-5. Publish a version. Each approver links their account once: **Sign in with Feishu** on the login page (or the
-   card's "Edit on website"), then their portal username and password. Cards reach only linked users.
+5. Publish a version. Link people either by entering their Feishu mobile number in **Permission Management** (automatic)
+   or by having them **Sign in with Feishu** once (login page or the card's "Edit on website").
 
-People are identified by `union_id` (the same in every company app), so this link is separate from the after-sales
-bot's account link (which stores that app's `open_id`).
+People are identified by `union_id` (the same in every company app), and the after-sales bot uses the same link. When
+the approver of a step is not picked or not linked, the card goes to every linked admin with a note saying who should
+have had it; admins may act at every step.
 
 ## 5. Verify in a test tenant before going live
 

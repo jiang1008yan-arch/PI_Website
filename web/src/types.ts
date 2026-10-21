@@ -9,6 +9,9 @@ export type User = {
   displayName: string;
   role: Role;
   createdAt?: string;
+  // Admin list only: the Feishu mobile number and whether a Feishu account is linked.
+  mobile?: string | null;
+  feishuLinked?: number | boolean;
 };
 
 export type Category = {

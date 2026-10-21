@@ -47,9 +47,9 @@ describe("two-step approval", () => {
     expect(queue.status).toBe(200);
     expect(queue.body.map((p: any) => p.id)).toEqual([zhId]);
 
-    // ADMIN may watch the queue but never decide; commerce never edits.
+    // ADMIN sees the queue and may decide too (tested below); commerce never edits.
     expect((await h.request("ADMIN", "GET", "/pi/commerce-queue")).status).toBe(200);
-    expect((await h.request("ADMIN", "POST", `/pi/${zhId}/commerce-approve`, {})).status).toBe(403);
+    expect((await h.request("PRESALES", "POST", `/pi/${zhId}/commerce-approve`, {})).status).toBe(403);
     expect((await h.request("COMMERCE", "PATCH", `/pi/${zhId}`, { customerCompany: "X" })).status).toBe(403);
     expect((await h.request("SALES", "GET", "/pi/commerce-queue")).status).toBe(403);
 
@@ -130,13 +130,15 @@ describe("revisions", () => {
     expect((await h.request("SALES", "PATCH", `/pi/${zhId}`, { customerCompany: "ACME Ltd", items: [item(5)] })).status).toBe(200);
     expect((await h.request("SALES", "PATCH", `/pi/${enId}`, { customerCompany: "ACME Ltd", items: [item(5)] })).status).toBe(200);
 
-    // After-sales and the approved list still see the approved content.
+    // After-sales see the full PI read-only: the approved content, the revision
+    // in progress and the linked English PI.
     const service = await h.request("SERVICE", "GET", `/pi/${zhId}/view`);
     expect(service.status).toBe(200);
-    expect(service.body.zh.current).toBeNull();
+    expect(service.body.zh.current.pi.customerCompany).toBe("ACME Ltd");
     expect(service.body.zh.effective.pi.customerCompany).toBe("ACME");
     expect(service.body.zh.effective.items[0].quantity).toBe(2);
-    expect(service.body.en).toBeNull();
+    expect(service.body.en.current.pi.id).toBe(enId);
+    expect((await h.request("SERVICE", "GET", `/pi/${zhId}/export-bundle`)).status).toBe(403);
 
     const list = await h.request("COMMERCE", "GET", "/pi/approved");
     expect(list.body.items.map((p: any) => [p.id, p.customerCompany, p.revisionInProgress])).toEqual([[zhId, "ACME", 1]]);

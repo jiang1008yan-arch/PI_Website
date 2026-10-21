@@ -80,20 +80,36 @@ export function outcomeText(transition: PiTransition, actorName: string, step: A
   return "Superseded by a new submission";
 }
 
-// Union ids of whoever must act on the PI's current step.
-async function approverUnionIds(db: D1Database, pi: PiRow): Promise<string[]> {
+// Union ids of whoever must act on the PI's current step. When nobody can be
+// reached (no pick, or the picked people never linked Feishu), the linked
+// admins get the card instead, with a note saying who should have had it —
+// admins may act at every step.
+async function approverUnionIds(db: D1Database, pi: PiRow): Promise<{ unionIds: string[]; note?: string }> {
+  let candidates: Array<{ displayName: string; feishuUnionId: string | null }> = [];
+  let missing = "";
   if (pi.status === "PENDING_REVIEW") {
-    if (!pi.assignedToId) return [];
-    const row = await first<{ feishuUnionId: string | null }>(db, "SELECT feishuUnionId FROM users WHERE id = ?", pi.assignedToId);
-    return row?.feishuUnionId ? [row.feishuUnionId] : [];
+    if (pi.assignedToId) {
+      candidates = await all(db, "SELECT displayName, feishuUnionId FROM users WHERE id = ?", pi.assignedToId);
+    } else {
+      missing = "No presales approver was picked for this PI.";
+    }
+  } else if (pi.status === "PENDING_COMMERCE") {
+    candidates = pi.commerceId
+      ? await all(db, "SELECT displayName, feishuUnionId FROM users WHERE id = ?", pi.commerceId)
+      : await all(db, "SELECT displayName, feishuUnionId FROM users WHERE role = 'COMMERCE'");
+    if (!candidates.length) missing = "There is no commerce user to approve this PI.";
+  } else {
+    return { unionIds: [] };
   }
-  if (pi.status === "PENDING_COMMERCE") {
-    const rows = pi.commerceId
-      ? await all<{ feishuUnionId: string }>(db, "SELECT feishuUnionId FROM users WHERE id = ? AND feishuUnionId IS NOT NULL", pi.commerceId)
-      : await all<{ feishuUnionId: string }>(db, "SELECT feishuUnionId FROM users WHERE role = 'COMMERCE' AND feishuUnionId IS NOT NULL");
-    return rows.map((r) => r.feishuUnionId);
-  }
-  return [];
+  const linked = candidates.map((u) => u.feishuUnionId).filter((v): v is string => Boolean(v));
+  if (linked.length) return { unionIds: linked };
+
+  const verb = stepOf(pi.status) === "COMMERCE" ? "approve" : "confirm";
+  const names = candidates.map((u) => u.displayName).join(", ");
+  const note = missing ||
+    `${names} should ${verb} this PI but ${candidates.length === 1 ? "has" : "have"} not linked Feishu, so the card came to you. Act on it, or ask them to sign in with Feishu (or add their Feishu mobile in Permission Management).`;
+  const admins = await all<{ feishuUnionId: string }>(db, "SELECT feishuUnionId FROM users WHERE role = 'ADMIN' AND feishuUnionId IS NOT NULL");
+  return { unionIds: admins.map((a) => a.feishuUnionId), note };
 }
 
 export async function notifyPiTransition(
@@ -117,8 +133,9 @@ export async function notifyPiTransition(
         "SELECT COUNT(*) AS n FROM piReviewEvents WHERE piId = ? AND action = 'SUBMITTED'",
         pi.id
       );
-      const card = buildPiCard(pi, items, { kind: "action", resubmission: (submissions?.n ?? 0) > 1 }, url);
-      for (const unionId of await approverUnionIds(env.DB, pi)) {
+      const recipients = await approverUnionIds(env.DB, pi);
+      const card = buildPiCard(pi, items, { kind: "action", resubmission: (submissions?.n ?? 0) > 1, note: recipients.note }, url);
+      for (const unionId of recipients.unionIds) {
         const messageId = await sendCard(app, unionId, card);
         await env.DB.prepare("INSERT INTO feishuPiCards (id, piId, unionId, messageId) VALUES (?, ?, ?, ?)")
           .bind(id("fpc"), pi.id, unionId, messageId)

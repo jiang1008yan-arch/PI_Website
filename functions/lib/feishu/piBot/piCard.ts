@@ -40,7 +40,8 @@ export type CardItem = {
 //   closed — an earlier action card, now resolved (no buttons)
 //   info   — a notice to the submitter (approved / rejected)
 export type PiCardMode =
-  | { kind: "action"; resubmission: boolean }
+  // `note`: why this card reached an admin instead of the approver.
+  | { kind: "action"; resubmission: boolean; note?: string }
   | { kind: "closed"; outcome: string }
   | { kind: "info"; message: string };
 
@@ -113,6 +114,7 @@ export function buildPiCard(pi: CardPi, items: CardItem[], mode: PiCardMode, edi
   if (items.length > MAX_ITEMS) lines.push(`…and ${items.length - MAX_ITEMS} more line items. Open the PI on the website to see all.`);
 
   const elements: any[] = [
+    ...(mode.kind === "action" && mode.note ? [{ tag: "markdown", content: `⚠️ ${md(mode.note)}` }, { tag: "hr" }] : []),
     { tag: "markdown", content: facts.join("\n") },
     { tag: "hr" },
     { tag: "markdown", content: lines.length ? `**Line items (${items.length})**\n${lines.join("\n")}` : "**Line items:** none" },

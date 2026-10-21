@@ -46,15 +46,16 @@ export function canActOnPresales(role: Role, userId: string, pi: { assignedToId?
 }
 
 // Commerce approval is done by the COMMERCE user the submitter picked
-// (pi.commerceId); PIs submitted before picks existed are open to any commerce user.
+// (pi.commerceId; none picked = any commerce user), or by any ADMIN.
 export function canActOnCommerce(role: Role, userId: string, pi: { commerceId?: string | null }): boolean {
+  if (role === "ADMIN") return true;
   return role === "COMMERCE" && (!pi.commerceId || pi.commerceId === userId);
 }
 
-// Is this a commerce user looking at a ZH PI that awaits their decision?
-// Commerce may approve or reject but never edit.
+// Is this a commerce user (or an admin) looking at a ZH PI that awaits the
+// commerce decision? They may approve or reject but never edit.
 export function isCommerceDecisionMode(role: Role, language: Language, status: PiStatus): boolean {
-  return role === "COMMERCE" && language === "ZH" && status === "PENDING_COMMERCE";
+  return (role === "COMMERCE" || role === "ADMIN") && language === "ZH" && status === "PENDING_COMMERCE";
 }
 
 // Does the ZH PI have an effective (approved) version? True once approved, and

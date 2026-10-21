@@ -67,9 +67,10 @@ describe("canDeletePiByStatus", () => {
 });
 
 describe("isCommerceDecisionMode", () => {
-  it("is true only for COMMERCE on a ZH PENDING_COMMERCE PI", () => {
+  it("is true only for COMMERCE (or ADMIN) on a ZH PENDING_COMMERCE PI", () => {
     expect(isCommerceDecisionMode("COMMERCE", "ZH", "PENDING_COMMERCE")).toBe(true);
-    for (const role of ["ADMIN", "SALES", "SERVICE"] as Role[]) {
+    expect(isCommerceDecisionMode("ADMIN", "ZH", "PENDING_COMMERCE")).toBe(true);
+    for (const role of ["SALES", "SERVICE", "PRESALES"] as Role[]) {
       expect(isCommerceDecisionMode(role, "ZH", "PENDING_COMMERCE")).toBe(false);
     }
     expect(isCommerceDecisionMode("COMMERCE", "EN", "PENDING_COMMERCE")).toBe(false);

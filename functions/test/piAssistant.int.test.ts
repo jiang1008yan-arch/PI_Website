@@ -29,6 +29,11 @@ function fakeFeishu(): typeof fetch {
     if (path.startsWith("/auth/v3/tenant_access_token")) return json({ code: 0, tenant_access_token: "t-1", expire: 7200 });
     if (path.startsWith("/authen/v2/oauth/token")) return json({ code: 0, access_token: "u-1" });
     if (path.startsWith("/authen/v1/user_info")) return json({ code: 0, data: { union_id: "on_pat", open_id: "ou_pat", name: "Pat" } });
+    if (path.startsWith("/contact/v3/users/batch_get_id")) {
+      // The directory knows two numbers; any other is not a member.
+      const known: Record<string, string> = { "13800000001": "on_dir_1", "13800000002": "on_dir_2" };
+      return json({ code: 0, data: { user_list: body.mobiles.map((m: string) => (known[m] ? { mobile: m, user_id: known[m] } : { mobile: m })) } });
+    }
     return json({ code: 0, data: { message_id: `om_${++nextId}` } });
   }) as typeof fetch;
 }
@@ -163,6 +168,64 @@ describe("concurrency guard", () => {
     expect(await events()).toBe(before);
     const row = await h.db.prepare("SELECT status, customerCompany FROM pi WHERE id=?").bind(zhId).first<any>();
     expect(row).toEqual({ status: "PENDING_COMMERCE", customerCompany: "ACME" });
+  });
+});
+
+describe("reaching the right person", () => {
+  const cardNote = (c: Call) => JSON.stringify(JSON.parse(c.body.content).body.elements[0]);
+
+  it("an approver who has not linked Feishu: the card goes to the linked admins, saying why", async () => {
+    await h.db.prepare("UPDATE users SET feishuUnionId='on_admin' WHERE id=?").bind(h.users.ADMIN.id).run();
+    const zhId = await zhDraft("SO-FALLBACK");
+    await h.request("SALES", "POST", `/pi/${zhId}/submit-for-review`, { assignedToId: otherPresales.id, commerceId: commerce.id });
+    await h.settle();
+    const cards = sentCards();
+    expect(cards.map((c) => c.body.receive_id)).toEqual(["on_admin"]);
+    expect(cardNote(cards[0])).toContain("PRE2 should confirm this PI but has not linked Feishu");
+  });
+
+  it("no presales pick: the linked admins get the card", async () => {
+    await h.db.prepare("UPDATE users SET feishuUnionId='on_admin' WHERE id=?").bind(h.users.ADMIN.id).run();
+    const zhId = await zhDraft("SO-NOPICK");
+    await h.request("SALES", "POST", `/pi/${zhId}/submit-for-review`, {});
+    await h.settle();
+    expect(sentCards().map((c) => c.body.receive_id)).toEqual(["on_admin"]);
+    expect(cardNote(sentCards()[0])).toContain("No presales approver was picked");
+  });
+
+  it("an admin may decide the commerce step even when a commerce approver was picked", async () => {
+    const zhId = await zhDraft("SO-ADMINCOM");
+    await h.request("SALES", "POST", `/pi/${zhId}/submit-for-review`, { assignedToId: presales.id, commerceId: commerce.id });
+    await h.request(presales, "POST", `/pi/${zhId}/approve`, {});
+    expect((await h.request(otherCommerce, "POST", `/pi/${zhId}/commerce-approve`, {})).status).toBe(403);
+    expect((await h.request("ADMIN", "POST", `/pi/${zhId}/commerce-approve`, {})).status).toBe(200);
+    expect(await status(zhId)).toBe("APPROVED");
+  });
+
+  it("admins link a Feishu account from its mobile number, see the status, and can unlink", async () => {
+    const created = await h.request("ADMIN", "POST", "/users", { username: "kim", password: "Passw0rd!x", displayName: "Kim", role: "SALES", mobile: "+86 138-0000-0001" });
+    expect(created.body.feishu.status).toBe("linked");
+    const kim = created.body.id as string;
+    const row = () => h.db.prepare("SELECT mobile, feishuUnionId FROM users WHERE id=?").bind(kim).first<any>();
+    expect(await row()).toEqual({ mobile: "13800000001", feishuUnionId: "on_dir_1" });
+    expect((await h.request("ADMIN", "GET", "/users")).body.find((u: any) => u.id === kim).feishuLinked).toBe(1);
+
+    // Unknown number; a number already linked to someone else; a malformed one.
+    expect((await h.request("ADMIN", "PATCH", `/users/${kim}`, { mobile: "13899999999" })).body.feishu.status).toBe("not_found");
+    await h.db.prepare("UPDATE users SET feishuUnionId='on_dir_2' WHERE id=?").bind(presales.id).run();
+    expect((await h.request("ADMIN", "PATCH", `/users/${kim}`, { mobile: "13800000002" })).body.feishu).toMatchObject({ status: "taken", message: expect.stringContaining("PRE1") });
+    expect((await h.request("ADMIN", "PATCH", `/users/${kim}`, { mobile: "call me" })).status).toBe(400);
+    expect((await h.request("SALES", "PATCH", `/users/${kim}`, { mobile: "13800000001" })).status).toBe(403);
+
+    expect((await h.request("ADMIN", "DELETE", `/users/${kim}/feishu-link`)).status).toBe(200);
+    expect((await row()).feishuUnionId).toBeNull();
+    await h.request("ADMIN", "PATCH", `/users/${kim}`, { mobile: "13800000001" });
+    expect((await h.request("ADMIN", "POST", `/users/${kim}/feishu-link`)).body.feishu.status).toBe("linked");
+
+    // The approver pickers say who is reachable in Feishu.
+    const recipients = (await h.request("SALES", "GET", "/review-recipients")).body;
+    expect(recipients.find((u: any) => u.id === presales.id).feishuLinked).toBe(1);
+    expect(recipients.find((u: any) => u.id === h.users.COMMERCE.id).feishuLinked).toBe(0);
   });
 });
 

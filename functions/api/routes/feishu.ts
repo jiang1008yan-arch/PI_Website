@@ -8,6 +8,8 @@ import { feishuEnabled, getMessageText, listBitableFields, messageContentToText,
 import { readIncoming } from "../../lib/feishu/crypto";
 import { checkPoolFields, parsePoolUrl, POOL_URL_OPTION_KEY } from "../../lib/feishu/requirementPool";
 import { pushTicketChange } from "../../lib/feishu/sync";
+import { feishuTarget, userForFeishu } from "../../lib/feishu/identity";
+import { siteBase } from "../../lib/feishu/piBot/notifyPi";
 import { canCreateTicket } from "../../lib/ticketAccess";
 import {
   addTicketNote,
@@ -26,12 +28,12 @@ import { body, createApp } from "./_shared";
 
 // Feishu bot endpoints (docs/adr/0002-feishu-as-after-sales-work-surface.md).
 // /feishu/events and /feishu/card are called by Feishu (authenticated by its
-// signature / verification token, not a portal login); /feishu/bind is called
-// by a signed-in portal user to link their Feishu account.
+// signature / verification token, not a portal login). Feishu accounts are
+// linked through "Sign in with Feishu" (routes/feishuAuth.ts) or by an admin's
+// mobile number (routes/users.ts) — see lib/feishu/identity.ts.
 
 export const feishuRoutes = createApp();
 
-const BIND_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 function runLater(c: Context, task: () => Promise<unknown>) {
   const promise = task().catch((error) => console.error("Feishu background task failed", error));
@@ -62,21 +64,22 @@ async function firstSeen(db: D1Database, key: string): Promise<boolean> {
   return (res.meta?.changes ?? 0) > 0;
 }
 
-async function userForOpenId(db: D1Database, openId: string): Promise<AppUser | null> {
-  return await first<AppUser>(db, "SELECT id, username, displayName, role FROM users WHERE feishuOpenId = ?", openId);
-}
+// Feishu ids of an event's sender or card operator.
+type FeishuPerson = { unionId: string; openId: string };
+const personOf = (ids: any): FeishuPerson => ({ unionId: String(ids?.union_id ?? ""), openId: String(ids?.open_id ?? "") });
+const privateTarget = (p: FeishuPerson) => feishuTarget({ feishuUnionId: p.unionId || null, feishuOpenId: p.openId || null });
 
 async function faultTypes(db: D1Database) {
   return (await all<{ value: string }>(db, "SELECT value FROM appOptions WHERE optionKey = ? ORDER BY sortOrder, value", FAULT_TYPE_OPTION_KEY)).map((r) => r.value);
 }
 
-// DM a one-time link that ties this Feishu account to a portal account.
-async function sendBindLink(env: Env, openId: string) {
-  const token = id("fbt");
-  const expiresAt = new Date(Date.now() + BIND_TOKEN_TTL_MS).toISOString();
-  await env.DB.prepare("INSERT INTO feishuBindTokens (token, openId, expiresAt) VALUES (?, ?, ?)").bind(token, openId, expiresAt).run();
-  const base = env.APP_BASE_URL ?? "";
-  await sendCard(env, "open_id", openId, bindCard(`${base}/feishu/bind?token=${encodeURIComponent(token)}`));
+// DM the "Sign in with Feishu" link: the one way (besides an admin entering
+// the mobile number) a Feishu account gets linked, always with the portal
+// password on first use — never to whoever happens to be signed in.
+async function sendBindLink(env: Env, person: FeishuPerson) {
+  const target = privateTarget(person);
+  if (!target) return;
+  await sendCard(env, target.type, target.id, bindCard(`${siteBase(env)}/api/auth/feishu/start?next=${encodeURIComponent("/")}`));
 }
 
 // ── Events: @bot in a group (or a DM to the bot) ──────────────────────────
@@ -106,11 +109,11 @@ feishuRoutes.post("/feishu/events", async (c) => {
 // the bot, is the request.
 async function handleTicketRequest(env: Env, event: any) {
   const message = event.message;
-  const requesterOpenId = String(event.sender?.sender_id?.open_id ?? "");
+  const sender = personOf(event.sender?.sender_id);
   const ownText = messageContentToText(message.message_type, message.content);
   // "绑定" / "bind" in a direct message: just send the link-your-account card.
-  if (message.chat_type === "p2p" && requesterOpenId && /^(绑定|bind)$/i.test(ownText.trim())) {
-    await sendBindLink(env, requesterOpenId);
+  if (message.chat_type === "p2p" && privateTarget(sender) && /^(绑定|bind)$/i.test(ownText.trim())) {
+    await sendBindLink(env, sender);
     return;
   }
   const quoted = message.parent_id ? await getMessageText(env, message.parent_id).catch(() => "") : "";
@@ -118,18 +121,19 @@ async function handleTicketRequest(env: Env, event: any) {
 
   const draftId = id("fdr");
   await env.DB.prepare(
-    "INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text) VALUES (?, ?, ?, ?, ?)"
   )
-    .bind(draftId, requesterOpenId, message.chat_id, message.parent_id || message.message_id, text)
+    .bind(draftId, sender.unionId || sender.openId, message.chat_id, message.parent_id || message.message_id, text)
     .run();
 
   const card = promptCard({ draftId, text });
   // Staff who asked get the question privately; anyone else's request (e.g. a
   // customer's own @bot) goes to the internal after-sales group to pick up.
-  const requester = requesterOpenId ? await userForOpenId(env.DB, requesterOpenId) : null;
+  const requester = await userForFeishu(env.DB, sender);
+  const requesterTarget = privateTarget(sender);
   const cardMessageId =
-    requester && canCreateTicket(requester)
-      ? await sendCard(env, "open_id", requesterOpenId, card)
+    requester && requesterTarget && canCreateTicket(requester)
+      ? await sendCard(env, requesterTarget.type, requesterTarget.id, card)
       : await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, card);
   await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draftId).run();
 }
@@ -225,16 +229,16 @@ feishuRoutes.post("/feishu/card", async (c) => {
 
   const env = c.env as Env;
   const event = payload.event ?? {};
-  const openId = String(event.operator?.open_id ?? "");
+  const operator = personOf(event.operator);
   const value = (typeof event.action?.value === "object" && event.action?.value) || {};
   const form = event.action?.form_value ?? {};
   if (payload.header?.event_id && !(await firstSeen(env.DB, `card:${payload.header.event_id}`))) {
     return c.json(toast("info", "Already handled."));
   }
 
-  const user = openId ? await userForOpenId(env.DB, openId) : null;
+  const user = await userForFeishu(env.DB, operator);
   if (!user) {
-    if (openId) runLater(c, () => sendBindLink(env, openId));
+    if (privateTarget(operator)) runLater(c, () => sendBindLink(env, operator));
     return c.json(toast("warning", "Link your Feishu account first — we sent you a link in a private message."));
   }
 
@@ -361,27 +365,6 @@ async function confirmDraft(
   return toast("success", `Ticket ${created.ticketNo} created.`);
 }
 
-// ── Binding a Feishu account to the signed-in portal user ─────────────────
-
-feishuRoutes.post("/feishu/bind", async (c) => {
-  const user = c.get("user");
-  const d = await body<{ token?: string }>(c).catch(() => ({} as { token?: string }));
-  const token = String(d.token ?? "");
-  const row = await first<{ openId: string; expiresAt: string; usedAt: string | null }>(
-    c.env.DB,
-    "SELECT openId, expiresAt, usedAt FROM feishuBindTokens WHERE token = ?",
-    token
-  );
-  if (!row || row.usedAt || row.expiresAt < new Date().toISOString()) {
-    return c.json({ error: "This link has expired or was already used. Click a button on a bot card in Feishu to get a new one." }, 400);
-  }
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE users SET feishuOpenId = NULL WHERE feishuOpenId = ?").bind(row.openId),
-    c.env.DB.prepare("UPDATE users SET feishuOpenId = ? WHERE id = ?").bind(row.openId, user.id),
-    c.env.DB.prepare("UPDATE feishuBindTokens SET usedAt = CURRENT_TIMESTAMP WHERE token = ?").bind(token)
-  ]);
-  return c.json({ ok: true });
-});
 
 // ── Requirement pool settings (admin): check the Bitable is reachable ──────
 

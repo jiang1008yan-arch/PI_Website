@@ -11,7 +11,6 @@ import {
   canSubmitForReview,
   canStartRevision,
   canSubmitPi,
-  canViewLinkedEn,
   canViewPi,
   isReviewerEditMode,
   type PiRow,
@@ -241,19 +240,18 @@ describe("canViewPi (read-only detail page)", () => {
       expectDenied(canViewPi(COMMERCE, pi({ language: "ZH", status })), 403);
     }
   });
-  it("after-sales sees only PIs with an effective version, and never the EN PI", () => {
+  it("after-sales open PIs that have an effective version (in full, read-only)", () => {
     expectAllowed(canViewPi(SERVICE, pi({ language: "ZH", status: "APPROVED" })));
     expectAllowed(canViewPi(SERVICE, pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 })));
     expectDenied(canViewPi(SERVICE, pi({ language: "ZH", status: "PENDING_COMMERCE" })), 403);
-    expect(canViewLinkedEn(SERVICE)).toBe(false);
-    expect(canViewLinkedEn(COMMERCE)).toBe(true);
   });
 });
 
 describe("canCommerceDecide", () => {
   it("only commerce, only on PENDING_COMMERCE; an admin can never give commerce approval", () => {
     expectAllowed(canCommerceDecide(COMMERCE, pi({ language: "ZH", status: "PENDING_COMMERCE" })));
-    expectDenied(canCommerceDecide(ADMIN, pi({ language: "ZH", status: "PENDING_COMMERCE" })), 403);
+    expectAllowed(canCommerceDecide(ADMIN, pi({ language: "ZH", status: "PENDING_COMMERCE" })));
+    expectAllowed(canCommerceDecide(ADMIN, pi({ language: "ZH", status: "PENDING_COMMERCE", commerceId: "someone-else" })));
     expectDenied(canCommerceDecide(OWNER, pi({ language: "ZH", status: "PENDING_COMMERCE" })), 403);
     for (const status of STATUSES.filter((s) => s !== "PENDING_COMMERCE")) {
       expectDenied(canCommerceDecide(COMMERCE, pi({ language: "ZH", status })), 400);

@@ -73,13 +73,9 @@ export function canViewPi(user: AppUser, pi: PiRow): Verdict {
   if (user.role === "COMMERCE") {
     return commerceCanSeeZh(pi.status, pi.revisionInProgress) ? ALLOW : deny("Forbidden", 403);
   }
-  // SERVICE: the effective version only.
+  // SERVICE: PIs that have been approved (what tickets point at), in full and
+  // read-only — current and approved versions and the linked English PI.
   return hasEffectiveVersion(pi.status, contextOf(pi)) ? ALLOW : deny("Forbidden", 403);
-}
-
-// After-sales sees the Chinese PI only.
-export function canViewLinkedEn(user: AppUser): boolean {
-  return user.role !== "SERVICE";
 }
 
 export function canDeletePi(user: AppUser, pi: PiRow): Verdict {
@@ -126,9 +122,9 @@ export function canRejectPi(user: AppUser, pi: PiRow): Verdict {
   return canApprovePi(user, pi);
 }
 
-// Commerce approval (the final step). ADMIN may watch the queue but never decide.
+// Commerce approval (the final step): the picked commerce user, or any ADMIN.
 export function canCommerceDecide(user: AppUser, pi: PiRow): Verdict {
-  if (user.role !== "COMMERCE") return deny("Only commerce can approve this step", 403);
+  if (user.role !== "COMMERCE" && !isAdmin(user)) return deny("Only commerce or an admin can approve this step", 403);
   if (!isCommerceDecisionMode(user.role, pi.language, pi.status)) {
     return deny("PI is not awaiting commerce approval", 400);
   }

@@ -3,6 +3,7 @@ import { all, first } from "../db";
 import { enqueueOutbox, markOutbox, OUTBOX_MAX_ATTEMPTS } from "../outbox";
 import type { Env } from "../types";
 import { handedOverCard, STATUS_TEXT, ticketCard, type TicketCardData } from "./cards";
+import { feishuTarget, linkedAdminTargets, type FeishuIds } from "./identity";
 import { addBitableRecord, feishuEnabled, replyText, sendCard, sendText, updateCard } from "./client";
 import { parsePoolUrl, poolRecordFields, POOL_URL_OPTION_KEY } from "./requirementPool";
 
@@ -76,6 +77,7 @@ export async function drainFeishuOutbox(env: Env) {
 
 type TicketRow = TicketCardData & {
   assignedServiceId: string | null;
+  serviceUnionId: string | null;
   serviceOpenId: string | null;
   feishuCardOwnerId: string | null;
   createdAt: string;
@@ -85,6 +87,7 @@ type TicketRow = TicketCardData & {
   feishuCardMessageId: string | null;
   feishuSourceChatId: string | null;
   feishuSourceMessageId: string | null;
+  salesUnionId: string | null;
   salesOpenId: string | null;
 };
 
@@ -93,8 +96,9 @@ export async function loadTicketForCard(db: D1Database, ticketId: string): Promi
     db,
     `SELECT t.id, t.ticketNo, t.status, t.ticketType, t.customerCompany, t.orderNo, t.contactName, t.productModel, t.serialNumber, t.faultType,
             t.createdAt, t.summary, t.bitableRecordId, t.feishuCardMessageId, t.feishuSourceChatId, t.feishuSourceMessageId,
-            t.assignedServiceId, t.feishuCardOwnerId, service.feishuOpenId AS serviceOpenId,
-            p.nameEn AS productName, service.displayName AS serviceName, sales.displayName AS salesName, sales.feishuOpenId AS salesOpenId,
+            t.assignedServiceId, t.feishuCardOwnerId, service.feishuUnionId AS serviceUnionId, service.feishuOpenId AS serviceOpenId,
+            p.nameEn AS productName, service.displayName AS serviceName, sales.displayName AS salesName,
+            sales.feishuUnionId AS salesUnionId, sales.feishuOpenId AS salesOpenId,
             (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' AND u.isSystem = 0 AND u.note <> '' ORDER BY u.createdAt DESC, u.rowid DESC LIMIT 1) AS latestNote,
             (SELECT note FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' ORDER BY u.createdAt, u.rowid LIMIT 1) AS firstNote
      FROM tickets t
@@ -119,15 +123,23 @@ async function deliver(env: Env, payload: Payload) {
     await updateCard(env, t.feishuCardMessageId, card);
   } else {
     if (t.feishuCardMessageId) await updateCard(env, t.feishuCardMessageId, handedOverCard(t.ticketNo, t.serviceName));
-    const cardMessageId = t.serviceOpenId ? await sendCard(env, "open_id", t.serviceOpenId, card) : null;
+    const owner = feishuTarget({ feishuUnionId: t.serviceUnionId, feishuOpenId: t.serviceOpenId });
+    const cardMessageId = owner ? await sendCard(env, owner.type, owner.id, card) : null;
     await env.DB.prepare("UPDATE tickets SET feishuCardMessageId=?, feishuCardOwnerId=? WHERE id=?")
       .bind(cardMessageId, cardMessageId ? t.assignedServiceId : null, t.id)
       .run();
+    // An owner who cannot be reached in Feishu: tell the linked admins once,
+    // when the ticket gets that owner.
+    if (!owner && t.assignedServiceId && (change.kind === "created" || change.kind === "assigned" || change.kind === "taken")) {
+      const text = `${t.ticketNo} (${t.customerCompany || "—"}) is assigned to ${t.serviceName ?? "an after-sales user"}, who has not linked Feishu, so they did not get the ticket card. Please let them know, or add their Feishu mobile in Permission Management.${env.APP_BASE_URL ? ` ${env.APP_BASE_URL}/tickets/${t.id}` : ""}`;
+      for (const admin of await linkedAdminTargets(env.DB)) await sendText(env, admin.type, admin.id, text);
+    }
   }
 
   // 2. Tell the sales person what changed, privately.
-  if (t.salesOpenId && change.kind !== "created") {
-    await sendText(env, "open_id", t.salesOpenId, `${t.ticketNo} (${t.customerCompany || "—"}): ${describe(change, t)}`);
+  const sales = feishuTarget({ feishuUnionId: t.salesUnionId, feishuOpenId: t.salesOpenId });
+  if (sales && change.kind !== "created") {
+    await sendText(env, sales.type, sales.id, `${t.ticketNo} (${t.customerCompany || "—"}): ${describe(change, t)}`);
   }
 
   // 3. The customer's group: receipt on creation, notice on resolution.
@@ -145,13 +157,16 @@ async function deliver(env: Env, payload: Payload) {
   // after-sales owner gets the card itself, above).
   const newSalesOwners = change.kind === "assigned" ? change.newOwnerIds.filter((ownerId) => ownerId !== t.assignedServiceId) : [];
   if (newSalesOwners.length) {
-    const owners = await all<{ feishuOpenId: string }>(
+    const owners = await all<FeishuIds>(
       env.DB,
-      `SELECT feishuOpenId FROM users WHERE feishuOpenId IS NOT NULL AND id IN (${newSalesOwners.map(() => "?").join(",")})`,
+      `SELECT feishuUnionId, feishuOpenId FROM users WHERE id IN (${newSalesOwners.map(() => "?").join(",")})`,
       ...newSalesOwners
     );
     const link = env.APP_BASE_URL ? ` ${env.APP_BASE_URL}/tickets/${t.id}` : "";
-    for (const o of owners) await sendText(env, "open_id", o.feishuOpenId, `You are now responsible for ticket ${t.ticketNo} (${t.customerCompany || "—"}).${link}`);
+    for (const o of owners) {
+      const target = feishuTarget(o);
+      if (target) await sendText(env, target.type, target.id, `You are now responsible for ticket ${t.ticketNo} (${t.customerCompany || "—"}).${link}`);
+    }
   }
 
   // 5. Product requests go to the requirement pool, once.

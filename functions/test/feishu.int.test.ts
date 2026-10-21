@@ -38,11 +38,18 @@ function fakeFeishu(): typeof fetch {
 }
 
 const push = (path: string, payload: unknown) => h.raw("POST", path, JSON.stringify(payload));
-const cardAction = (openId: string, value: Record<string, string>, form: Record<string, string> = {}, eventId = `ev_${Math.random()}`, messageId = "om_card") =>
+const cardAction = (
+  openId: string,
+  value: Record<string, string>,
+  form: Record<string, string> = {},
+  eventId = `ev_${Math.random()}`,
+  messageId = "om_card",
+  unionId?: string
+) =>
   push("/feishu/card", {
     schema: "2.0",
     header: { event_id: eventId, token: "vt", event_type: "card.action.trigger" },
-    event: { operator: { open_id: openId }, action: { value, form_value: form, tag: "button" }, context: { open_message_id: messageId, open_chat_id: SERVICE_CHAT } }
+    event: { operator: { open_id: openId, ...(unionId ? { union_id: unionId } : {}) }, action: { value, form_value: form, tag: "button" }, context: { open_message_id: messageId, open_chat_id: SERVICE_CHAT } }
   });
 const messages = (filter: (c: Call) => boolean) => calls.filter((c) => c.path.startsWith("/im/v1/messages") && filter(c));
 
@@ -76,22 +83,43 @@ describe("Feishu push endpoints", () => {
   });
 });
 
-describe("binding", () => {
-  it("an unbound user gets a private link; opening it in the portal binds the account", async () => {
-    const res = await cardAction("ou_new", { action: "take", ticketId: "x" });
+describe("one Feishu identity", () => {
+  it("an unlinked person gets the Sign in with Feishu link (never a silent bind)", async () => {
+    const res = await cardAction("ou_new", { action: "take", ticketId: "x" }, {}, undefined, undefined, "on_new");
     expect(res.body.toast.type).toBe("warning");
     await h.settle();
-    const dm = messages((c) => c.path.includes("receive_id_type=open_id"));
+    const dm = messages((c) => c.path.includes("receive_id_type=union_id"));
     expect(dm).toHaveLength(1);
-    expect(dm[0].body.receive_id).toBe("ou_new");
-    const link = JSON.stringify(JSON.parse(dm[0].body.content));
-    const token = /token=([^"&\\]+)/.exec(link)![1];
+    expect(dm[0].body.receive_id).toBe("on_new");
+    expect(dm[0].body.content).toContain("https://portal.example/api/auth/feishu/start?next=");
+    expect((await h.request("SERVICE", "POST", "/feishu/bind", { token: "x" })).status).toBe(404);
+  });
 
-    expect((await h.request("SERVICE", "POST", "/feishu/bind", { token: "wrong" })).status).toBe(400);
-    expect((await h.request("SERVICE", "POST", "/feishu/bind", { token })).status).toBe(200);
-    expect((await h.request("SERVICE", "POST", "/feishu/bind", { token })).status).toBe(400); // one-time
-    const bound = await h.db.prepare("SELECT feishuOpenId FROM users WHERE id = ?").bind(h.users.SERVICE.id).first<{ feishuOpenId: string }>();
-    expect(bound?.feishuOpenId).toBe("ou_new");
+  it("people linked by union id (e.g. through the PI Assistant) are known to this bot too", async () => {
+    await h.db.prepare("UPDATE users SET feishuUnionId = 'on_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    const id = (await h.request("SERVICE", "POST", "/tickets", { contactName: "Li", contactInfo: "x", productId: await seedProduct(h.db), answers: {} })).body.id;
+    await h.settle();
+    // The owner's card goes out by union id, and a click from this app's own open id works.
+    expect(messages((c) => c.body?.msg_type === "interactive")[0].path).toContain("receive_id_type=union_id");
+    const res = await cardAction("ou_other_app_id", { action: "update", ticketId: id }, { note: "On site tomorrow" }, undefined, undefined, "on_service");
+    expect(res.body.toast.type).toBe("success");
+    await h.settle();
+  });
+
+  it("an old open-id link is upgraded to the union id on first contact", async () => {
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    await cardAction("ou_service", { action: "dismiss_draft", draftId: "x" }, {}, undefined, undefined, "on_service");
+    const row = await h.db.prepare("SELECT feishuUnionId FROM users WHERE id = ?").bind(h.users.SERVICE.id).first<{ feishuUnionId: string }>();
+    expect(row?.feishuUnionId).toBe("on_service");
+  });
+
+  it("a ticket whose after-sales owner is not linked is reported to the linked admins", async () => {
+    await h.db.prepare("UPDATE users SET feishuUnionId = 'on_admin' WHERE id = ?").bind(h.users.ADMIN.id).run();
+    await h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", contactName: "Li", contactInfo: "x", productId: await seedProduct(h.db), answers: {} });
+    await h.settle();
+    const toAdmin = messages((c) => c.body?.receive_id === "on_admin").map((c) => JSON.parse(c.body.content).text);
+    expect(toAdmin).toHaveLength(1);
+    expect(toAdmin[0]).toContain("has not linked Feishu");
   });
 });
 
@@ -342,7 +370,7 @@ describe("AI keys, types, the requirement pool and owners", () => {
     const sent = messages((c) => c.body?.msg_type === "interactive");
     expect(sent).toHaveLength(1);
     expect(sent[0].body.receive_id).toBe("ou_someone");
-    expect(sent[0].body.content).toContain("feishu/bind?token=");
+    expect(sent[0].body.content).toContain("/api/auth/feishu/start");
     expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<{ n: number }>())?.n).toBe(0);
   });
 

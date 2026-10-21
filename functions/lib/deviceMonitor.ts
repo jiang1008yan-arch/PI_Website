@@ -44,7 +44,7 @@ async function raiseAlert(env: Env, row: DeviceRow, kind: "FAULT" | "OFFLINE", n
       : `Device alert: SN ${row.serialNumber} has been offline for over 2 hours (since ${row.offlineSince} UTC)`;
   // Requested by nobody yet; no source chat, so no customer receipt is sent.
   await env.DB.prepare(
-    "INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text, kind, serialNumber) VALUES (?, '', '', '', ?, 'DEVICE_ALERT', ?)"
+    "INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, kind, serialNumber) VALUES (?, '', '', '', ?, 'DEVICE_ALERT', ?)"
   )
     .bind(data.draftId, text, row.serialNumber)
     .run();

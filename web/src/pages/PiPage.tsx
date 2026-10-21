@@ -481,7 +481,7 @@ export function PiPage({ language }: { language: Language }) {
               <Field label="Presales approver">
                 <select value={editor.assignedToId} onChange={(e) => editor.setAssignedToId(e.target.value)}>
                   {recipients.filter((r) => r.role === "PRESALES" || r.role === "ADMIN").map((r) => (
-                    <option key={r.id} value={r.id}>{r.displayName}{r.role === "ADMIN" ? " (Admin)" : ""}</option>
+                    <option key={r.id} value={r.id}>{r.displayName}{r.role === "ADMIN" ? " (Admin)" : ""}{r.feishuLinked ? "" : " — not on Feishu"}</option>
                   ))}
                 </select>
               </Field>
@@ -489,7 +489,7 @@ export function PiPage({ language }: { language: Language }) {
                 <select value={editor.commerceId} onChange={(e) => editor.setCommerceId(e.target.value)}>
                   <option value="">Any commerce user</option>
                   {recipients.filter((r) => r.role === "COMMERCE").map((r) => (
-                    <option key={r.id} value={r.id}>{r.displayName}</option>
+                    <option key={r.id} value={r.id}>{r.displayName}{r.feishuLinked ? "" : " — not on Feishu"}</option>
                   ))}
                 </select>
               </Field>

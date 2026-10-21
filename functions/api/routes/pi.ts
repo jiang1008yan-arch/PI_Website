@@ -13,7 +13,6 @@ import {
   canStartRevision,
   canSubmitForReview,
   canSubmitPi,
-  canViewLinkedEn,
   canViewPi,
   type ExportVersion,
   type PiRow,
@@ -686,17 +685,11 @@ piRoutes.get("/pi/:id/view", async (c) => {
   const decorate = async (part: { header: Record<string, unknown>; items: any[] } | null | undefined, base: PiRowFull) =>
     part ? { pi: { ...base, ...part.header }, items: await snapshotItemsWithProducts(c.env.DB, part.items) } : null;
 
-  // After-sales sees only the effective Chinese version — never a draft revision.
-  if (user.role === "SERVICE") {
-    const effective = snapshot ? await decorate(snapshot.zh, row) : { pi: row, items: await all(c.env.DB, ITEM_SELECT, row.id) };
-    return c.json({ zh: { current: null, effective }, en: null, events: [], revisionNo: row.revisionNo, revisionInProgress: Boolean(row.revisionInProgress) });
-  }
-
   const zhCurrent = { pi: row, items: await all(c.env.DB, ITEM_SELECT, row.id) };
   const zhEffective = snapshot ? await decorate(snapshot.zh, row) : row.status === "APPROVED" ? zhCurrent : null;
 
   let en: { current: any; effective: any } | null = null;
-  if (row.linkedPiId && canViewLinkedEn(user)) {
+  if (row.linkedPiId) {
     const enRow = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId);
     if (enRow) {
       const enCurrent = { pi: enRow, items: await all(c.env.DB, ITEM_SELECT, enRow.id) };
