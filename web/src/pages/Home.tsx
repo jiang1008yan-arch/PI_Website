@@ -1,4 +1,4 @@
-import { Activity, Archive, BadgeCheck, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { Activity, Archive, BadgeCheck, ChevronRight, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -115,7 +115,6 @@ export function HomePage() {
     { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
     { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
     { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" },
-    { to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Questions on the customer ticket form", Icon: ClipboardList, tone: "violet", art: "grid" },
     { to: "/requirement-pool", title: "Requirement Pool", desc: "Send product requests to the product managers' Feishu table", Icon: Lightbulb, tone: "orange", art: "blocks" }
   ];
 
