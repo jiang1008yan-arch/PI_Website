@@ -149,7 +149,7 @@ describe("Feishu request expiry", () => {
     );
     expect(res.body.toast.type).toBe("warning");
     await h.settle();
-    expect(sent((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_prompt_old")[0].body.content).toContain("已失效");
+    expect(sent((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_prompt_old")[0].body.content).toContain("Expired");
 
     // The scheduled sweep catches the ones nobody touched.
     await h.db.prepare("UPDATE feishuDrafts SET expiredAt = NULL WHERE id = 'fdr_old'").run();

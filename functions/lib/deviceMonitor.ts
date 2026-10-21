@@ -40,8 +40,8 @@ async function raiseAlert(env: Env, row: DeviceRow, kind: "FAULT" | "OFFLINE", n
   };
   const text =
     kind === "FAULT"
-      ? `设备告警：SN ${row.serialNumber} 故障${row.faultCode ? ` ${row.faultCode}` : ""}${row.faultText ? `（${row.faultText}）` : ""}`
-      : `设备告警：SN ${row.serialNumber} 离线超过 2 小时（自 ${row.offlineSince} UTC）`;
+      ? `Device alert: SN ${row.serialNumber} reported a fault${row.faultCode ? ` ${row.faultCode}` : ""}${row.faultText ? ` (${row.faultText})` : ""}`
+      : `Device alert: SN ${row.serialNumber} has been offline for over 2 hours (since ${row.offlineSince} UTC)`;
   // Requested by nobody yet; no source chat, so no customer receipt is sent.
   await env.DB.prepare(
     "INSERT INTO feishuDrafts (id, requestedByOpenId, sourceChatId, sourceMessageId, text, kind, serialNumber) VALUES (?, '', '', '', ?, 'DEVICE_ALERT', ?)"

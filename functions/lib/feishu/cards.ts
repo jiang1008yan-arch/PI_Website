@@ -95,12 +95,12 @@ export function promptCard(d: { draftId: string; text: string }) {
   return {
     schema: "2.0",
     config: { update_multi: true },
-    header: { title: plain("要把这条消息创建为售后工单吗？ Create a ticket?"), template: "blue" },
+    header: { title: plain("Create an after-sales ticket from this message?"), template: "blue" },
     body: {
       elements: [
         md(`> ${esc(d.text).slice(0, 500)}`),
-        callbackButton("创建工单 Create ticket", { action: "open_draft", draftId: d.draftId }, { type: "primary" }),
-        callbackButton("忽略 Ignore", { action: "dismiss_draft", draftId: d.draftId })
+        callbackButton("Create ticket", { action: "open_draft", draftId: d.draftId }, { type: "primary" }),
+        callbackButton("Ignore", { action: "dismiss_draft", draftId: d.draftId })
       ]
     }
   };
@@ -175,9 +175,9 @@ export function deviceAlertCard(a: DeviceAlertData) {
   return {
     schema: "2.0",
     config: { update_multi: true },
-    header: { title: plain(`设备告警 Device alert · ${a.serialNumber}`), template: a.kind === "FAULT" ? "red" : "orange" },
+    header: { title: plain(`Device alert · ${a.serialNumber}`), template: a.kind === "FAULT" ? "red" : "orange" },
     body: {
-      elements: [md(facts), callbackButton("创建工单 Create ticket", { action: "open_draft", draftId: a.draftId }, { type: "primary" })]
+      elements: [md(facts), callbackButton("Create ticket", { action: "open_draft", draftId: a.draftId }, { type: "primary" })]
     }
   };
 }
@@ -196,8 +196,8 @@ export function expiredDraftCard() {
   return {
     schema: "2.0",
     config: { update_multi: true },
-    header: { title: plain("已失效 Expired"), template: "grey" },
-    body: { elements: [md("这个建单请求超过 6 小时没有提交，已失效。需要时请重新 @我 或私聊我。")] }
+    header: { title: plain("Expired"), template: "grey" },
+    body: { elements: [md("This request was not submitted within 6 hours and has expired. @ me or message me directly to start again.")] }
   };
 }
 
@@ -205,8 +205,8 @@ export function dismissedCard() {
   return {
     schema: "2.0",
     config: { update_multi: true },
-    header: { title: plain("已忽略 Ignored"), template: "grey" },
-    body: { elements: [md("没有创建工单。需要时再 @我 或私聊我即可。")] }
+    header: { title: plain("Ignored"), template: "grey" },
+    body: { elements: [md("No ticket was created. @ me or message me directly whenever you need one.")] }
   };
 }
 
