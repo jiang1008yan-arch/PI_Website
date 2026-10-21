@@ -7,12 +7,15 @@ import type { Role, User } from "../types";
 const ROLES: Role[] = ["SALES", "PRESALES", "COMMERCE", "SERVICE", "ADMIN"];
 
 type FeishuLinkResult = { status: string; message: string } | null;
+// One inline edit at a time (no browser pop-ups: in-app and Feishu browsers block them).
+type Editing = { userId: string; kind: "mobile" | "password" | "unlink"; value: string } | null;
 
 export function PermissionsPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [error, setError] = useState("");
   // The outcome of the last Feishu link attempt (from a mobile number).
   const [notice, setNotice] = useState("");
+  const [editing, setEditing] = useState<Editing>(null);
   const [form, setForm] = useState({ username: "", password: "Sales@123", displayName: "", role: "SALES", mobile: "" });
   const load = () => api.get("/users").then((r) => setUsers(r.data));
   useEffect(() => { load(); }, []);
@@ -40,21 +43,22 @@ export function PermissionsPage() {
     try { await api.delete(`/users/${id}`); await load(); } catch (err: any) { setError(err.response?.data?.error ?? "Delete failed"); }
   }
 
-  async function reset(id: string, username: string) {
-    const next = window.prompt(`Set a new password for ${username}:`);
-    if (!next) return;
-    setError("");
-    try { await api.post(`/users/${id}/reset-password`, { newPassword: next }); window.alert("Password reset."); }
-    catch (err: any) { setError(err.response?.data?.error ?? "Reset failed"); }
-  }
-
-  async function setMobile(u: User) {
-    const next = window.prompt(`Feishu mobile number for ${u.displayName} (empty to clear):`, u.mobile ?? "");
-    if (next === null) return;
+  async function resetPassword(u: User, password: string) {
     setError("");
     try {
-      const res = await api.patch(`/users/${u.id}`, { mobile: next });
-      report(u.displayName, res.data.feishu);
+      await api.post(`/users/${u.id}/reset-password`, { newPassword: password });
+      setEditing(null);
+      setNotice(`${u.displayName}: password reset.`);
+    } catch (err: any) { setError(err.response?.data?.error ?? "Reset failed"); }
+  }
+
+  async function saveMobile(u: User, mobile: string) {
+    setError("");
+    try {
+      const res = await api.patch(`/users/${u.id}`, { mobile });
+      setEditing(null);
+      if (res.data.feishu) report(u.displayName, res.data.feishu);
+      else setNotice(`${u.displayName}: mobile number ${mobile.trim() ? "saved" : "cleared"}.`);
       await load();
     } catch (err: any) { setError(err.response?.data?.error ?? "Update failed"); }
   }
@@ -66,9 +70,8 @@ export function PermissionsPage() {
   }
 
   async function unlink(u: User) {
-    if (!window.confirm(`Unlink ${u.displayName}'s Feishu account? They will stop getting bot messages until linked again.`)) return;
     setError("");
-    try { await api.delete(`/users/${u.id}/feishu-link`); setNotice(`${u.displayName}: Feishu unlinked.`); await load(); }
+    try { await api.delete(`/users/${u.id}/feishu-link`); setEditing(null); setNotice(`${u.displayName}: Feishu unlinked; they get no bot messages until linked again.`); await load(); }
     catch (err: any) { setError(err.response?.data?.error ?? "Unlink failed"); }
   }
 
@@ -103,16 +106,49 @@ export function PermissionsPage() {
                 <td>{u.displayName}</td>
                 <td><select value={u.role} onChange={(e) => patch(u.id, e.target.value)}>{ROLES.map((r) => <option key={r}>{r}</option>)}</select></td>
                 <td className="py-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${u.feishuLinked ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                      {u.feishuLinked ? "Linked" : "Not linked"}
-                    </span>
-                    <button type="button" className="text-xs text-primary hover:underline" onClick={() => setMobile(u)}>{u.mobile ? u.mobile : "Add mobile"}</button>
-                    {!u.feishuLinked && u.mobile && <button type="button" className="text-xs text-primary hover:underline" onClick={() => relink(u)}>Try again</button>}
-                    {Boolean(u.feishuLinked) && <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => unlink(u)}>Unlink</button>}
-                  </div>
+                  {editing?.userId === u.id && editing.kind === "mobile" ? (
+                    <InlineInput
+                      value={editing.value}
+                      placeholder="Feishu mobile (empty to clear)"
+                      onChange={(value) => setEditing({ ...editing, value })}
+                      onSave={() => saveMobile(u, editing.value)}
+                      onCancel={() => setEditing(null)}
+                    />
+                  ) : editing?.userId === u.id && editing.kind === "unlink" ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-[#405079]">Unlink Feishu?</span>
+                      <button type="button" className="font-semibold text-red-600 hover:underline" onClick={() => unlink(u)}>Confirm unlink</button>
+                      <button type="button" className="text-[#617295] hover:underline" onClick={() => setEditing(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${u.feishuLinked ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                        {u.feishuLinked ? "Linked" : "Not linked"}
+                      </span>
+                      <button type="button" className="text-xs text-primary hover:underline" title="Edit the Feishu mobile number" onClick={() => setEditing({ userId: u.id, kind: "mobile", value: u.mobile ?? "" })}>
+                        {u.mobile ? u.mobile : "Add mobile"}
+                      </button>
+                      {!u.feishuLinked && u.mobile && <button type="button" className="text-xs text-primary hover:underline" onClick={() => relink(u)}>Try again</button>}
+                      {Boolean(u.feishuLinked) && <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => setEditing({ userId: u.id, kind: "unlink", value: "" })}>Unlink</button>}
+                    </div>
+                  )}
                 </td>
-                <td className="space-x-2 whitespace-nowrap text-right"><button className="btn-secondary" onClick={() => reset(u.id, u.username)}>Reset Password</button><button className="btn-danger" onClick={() => remove(u.id)}>Delete</button></td>
+                <td className="whitespace-nowrap text-right">
+                  {editing?.userId === u.id && editing.kind === "password" ? (
+                    <InlineInput
+                      value={editing.value}
+                      placeholder="New password"
+                      onChange={(value) => setEditing({ ...editing, value })}
+                      onSave={() => resetPassword(u, editing.value)}
+                      onCancel={() => setEditing(null)}
+                    />
+                  ) : (
+                    <span className="space-x-2">
+                      <button className="btn-secondary" onClick={() => setEditing({ userId: u.id, kind: "password", value: "" })}>Reset Password</button>
+                      <button className="btn-danger" onClick={() => remove(u.id)}>Delete</button>
+                    </span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody></table>
@@ -120,4 +156,31 @@ export function PermissionsPage() {
       )}
     </Section>
   </div>;
+}
+
+// A small input with Save / Cancel; Enter saves, Esc cancels.
+function InlineInput({ value, placeholder, onChange, onSave, onCancel }: {
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <input
+        autoFocus
+        value={value}
+        placeholder={placeholder}
+        className="w-48 rounded border border-[#d5def0] px-2 py-1 text-sm"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSave();
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={onSave}>Save</button>
+      <button type="button" className="text-xs text-[#617295] hover:underline" onClick={onCancel}>Cancel</button>
+    </div>
+  );
 }
