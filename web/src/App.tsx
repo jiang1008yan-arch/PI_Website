@@ -50,7 +50,7 @@ export default function App() {
           <Route path="/feishu/bind" element={<FeishuBindPage />} />
           {/* Read-only PI view; the server decides which PIs each role may open. */}
           <Route path="/pi/view/:id" element={<PiDetailPage />} />
-          <Route element={<RoleRoute allow={["ADMIN", "COMMERCE", "SERVICE"]} />}>
+          <Route element={<RoleRoute allow={["ADMIN", "COMMERCE", "SERVICE", "PRESALES"]} />}>
             <Route path="/pi/approved" element={<ApprovedPisPage />} />
           </Route>
           <Route element={<RoleRoute allow={["ADMIN", "COMMERCE"]} />}>
@@ -58,10 +58,12 @@ export default function App() {
           </Route>
           <Route element={<RoleRoute allow={["ADMIN", "SALES", "SERVICE"]} />}>
             <Route path="/tickets" element={<TicketsPage />} />
-            <Route path="/tickets/new" element={<CreateTicketPage />} />
             <Route path="/tickets/:id" element={<TicketDetailPage />} />
             {/* Fault analytics: statistics for all three; settings tab for ADMIN/SERVICE. */}
             <Route path="/fault-analytics" element={<FaultAnalyticsPage />} />
+          </Route>
+          <Route element={<RoleRoute allow={["ADMIN", "SERVICE"]} />}>
+            <Route path="/tickets/new" element={<CreateTicketPage />} />
           </Route>
           <Route element={<AdminRoute />}>
             <Route path="/ticket-fields-config" element={<TicketFieldsConfigPage />} />

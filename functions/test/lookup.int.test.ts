@@ -64,12 +64,13 @@ describe("lookup", () => {
     expect((await lookup(h.db, "%%", "all")).orders).toEqual([]);
   });
 
-  it("is served to ticket roles only", async () => {
-    const res = await h.request("SALES", "GET", "/lookup?q=0901");
+  it("is served to the people who create and edit tickets only", async () => {
+    const res = await h.request("SERVICE", "GET", "/lookup?q=0901");
     expect(res.status).toBe(200);
     expect(res.body.orders[0].productionOrderNo).toBe("PO-2026-0901");
     expect(res.body.devices[0].serialNumber).toBe("CHG-0901-0001");
     expect((await h.request("COMMERCE", "GET", "/lookup?q=0901")).status).toBe(403);
+    expect((await h.request("SALES", "GET", "/lookup?q=0901")).status).toBe(403);
   });
 
   it("turns results into picker options and resolves a pick", async () => {
@@ -98,6 +99,7 @@ describe("tickets use the picked values", () => {
       productId,
       productModel: "AC7-T2-EU",
       serialNumber: " chg-0901-0001 ",
+      assignedSalesId: h.users.SALES.id,
       answers: {}
     });
     const id = created.body.id;
@@ -115,8 +117,8 @@ describe("tickets use the picked values", () => {
     expect((await h.request("SERVICE", "PATCH", `/tickets/${id}/product`, { serialNumber: "BACKEND-ONLY-1" })).status).toBe(200);
     // Leaving fields out keeps them; the PI's own SNs are listed for picking.
     expect((await h.request("SERVICE", "GET", `/tickets/${id}`)).body.ticket).toMatchObject({ serialNumber: "BACKEND-ONLY-1", productModel: "AC7-T2-EU" });
-    expect((await h.request("SALES", "GET", "/lookup/pi/pi_ZH-001/devices")).body).toEqual(["CHG-0901-0001"]);
-    expect((await h.request("SALES", "GET", "/lookup/pi/pi_ZH-004/devices")).body).toEqual([]);
+    expect((await h.request("SERVICE", "GET", "/lookup/pi/pi_ZH-001/devices")).body).toEqual(["CHG-0901-0001"]);
+    expect((await h.request("SERVICE", "GET", "/lookup/pi/pi_ZH-004/devices")).body).toEqual([]);
     await h.request("SERVICE", "PATCH", `/tickets/${id}/customer`, { customerCompany: "Nordic EV AB", orderNo: "PO-2026-0902" });
     const detail = (await h.request("SERVICE", "GET", `/tickets/${id}`)).body;
     expect(detail.ticket).toMatchObject({ customerCompany: "Nordic EV AB", orderNo: "PO-2026-0902" });

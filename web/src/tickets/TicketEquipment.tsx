@@ -36,12 +36,13 @@ export function TicketEquipment({
 
   useEffect(() => {
     setSerials([]);
-    if (!pi) return;
+    // Only the people who edit the ticket pick an SN from the PI.
+    if (!pi || !canManage) return;
     api
       .get(`/lookup/pi/${pi.id}/devices`)
       .then((res) => setSerials(res.data))
       .catch(() => setSerials([]));
-  }, [pi?.id]);
+  }, [pi?.id, canManage]);
 
   const currentLine = lineOptions.find((o) => o.productId === ticket.productId && (o.model || null) === (ticket.productModel || null));
   // The ticket's SN stays selectable even if it came from elsewhere (e.g. a device alert).

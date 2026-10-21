@@ -22,6 +22,8 @@ export function TicketListPanel() {
 
   // Seeing the list counts as seeing its new tickets: clear the home badge.
   const { user } = useAuth();
+  // Sales only read the tickets in their name; ADMIN and SERVICE create them.
+  const canCreate = user?.role === "ADMIN" || user?.role === "SERVICE";
   useEffect(() => {
     markSeen(["newTickets"], user?.id, tickets.filter((t) => t.status === "NEW").map((t) => t.id));
   }, [tickets, user?.id]);
@@ -68,13 +70,15 @@ export function TicketListPanel() {
               className="w-full rounded-lg border border-[#e0e8f7] bg-white py-2 pl-9 pr-3 text-sm text-[#07183f] outline-none transition placeholder:text-[#9aa8c6] focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
             />
           </div>
-          <Link
-            to="/tickets/new"
-            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[#eef3ff] px-4 py-2 text-sm font-semibold text-primary transition hover:bg-[#e0e9ff]"
-          >
-            <Plus size={16} />
-            New ticket
-          </Link>
+          {canCreate && (
+            <Link
+              to="/tickets/new"
+              className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[#eef3ff] px-4 py-2 text-sm font-semibold text-primary transition hover:bg-[#e0e9ff]"
+            >
+              <Plus size={16} />
+              New ticket
+            </Link>
+          )}
         </div>
       </div>
 

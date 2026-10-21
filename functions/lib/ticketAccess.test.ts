@@ -4,6 +4,8 @@ import {
   canAssignSalesSide,
   canAssignServiceSide,
   canChangeStatus,
+  canCreateTicket,
+  canReadTicket,
   canConfirmFault,
   canManageFaultTypes,
   canRegisterSn,
@@ -45,8 +47,20 @@ describe("role predicates", () => {
   it("link generation: all three roles", () => {
   });
 
-  it("sales-side assignment: ADMIN and SALES", () => {
-    expect([canAssignSalesSide(ADMIN), canAssignSalesSide(SALES), canAssignSalesSide(SERVICE)]).toEqual([true, true, false]);
+  it("creating tickets: ADMIN and SERVICE only", () => {
+    expect([canCreateTicket(ADMIN), canCreateTicket(SERVICE), canCreateTicket(SALES), canCreateTicket(COMMERCE)]).toEqual([true, true, false, false]);
+  });
+
+  it("sales read only the tickets in their name; ADMIN and SERVICE read all", () => {
+    const mine = { assignedSalesId: SALES.id };
+    const other = { assignedSalesId: "someone-else" };
+    const unassigned = { assignedSalesId: null };
+    expect([canReadTicket(SALES, mine), canReadTicket(SALES, other), canReadTicket(SALES, unassigned)]).toEqual([true, false, false]);
+    expect([canReadTicket(ADMIN, other), canReadTicket(SERVICE, unassigned), canReadTicket(COMMERCE, mine)]).toEqual([true, true, false]);
+  });
+
+  it("sales-side assignment: ADMIN and SERVICE", () => {
+    expect([canAssignSalesSide(ADMIN), canAssignSalesSide(SALES), canAssignSalesSide(SERVICE)]).toEqual([true, false, true]);
   });
 
   it("service-side assignment: ADMIN and SERVICE", () => {

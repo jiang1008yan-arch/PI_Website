@@ -188,9 +188,10 @@ describe("working a ticket from the owner's card", () => {
   beforeEach(async () => {
     await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
     const productId = await seedProduct(h.db);
-    const res = await h.request("SALES", "POST", "/tickets", { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "x", productId, answers: {}, assignedSalesId: h.users.SALES.id });
+    const res = await h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "x", productId, answers: {}, assignedSalesId: h.users.SALES.id });
     ticketId = res.body.id;
-    await h.db.prepare("UPDATE tickets SET feishuSourceChatId = ? WHERE id = ?").bind(CUSTOMER_CHAT, ticketId).run();
+    // Start with no after-sales owner (sales cannot create tickets, so the creator would otherwise own it).
+    await h.db.prepare("UPDATE tickets SET feishuSourceChatId = ?, assignedServiceId = NULL WHERE id = ?").bind(CUSTOMER_CHAT, ticketId).run();
     await h.settle();
     calls = [];
   });

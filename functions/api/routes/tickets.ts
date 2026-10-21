@@ -1,7 +1,8 @@
 import { all, first, id } from "../../lib/db";
+import type { AppUser } from "../../lib/types";
 import { isKnownSerial, normalizeSerial } from "../../lib/devices";
 import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
-import { canConfirmFault, canUseTickets, type TicketStatus } from "../../lib/ticketAccess";
+import { canConfirmFault, canCreateTicket, canReadTicket, canUseTickets, seesOnlyOwnTickets, type TicketStatus } from "../../lib/ticketAccess";
 import {
   addTicketAttachment,
   addTicketNote,
@@ -26,6 +27,29 @@ for (const path of ["/tickets", "/tickets/*"]) {
   });
 }
 
+// Paths under /tickets/ that are not a ticket id.
+const NON_TICKET_PATHS = new Set(["products", "stats", "fault-ranking"]);
+
+// Sales may open only the tickets in their name — the ticket itself and
+// everything under it (attachments, assignment, …). Unknown ids fall through
+// to each route's own 404.
+for (const path of ["/tickets/:id", "/tickets/:id/*"]) {
+  ticketRoutes.use(path, async (c, next) => {
+    const user = c.get("user");
+    const ticketId = c.req.param("id") ?? "";
+    if (seesOnlyOwnTickets(user) && !NON_TICKET_PATHS.has(ticketId)) {
+      const ticket = await first<{ assignedSalesId: string | null }>(c.env.DB, "SELECT assignedSalesId FROM tickets WHERE id = ?", ticketId);
+      if (ticket && !canReadTicket(user, ticket)) return c.json({ error: "Not found" }, 404);
+    }
+    await next();
+  });
+}
+
+// SQL condition limiting a query to the tickets this user may see (alias t).
+function ticketScope(user: AppUser): { sql: string; params: unknown[] } | null {
+  return seesOnlyOwnTickets(user) ? { sql: "t.assignedSalesId = ?", params: [user.id] } : null;
+}
+
 const TICKET_SELECT = `
   SELECT t.*, p.code AS productCode, p.nameEn AS productNameEn, p.nameZh AS productNameZh,
     sales.displayName AS assignedSalesName, service.displayName AS assignedServiceName
@@ -35,11 +59,12 @@ const TICKET_SELECT = `
   LEFT JOIN users service ON service.id = t.assignedServiceId
 `;
 
-// All three roles can browse every ticket (no ownership filter). Optional
-// filters: status, and product + confirmed fault type (statistics drill-down).
+// ADMIN and SERVICE browse every ticket; SALES only the ones in their name.
+// Optional filters: status, and product + confirmed fault type (statistics drill-down).
 ticketRoutes.get("/tickets", async (c) => {
-  const where: string[] = [];
-  const params: unknown[] = [];
+  const scope = ticketScope(c.get("user"));
+  const where: string[] = scope ? [scope.sql] : [];
+  const params: unknown[] = scope ? [...scope.params] : [];
   for (const [query, column] of [["status", "t.status"], ["productId", "t.productId"], ["faultType", "t.faultType"], ["productModel", "t.productModel"], ["ticketType", "t.ticketType"]] as const) {
     const value = c.req.query(query);
     if (value) {
@@ -84,9 +109,9 @@ async function repeatInfo(db: D1Database, productId: string | null, faultType: s
   if (!productId || !faultType) return null;
   const settings = await loadRepeatSettings(db);
   const since = repeatWindowStart(now, settings.windowDays);
-  const tickets = await all<{ id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null }>(
+  const tickets = await all<{ id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null; assignedSalesId: string | null }>(
     db,
-    `SELECT id, ticketNo, createdAt, customerCompany, productModel FROM tickets
+    `SELECT id, ticketNo, createdAt, customerCompany, productModel, assignedSalesId FROM tickets
      WHERE productId = ? AND faultType = ? AND createdAt >= ? ORDER BY createdAt DESC`,
     productId,
     faultType,
@@ -95,10 +120,11 @@ async function repeatInfo(db: D1Database, productId: string | null, faultType: s
   return { count: tickets.length, windowDays: settings.windowDays, threshold: settings.threshold, isRepeat: isRepeatFault(tickets.length, settings), tickets };
 }
 
-// Staff-created ticket (no customer link). ADMIN, SALES and SERVICE may all
-// create tickets directly and name the responsible people. Product is required
-// and the questionnaire is validated exactly like the public submission.
+// Staff-created ticket (no customer link). ADMIN and SERVICE create tickets
+// directly and name the responsible people (SALES cannot create). Product is
+// required and the questionnaire is validated exactly like the public submission.
 ticketRoutes.post("/tickets", async (c) => {
+  if (!canCreateTicket(c.get("user"))) return c.json({ error: "Your role cannot create tickets" }, 403);
   const d = await body<any>(c);
   const created = await createTicket(c.env, d, { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") });
   afterTicketChange(c, created.id, { kind: "created" });
@@ -114,12 +140,16 @@ ticketRoutes.get("/tickets/products", async (c) =>
 // Lightweight stats: tickets by status and by product. Visible to all ticket
 // roles; hit on every Home load.
 ticketRoutes.get("/tickets/stats", async (c) => {
+  const scope = ticketScope(c.get("user"));
+  const where = scope ? `WHERE ${scope.sql}` : "";
+  const params = scope?.params ?? [];
   const [byStatus, byProduct] = await Promise.all([
-    all<{ status: string; n: number }>(c.env.DB, "SELECT status, COUNT(*) AS n FROM tickets GROUP BY status"),
+    all<{ status: string; n: number }>(c.env.DB, `SELECT t.status, COUNT(*) AS n FROM tickets t ${where} GROUP BY t.status`, ...params),
     all<{ productId: string; name: string; n: number }>(
       c.env.DB,
       `SELECT t.productId AS productId, COALESCE(p.nameEn, '(none)') AS name, COUNT(*) AS n
-       FROM tickets t LEFT JOIN products p ON p.id = t.productId GROUP BY t.productId`
+       FROM tickets t LEFT JOIN products p ON p.id = t.productId ${where} GROUP BY t.productId`,
+      ...params
     )
   ]);
   return c.json({ byStatus, byProduct });
@@ -127,8 +157,10 @@ ticketRoutes.get("/tickets/stats", async (c) => {
 
 // Confirmed faults ranked by product · model · fault type over a period
 // (?days=30|90|365|all, default the repeat window), each row flagged when its
-// product has reached the repeat-fault threshold for that fault.
+// product has reached the repeat-fault threshold for that fault. Sales see
+// only their own tickets in the rows; the repeat flags stay product-wide counts.
 ticketRoutes.get("/tickets/fault-ranking", async (c) => {
+  const scope = ticketScope(c.get("user"));
   const settings = await loadRepeatSettings(c.env.DB);
   const daysParam = c.req.query("days");
   const days = daysParam === "all" ? null : Number.isInteger(Number(daysParam)) && Number(daysParam) > 0 ? Number(daysParam) : settings.windowDays;
@@ -138,8 +170,9 @@ ticketRoutes.get("/tickets/fault-ranking", async (c) => {
       c.env.DB,
       `SELECT t.id, t.ticketNo, t.customerCompany, t.createdAt, t.productId, p.nameEn AS productName, t.productModel, t.faultType
        FROM tickets t LEFT JOIN products p ON p.id = t.productId
-       WHERE t.faultType IS NOT NULL AND t.faultType <> '' AND t.createdAt >= ?`,
-      days === null ? "" : repeatWindowStart(now, days)
+       WHERE t.faultType IS NOT NULL AND t.faultType <> '' AND t.createdAt >= ?${scope ? ` AND ${scope.sql}` : ""}`,
+      days === null ? "" : repeatWindowStart(now, days),
+      ...(scope?.params ?? [])
     ),
     all<ProductFaultCount>(
       c.env.DB,
@@ -183,6 +216,9 @@ ticketRoutes.get("/tickets/:id", async (c) => {
       )
     : null;
   const repeat = await repeatInfo(c.env.DB, ticket.productId, ticket.faultType, new Date());
+  // Sales keep the repeat count but see only their own tickets in its list.
+  const user = c.get("user");
+  if (repeat && seesOnlyOwnTickets(user)) repeat.tickets = repeat.tickets.filter((t) => canReadTicket(user, t));
   return c.json({ ticket, updates, fields, matchedPis, device, repeat, attachments });
 });
 

@@ -18,7 +18,7 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 ## Approval and revision
 
 - **Presales confirmation** — the first approval step on a ZH PI, done by the **presales approver** the submitter picked (a `PRESALES` user, stored in `pi.assignedToId`) or by any ADMIN, who may edit the PI while confirming. Without a pick, any ADMIN confirms. Shown in the UI as "Confirm Received". _Avoid_: review approval.
-- **Presales** (`PRESALES` role) — technical staff who confirm the ZH PIs picked for them. They read every ZH PI, edit only in review mode at their step, and have no ticket access.
+- **Presales** (`PRESALES` role) — technical staff who confirm the ZH PIs picked for them. They read every ZH PI (the approved ones through the same read-only Approved PI Lookup as after-sales), edit only in review mode at their step, and have no ticket access.
 - **Commerce approval** — the second and final approval step, done by the **commerce approver** the submitter picked (`pi.commerceId`; none picked = any COMMERCE user), who may approve or reject but never edit. A PI is **approved** only after this step.
 - **Commerce** (`COMMERCE` role) — the business staff who give commerce approval and download the EN/ZH Excel files. Distinct from ADMIN; an ADMIN may never give commerce approval.
 - **Revision** — a change to an already-approved PI pair (ZH + linked EN), started with a mandatory reason and sent through presales confirmation and commerce approval again. Numbered Rev 1, Rev 2, … under the same PI No.
@@ -33,7 +33,8 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Ticket type** — what a ticket is about: Fault, Product request, or Question / other. Set by after-sales (AI may suggest it) and required before a ticket is resolved. Only Fault tickets carry a fault type.
 - **Product request** — a ticket in which the customer asks for a new or changed product capability. Written once to the requirement pool.
 - **Requirement pool** — the product managers' Feishu Bitable where product requests collect; they filter, export, assign and get notified there, not in this system.
-- **Owner** — the after-sales (and sales) person responsible for a ticket. Whoever creates a ticket owns it; any after-sales can hand it over, and every change is logged on the ticket.
+- **Owner** — the after-sales (and sales) person responsible for a ticket. Whoever creates a ticket owns it; any after-sales can hand it over (either side), and every change is logged on the ticket.
+- **Ticket visibility** — ADMIN and SERVICE see and create every ticket. SALES only read the tickets where they are the sales owner and cannot create tickets (website or Feishu); after-sales put a ticket in a salesperson's name. COMMERCE and PRESALES have no ticket access.
 - **Weekly summary** — the Monday (9:00 Beijing) card in the after-sales group: last week's numbers and every open ticket by owner. Replaces a group message per ticket.
 - **Update reminder** — one private message a day to an owner whose open tickets have gone 24 hours without an update.
 - **Request expiry** — a Feishu "create a ticket?" request not submitted within 6 hours is greyed out; device-alert requests do not expire.

@@ -135,6 +135,17 @@ describe("approver picks", () => {
     expect((await h.request("ADMIN", "POST", `/pi/${zhId}/approve`, {})).status).toBe(200);
     expect((await h.request(otherCommerce, "POST", `/pi/${zhId}/commerce-approve`, {})).status).toBe(200);
   });
+
+  it("presales look up every approved Chinese PI read-only, like after-sales", async () => {
+    const zhId = await zhDraft("SO-LOOKUP");
+    await h.request("SALES", "POST", `/pi/${zhId}/submit-for-review`, {});
+    await h.request("ADMIN", "POST", `/pi/${zhId}/approve`, {});
+    await h.request(commerce, "POST", `/pi/${zhId}/commerce-approve`, {});
+    const found = await h.request(otherPresales, "GET", "/pi/approved?q=SO-LOOKUP");
+    expect(found.body.items.map((p: any) => p.id)).toEqual([zhId]);
+    expect((await h.request(otherPresales, "GET", `/pi/${zhId}/view`)).status).toBe(200);
+    expect((await h.request(otherPresales, "GET", `/pi/${zhId}/export-bundle`)).status).toBe(403);
+  });
 });
 
 describe("concurrency guard", () => {

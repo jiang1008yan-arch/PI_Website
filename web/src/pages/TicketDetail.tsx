@@ -189,7 +189,7 @@ export function TicketDetailPage() {
               <AssigneeControl
                 label="Sales"
                 currentName={ticket.assignedSalesName}
-                canEdit={isAdmin || user?.role === "SALES"}
+                canEdit={isAdmin || user?.role === "SERVICE"}
                 users={salesUsers}
                 currentId={ticket.assignedSalesId}
                 busy={busy}

@@ -84,12 +84,13 @@ describe("ZH PI review flow", () => {
 
 describe("tickets", () => {
   async function createTicket(productId: string) {
-    const res = await h.request("SALES", "POST", "/tickets", {
+    const res = await h.request("SERVICE", "POST", "/tickets", {
       customerCompany: "ACME",
       orderNo: "PO-001",
       contactName: "Li",
       contactInfo: "li@example.com",
       productId,
+      assignedSalesId: h.users.SALES.id,
       answers: {}
     });
     expect(res.status).toBe(200);
@@ -124,7 +125,7 @@ describe("tickets", () => {
   });
 
   it("requires an active product", async () => {
-    const res = await h.request("SALES", "POST", "/tickets", { contactName: "Li", contactInfo: "x", productId: "nope", answers: {} });
+    const res = await h.request("SERVICE", "POST", "/tickets", { contactName: "Li", contactInfo: "x", productId: "nope", answers: {} });
     expect(res.status).toBe(400);
   });
 });

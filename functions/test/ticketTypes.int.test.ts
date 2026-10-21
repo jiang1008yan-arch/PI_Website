@@ -27,8 +27,13 @@ const notes = async (id: string) => (await ticketOf(id)).updates.filter((u: any)
 describe("creator owns the ticket", () => {
   it("after-sales become the after-sales owner, sales the sales owner, unless someone else is named", async () => {
     expect((await ticketOf(await create("SERVICE"))).ticket).toMatchObject({ assignedServiceId: h.users.SERVICE.id, assignedSalesId: null });
-    expect((await ticketOf(await create("SALES"))).ticket).toMatchObject({ assignedSalesId: h.users.SALES.id, assignedServiceId: null });
+    expect((await ticketOf(await create("SERVICE", { assignedSalesId: h.users.SALES.id }))).ticket).toMatchObject({ assignedSalesId: h.users.SALES.id, assignedServiceId: h.users.SERVICE.id });
     expect((await ticketOf(await create("SERVICE", { assignedServiceId: h.users.ADMIN.id }))).ticket.assignedServiceId).toBe(h.users.ADMIN.id);
+  });
+
+  it("sales cannot create tickets", async () => {
+    const res = await h.request("SALES", "POST", "/tickets", { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "x", productId, answers: {} });
+    expect(res.status).toBe(403);
   });
 
   it("any after-sales can change the owner, and every change is logged", async () => {
@@ -37,19 +42,47 @@ describe("creator owns the ticket", () => {
     expect((await ticketOf(id)).ticket.assignedServiceId).toBe(h.users.ADMIN.id);
     expect(await notes(id)).toContain("After-sales owner: Test SERVICE → Test ADMIN (changed by Test SERVICE)");
 
-    // No change, no entry; an unknown user is refused; sales cannot move the after-sales side.
+    // No change, no entry; an unknown user is refused.
     await h.request("SERVICE", "PATCH", `/tickets/${id}/assign`, { assignedServiceId: h.users.ADMIN.id });
     expect((await notes(id)).filter((n: string) => n.startsWith("After-sales owner"))).toHaveLength(1);
     expect((await h.request("SERVICE", "PATCH", `/tickets/${id}/assign`, { assignedServiceId: "usr_nobody" })).status).toBe(400);
+    // Sales cannot see a ticket outside their name; after-sales put it there.
+    expect((await h.request("SALES", "PATCH", `/tickets/${id}/assign`, { assignedSalesId: h.users.SALES.id })).status).toBe(404);
+    await h.request("SERVICE", "PATCH", `/tickets/${id}/assign`, { assignedSalesId: h.users.SALES.id });
+    expect(await notes(id)).toContain("Sales owner: (none) → Test SALES (changed by Test SERVICE)");
+    // Now it is theirs to read, but sales still cannot move either side.
+    expect((await h.request("SALES", "GET", `/tickets/${id}`)).status).toBe(200);
     expect((await h.request("SALES", "PATCH", `/tickets/${id}/assign`, { assignedServiceId: h.users.SALES.id })).status).toBe(400);
-    await h.request("SALES", "PATCH", `/tickets/${id}/assign`, { assignedSalesId: h.users.SALES.id });
-    expect(await notes(id)).toContain("Sales owner: (none) → Test SALES (changed by Test SALES)");
+  });
+});
+
+describe("sales see only the tickets in their name", () => {
+  it("list, detail, stats and the fault ranking are limited to their own tickets", async () => {
+    const mine = await create("SERVICE", { assignedSalesId: h.users.SALES.id });
+    const other = await create("SERVICE");
+    await h.request("SERVICE", "PATCH", `/tickets/${mine}/fault`, { faultType: "Offline" });
+    await h.request("SERVICE", "PATCH", `/tickets/${other}/fault`, { faultType: "Offline" });
+
+    expect((await h.request("SALES", "GET", "/tickets")).body.map((t: any) => t.id)).toEqual([mine]);
+    expect((await h.request("SERVICE", "GET", "/tickets")).body).toHaveLength(2);
+    expect((await h.request("SALES", "GET", `/tickets/${mine}`)).status).toBe(200);
+    expect((await h.request("SALES", "GET", `/tickets/${other}`)).status).toBe(404);
+    expect((await h.request("SALES", "POST", `/tickets/${other}/notes`, { note: "x" })).status).toBe(404);
+
+    const stats = (await h.request("SALES", "GET", "/tickets/stats")).body;
+    expect(stats.byStatus.reduce((sum: number, r: any) => sum + r.n, 0)).toBe(1);
+    const ranking = (await h.request("SALES", "GET", "/tickets/fault-ranking")).body.rows;
+    expect(ranking.flatMap((r: any) => r.tickets.map((t: any) => t.id))).toEqual([mine]);
+    // The repeat count stays product-wide, but its list shows only their own tickets.
+    const repeat = (await h.request("SALES", "GET", `/tickets/${mine}`)).body.repeat;
+    expect(repeat.count).toBe(2);
+    expect(repeat.tickets.map((t: any) => t.id)).toEqual([mine]);
   });
 });
 
 describe("ticket type", () => {
   it("after-sales classify tickets; only faults keep a fault type", async () => {
-    const id = await create("SERVICE");
+    const id = await create("SERVICE", { assignedSalesId: h.users.SALES.id });
     expect((await h.request("SALES", "PATCH", `/tickets/${id}/type`, { ticketType: "OTHER" })).status).toBe(403);
     expect((await h.request("SERVICE", "PATCH", `/tickets/${id}/type`, { ticketType: "BUG" })).status).toBe(400);
 

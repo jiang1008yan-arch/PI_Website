@@ -31,7 +31,7 @@ async function approvedZh(productionOrderNo: string, customerCompany = "ACME") {
 }
 
 async function ticket(orderNo: string) {
-  const res = await h.request("SALES", "POST", "/tickets", { customerCompany: "ACME", orderNo, contactName: "Li", contactInfo: "li@x", productId, answers: {} });
+  const res = await h.request("SERVICE", "POST", "/tickets", { assignedSalesId: h.users.SALES.id, customerCompany: "ACME", orderNo, contactName: "Li", contactInfo: "li@x", productId, answers: {} });
   expect(res.status).toBe(200);
   return res.body.id as string;
 }

@@ -15,7 +15,8 @@
 // Reads FEISHU_APP_ID / FEISHU_APP_SECRET (after-sales bot) and
 // FEISHU_PI_APP_ID / FEISHU_PI_APP_SECRET (PI Assistant) from .dev.vars. Leave
 // the *_ENCRYPT_KEY values empty locally: long-connection events arrive
-// decrypted and unsigned, and the site checks the *_VERIFICATION_TOKEN instead.
+// decrypted and unsigned, and the site checks the *_VERIFICATION_TOKEN instead
+// (which the bridge adds to message events, since Feishu omits it on this path).
 // Secret values are never printed.
 import { readFileSync } from "node:fs";
 import * as Lark from "@larksuiteoapi/node-sdk";
@@ -53,6 +54,14 @@ for (const bot of bots) {
     // The SDK hands us the full Feishu v2 envelope ({schema, header, event}).
     async invoke(envelope) {
       const type = envelope?.header?.event_type ?? envelope?.type;
+      // Chat ids are not secret and are needed for FEISHU_SERVICE_CHAT_ID.
+      const message = envelope?.event?.message;
+      if (message?.chat_id) console.log(`[${bot.key}] message in ${message.chat_type} chat ${message.chat_id}`);
+      // Long-connection message events carry no verification token (the
+      // connection itself is authenticated by the app secret). The site still
+      // checks it, so stamp the configured one on before forwarding.
+      const configuredToken = vars[bot.prefix + "VERIFICATION_TOKEN"];
+      if (envelope?.header && !envelope.header.token && configuredToken) envelope.header.token = configuredToken;
       try {
         const res = await fetch(`${SITE}${bot.route(type)}`, {
           method: "POST",
@@ -61,6 +70,11 @@ for (const bot of bots) {
         });
         const text = await res.text();
         console.log(`[${bot.key}] ${type} -> ${res.status}`);
+        if (res.status === 401) {
+          // Diagnose without printing secrets: does the event's token match .dev.vars?
+          const sent = String(envelope?.header?.token ?? envelope?.token ?? "");
+          console.log(`[${bot.key}] rejected: ${text}; event token ${sent ? `${sent.length} chars` : "missing"}, matches ${bot.prefix}VERIFICATION_TOKEN: ${sent === (configuredToken ?? "")}`);
+        }
         return text ? JSON.parse(text) : undefined;
       } catch (error) {
         console.error(`[${bot.key}] ${type} forward failed:`, error.message);

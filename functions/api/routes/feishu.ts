@@ -8,7 +8,7 @@ import { feishuEnabled, getMessageText, listBitableFields, messageContentToText,
 import { readIncoming } from "../../lib/feishu/crypto";
 import { checkPoolFields, parsePoolUrl, POOL_URL_OPTION_KEY } from "../../lib/feishu/requirementPool";
 import { pushTicketChange } from "../../lib/feishu/sync";
-import { canUseTickets } from "../../lib/ticketAccess";
+import { canCreateTicket } from "../../lib/ticketAccess";
 import {
   addTicketNote,
   changeTicketStatus,
@@ -128,7 +128,7 @@ async function handleTicketRequest(env: Env, event: any) {
   // customer's own @bot) goes to the internal after-sales group to pick up.
   const requester = requesterOpenId ? await userForOpenId(env.DB, requesterOpenId) : null;
   const cardMessageId =
-    requester && canUseTickets(requester)
+    requester && canCreateTicket(requester)
       ? await sendCard(env, "open_id", requesterOpenId, card)
       : await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, card);
   await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draftId).run();
@@ -259,7 +259,7 @@ feishuRoutes.post("/feishu/card", async (c) => {
         return c.json(toast("success", "Ticket updated."));
       }
       case "open_draft": {
-        if (!canUseTickets(user)) return c.json(toast("warning", "Your role cannot create tickets."));
+        if (!canCreateTicket(user)) return c.json(toast("warning", "Your role cannot create tickets."));
         const messageId = event.context?.open_message_id ?? null;
         const draft = await first<{ createdAt: string; expiredAt: string | null; ticketId: string | null; kind: string }>(
           env.DB,
@@ -309,7 +309,7 @@ async function confirmDraft(
   form: Record<string, unknown>,
   cardMessageId: string | null
 ) {
-  if (!canUseTickets(user)) return toast("warning", "Your role cannot create tickets.");
+  if (!canCreateTicket(user)) return toast("warning", "Your role cannot create tickets.");
   const draft = await first<any>(env.DB, "SELECT * FROM feishuDrafts WHERE id = ?", draftId);
   if (!draft) return toast("error", "This request no longer exists.");
   if (draft.ticketId) return toast("info", "A ticket was already created for this message.");

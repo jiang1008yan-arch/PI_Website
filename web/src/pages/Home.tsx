@@ -103,7 +103,7 @@ export function HomePage() {
     { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
   ];
   const ticketModules: HomeModule[] = [
-    { to: "/tickets", title: "After-Sales Tickets", desc: "Service requests from Feishu and the team, with status counts", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
+    { to: "/tickets", title: "After-Sales Tickets", desc: role === "SALES" ? "Service requests in your name, with status" : "Service requests from Feishu and the team, with status counts", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
     { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange", art: "grid" },
     ...(role === "ADMIN" || role === "SERVICE"
       ? [{ to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" } as HomeModule]
@@ -121,7 +121,8 @@ export function HomePage() {
 
   // PRESALES confirms the Chinese PIs picked for them; they open each PI from the queue.
   const presalesModules: HomeModule[] = [
-    { to: "/reviews", title: "Pending Reviews", desc: "Chinese PIs waiting for your presales confirmation", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews }
+    { to: "/reviews", title: "Pending Reviews", desc: "Chinese PIs waiting for your presales confirmation", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
+    { to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" }
   ];
 
   const commerceModules: HomeModule[] = [

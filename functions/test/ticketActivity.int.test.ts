@@ -12,7 +12,7 @@ beforeEach(async () => {
   h = await createHarness();
   const productId = await seedProduct(h.db);
   await h.request("ADMIN", "PUT", "/options/faultType", { values: ["Offline"] });
-  ticketId = (await h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "li@x", productId, answers: {} })).body.id;
+  ticketId = (await h.request("SERVICE", "POST", "/tickets", { assignedSalesId: h.users.SALES.id, customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "li@x", productId, answers: {} })).body.id;
 });
 afterEach(async () => {
   await h.close();
