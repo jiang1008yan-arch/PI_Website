@@ -4,7 +4,8 @@ import { Calendar, ChevronLeft, FileCheck2, FileText, Plus } from "lucide-react"
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { EmptyState, Field, PageHero, Section } from "../components/Form";
+import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
+import { useConfirm } from "../components/ConfirmDialog";
 import type { Language, Pi, PiReviewEvent, Product, ProductField, User } from "../types";
 import { LineItem } from "../pi/LineItem";
 import { OptionSetModal } from "../pi/OptionSetModal";
@@ -30,7 +31,7 @@ import {
   optionPath
 } from "../pi/modelRule";
 import { parseField } from "../products/productFields";
-import { usePiEditor } from "../pi/usePiEditor";
+import { DISCARD_PROMPT, usePiEditor } from "../pi/usePiEditor";
 import { parsePiItems } from "../pi/piItemCodec";
 import { setMetaValue } from "../pi/lineItemFields";
 import { shouldShowLinkedZhSyncButton } from "../pi/linkedZhSync";
@@ -71,16 +72,17 @@ export function PiPage({ language }: { language: Language }) {
   }, [openedId, user?.id]);
   const inEditor = editing || Boolean(editor.current) || Boolean(linkedPiId);
   useEffect(() => { setEditing(false); }, [language]);
+  const confirm = useConfirm();
   function startNew() {
-    editor.reset();
+    void editor.reset();
     setEditing(true);
   }
   function openPi(id: string) {
-    editor.selectPi(id);
+    void editor.selectPi(id);
     setEditing(true);
   }
-  function backToList() {
-    if (editor.isDirty && !window.confirm("You have unsaved changes. Discard them?")) return;
+  async function backToList() {
+    if (editor.isDirty && !(await confirm(DISCARD_PROMPT))) return;
     editor.clearState();
     setEditing(false);
   }
@@ -276,6 +278,7 @@ export function PiPage({ language }: { language: Language }) {
 
       {!inEditor && (
         <Section title={`${title} List`}>
+          {editor.listError && <div className="mb-4"><ErrorText message={editor.listError} /></div>}
           {editor.activePis.length === 0 && editor.listLoading ? (
             <PiListSkeleton />
           ) : editor.activePis.length === 0 ? (

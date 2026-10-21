@@ -10,10 +10,15 @@ import { parsePiItems } from "./piItemCodec";
 import { parseField } from "../products/productFields";
 import { canSyncLinkedZh, type LinkedZhState } from "./linkedZhSync";
 import { getCachedList, setCachedList } from "./piListCache";
+import { useConfirm, type ConfirmOptions } from "../components/ConfirmDialog";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const EXCEL_DOWNLOAD_TIMEOUT_MS = 45000;
-const DISCARD_PROMPT = "You have unsaved changes. Discard them?";
+export const DISCARD_PROMPT: ConfirmOptions = {
+  message: "You have unsaved changes. Discard them?",
+  confirmLabel: "Discard",
+  danger: true
+};
 
 export type UsePiEditorParams = {
   language: Language;
@@ -43,6 +48,9 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const [saving, setSaving] = useState(false);
   const [exportError, setExportError] = useState("");
   const [submitNotice, setSubmitNotice] = useState("");
+  // Shown on the PI list (deleting happens there, outside the editor form).
+  const [listError, setListError] = useState("");
+  const confirm = useConfirm();
   const fieldOptionsCache = useRef(new Map<string, {
     optionsByLabel: Map<string, string[]>;
     typeByLabel: Map<string, string>;
@@ -204,13 +212,13 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     setLinkedNotice("");
   }
 
-  function reset() {
-    if (isDirty && !window.confirm(DISCARD_PROMPT)) return;
+  async function reset() {
+    if (isDirty && !(await confirm(DISCARD_PROMPT))) return;
     clearState();
   }
 
-  function selectPi(id: string) {
-    if (current?.id !== id && isDirty && !window.confirm(DISCARD_PROMPT)) return;
+  async function selectPi(id: string) {
+    if (current?.id !== id && isDirty && !(await confirm(DISCARD_PROMPT))) return;
     if (language === "ZH") setSearchParams({ piId: id });
     void open(id);
   }
@@ -248,7 +256,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     const message = linkedZh
       ? "Rebuild the linked Chinese draft's product rows from the latest English data? Chinese-only header fields (production order no, customer source/type, delivery date) are kept."
       : "Create a linked Chinese draft from this English PI?";
-    if (!window.confirm(message)) return;
+    if (!(await confirm({ message, confirmLabel: linkedZh ? "Re-sync" : "Create draft" }))) return;
     setExportError("");
     setLinkedNotice("");
     setResyncing(true);
@@ -305,7 +313,11 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
 
   async function abandonRevision() {
     if (!current) return;
-    if (!window.confirm("Abandon this revision? The Chinese and English PIs go back to the approved version.")) return;
+    if (!(await confirm({
+      message: "Abandon this revision? The Chinese and English PIs go back to the approved version.",
+      confirmLabel: "Abandon revision",
+      danger: true
+    }))) return;
     setExportError("");
     try {
       await api.post(`/pi/${current.id}/revisions/abandon`);
@@ -361,12 +373,17 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
 
   async function deleteDraft(pi: Pi) {
     if (!canDeletePiByStatus(language, pi.status, { revisionInProgress: Boolean(pi.revisionInProgress) })) return;
-    const ok = window.confirm(`Delete ${language === "EN" ? "PI" : "draft"} ${piDisplayName(pi, language)}?`);
+    const ok = await confirm({
+      message: `Delete ${language === "EN" ? "PI" : "draft"} ${piDisplayName(pi, language)}?`,
+      confirmLabel: "Delete",
+      danger: true
+    });
     if (!ok) return;
+    setListError("");
     try {
       await api.delete(`/pi/${pi.id}`);
     } catch (err: any) {
-      window.alert(err.response?.data?.error ?? err.message ?? "Delete failed.");
+      setListError(err.response?.data?.error ?? err.message ?? "Delete failed.");
       return;
     }
     if (current?.id === pi.id) clearState();
@@ -398,14 +415,14 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
     // Current PI state
     current, header, items, events, canonical, assignedToId, commerceId, rejectNote,
     // UI flags
-    exporting, confirming, rejecting, saving, exportError, resyncing, submitNotice,
+    exporting, confirming, rejecting, saving, exportError, resyncing, submitNotice, listError,
     // Linked ZH (需求1)
     linkedZh, linkedNotice, canResyncZh,
     // Derived
     locked, canEditPendingZh, canConfirmReceivedZh, hasBufferedEdits, isDirty,
     total, totalCurrency,
     // Setters
-    setHeader, setItems, setAssignedToId, setCommerceId, setRejectNote, setExportError, setLinkedNotice, setSubmitNotice,
+    setHeader, setItems, setAssignedToId, setCommerceId, setRejectNote, setExportError, setLinkedNotice, setSubmitNotice, setListError,
     // Actions
     reload, open, reset, clearState, selectPi, save, submit,
     confirmReceivedPi, rejectReview, deleteDraft, downloadExcel, resyncZh, startRevision, abandonRevision

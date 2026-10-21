@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ClipboardList } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState, ErrorText, PageHero, Section } from "../components/Form";
 import { TicketFieldRow } from "../tickets/TicketFieldRow";
 import type { TicketField } from "../types";
@@ -25,6 +26,7 @@ function normalize(f: TicketField, sortOrder: number) {
 export function TicketFieldsConfigPage() {
   const [fields, setFields] = useState<TicketField[]>([]);
   const [error, setError] = useState("");
+  const confirm = useConfirm();
 
   async function load() {
     const res = await api.get("/ticket-fields");
@@ -53,7 +55,7 @@ export function TicketFieldsConfigPage() {
 
   async function deleteField(field: TicketField) {
     if (!field.id) return;
-    if (!window.confirm(`Delete "${field.label.trim() || "this question"}"? This cannot be undone.`)) return;
+    if (!(await confirm({ message: `Delete "${field.label.trim() || "this question"}"? This cannot be undone.`, confirmLabel: "Delete", danger: true }))) return;
     await api.delete(`/ticket-fields/${field.id}`);
     await load();
   }

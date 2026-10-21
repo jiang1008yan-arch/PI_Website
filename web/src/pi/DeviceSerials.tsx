@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState, Section } from "../components/Form";
 
 type Device = { id: string; serialNumber: string; createdAt: string; createdByName?: string | null };
@@ -21,6 +22,7 @@ export function DeviceSerials({ piId }: { piId: string }) {
   const [result, setResult] = useState<RegisterResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
 
   async function load() {
     const res = await api.get(`/pi/${piId}/devices`);
@@ -45,7 +47,7 @@ export function DeviceSerials({ piId }: { piId: string }) {
   }
 
   async function remove(device: Device) {
-    if (!window.confirm(`Remove serial number ${device.serialNumber} from this PI?`)) return;
+    if (!(await confirm({ message: `Remove serial number ${device.serialNumber} from this PI?`, confirmLabel: "Remove", danger: true }))) return;
     await api.delete(`/pi/${piId}/devices/${device.id}`);
     await load();
   }
