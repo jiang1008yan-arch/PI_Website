@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { maskApiKey, openApiKey, sealApiKey } from "../aiKeys";
-import { redactKey, testAiKey, triageMessages, type AiConfig } from "../aiTriage";
-import { draftCard, ticketCard, type TicketCardData } from "./cards";
+import { redactKey, testAiKey, toBase64, transcribeAudio, triageMessages, type AiConfig } from "../aiTriage";
+import { CARD_ITEM_LIMIT, collectCard, collectedCounts, draftCard, similarElements, ticketCard, type TicketCardData } from "./cards";
 import { messageContentToText } from "./client";
 import { decryptPayload, readIncoming, sha256Hex, verifySignature } from "./crypto";
 import { checkPoolFields, parsePoolUrl, poolRecordFields, POOL_FIELDS } from "./requirementPool";
@@ -79,7 +79,8 @@ const ticket: TicketCardData = {
 };
 
 const elementsOf = (card: any): any[] => card.body.elements;
-const flat = (els: any[]): any[] => els.flatMap((e) => [e, ...flat(e.elements ?? [])]);
+// Into forms and column sets alike.
+const flat = (els: any[]): any[] => els.flatMap((e) => [e, ...flat([...(e.elements ?? []), ...(e.columns ?? [])])]);
 
 describe("cards", () => {
   it("a new ticket card can be taken and updated, and is shared/updatable", () => {
@@ -125,8 +126,49 @@ describe("cards", () => {
     expect(unknown.find((e) => e.tag === "input" && e.name === "summary").default_value).toBeUndefined();
     expect(withAi.filter((e) => e.tag === "button").map((b) => b.behaviors[0].value)).toEqual([
       { action: "lookup_draft", draftId: "d1" },
-      { action: "confirm_draft", draftId: "d1" }
+      { action: "confirm_draft", draftId: "d1" },
+      { action: "dismiss_draft", draftId: "d1" }
     ]);
+  });
+
+  it("the collecting card lists the latest items with Remove buttons and folds the rest", () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      id: `i${i}`,
+      kind: (i === 11 ? "IMAGE" : "TEXT") as "IMAGE" | "TEXT",
+      text: i === 11 ? null : `line ${i}`,
+      fileName: null,
+      durationMs: null,
+      problem: i === 11 ? ("IN_FORWARD" as const) : null
+    }));
+    const els = flat(elementsOf(collectCard({ draftId: "d1", items })));
+    const removes = els.filter((e) => e.tag === "button" && e.behaviors[0].value.action === "remove_item");
+    expect(removes).toHaveLength(CARD_ITEM_LIMIT);
+    expect(removes[0].behaviors[0].value).toEqual({ action: "remove_item", draftId: "d1", itemId: "i2" });
+    const text = JSON.stringify(els);
+    expect(text).toContain("11 texts · 1 picture (latest 10 shown, 2 earlier)");
+    expect(text).toContain("forward this one on its own");
+    expect(collectedCounts([])).toBe("");
+  });
+
+  it("the form shows earlier tickets by layer, with links, the duplicate warning and a link to the rest", () => {
+    const ticket = (id: string) => ({ id, ticketNo: `TK-${id}`, createdAt: "2026-10-01 08:00:00", customerCompany: "ACME", status: "IN_PROGRESS", summary: "Screen *black*" });
+    const els = similarElements(
+      {
+        windowDays: 90,
+        layers: [
+          { key: "SN", value: "SN1", total: 1, openDuplicate: true, tickets: [ticket("1")] },
+          { key: "FAULT", value: "Screen fault", total: 5, openDuplicate: false, tickets: [ticket("2"), ticket("3"), ticket("4")] }
+        ]
+      },
+      "https://portal.example"
+    );
+    const text = (els[0] as any).content as string;
+    expect(text).toContain("**Same device (SN SN1)** (1)");
+    expect(text).toContain("already has an open ticket");
+    expect(text).toContain("[TK-1](https://portal.example/tickets/1) · 2026-10-01 · ACME · In progress · Screen \\*black\\*");
+    expect(text).toContain("**Same fault type (Screen fault), last 90 days** (5)");
+    expect(text).toContain("[2 more](https://portal.example/tickets?q=Screen%20fault)");
+    expect((similarElements({ windowDays: 90, layers: [] }, null)[0] as any).content).toContain("none found");
   });
 });
 
@@ -170,20 +212,27 @@ describe("AI triage", () => {
   it("keeps the type and fault type only when valid", async () => {
     expect(await triageMessages(qwen, "x", ["Offline"], reply('{"summary":" 充电桩离线。 ","ticketType":"FAULT","faultType":"Offline"}'))).toEqual({
       summary: "充电桩离线。",
+      digest: null,
       ticketType: "FAULT",
       faultType: "Offline"
     });
     expect(await triageMessages(qwen, "x", ["Offline"], reply('{"summary":"s","ticketType":"WHAT","faultType":"none"}'))).toEqual({
       summary: "s",
+      digest: null,
       ticketType: null,
       faultType: null
     });
     // A product request never carries a fault type.
     expect(await triageMessages(qwen, "x", ["Offline"], reply('{"summary":"想要 App","ticketType":"PRODUCT_REQUEST","faultType":"Offline"}'))).toEqual({
       summary: "想要 App",
+      digest: null,
       ticketType: "PRODUCT_REQUEST",
       faultType: null
     });
+    // The digest may come as a list of lines, with or without bullets.
+    expect(
+      (await triageMessages(qwen, "x", ["Offline"], reply('{"summary":"s","digest":["- Customer: no charging","Picture: red warning"," "],"ticketType":"FAULT","faultType":"none"}')))?.digest
+    ).toBe("- Customer: no charging\n- Picture: red warning");
   });
 
   it("degrades to no suggestion on an error status, empty or bad JSON, or a network failure", async () => {
@@ -193,6 +242,41 @@ describe("AI triage", () => {
     expect(await triageMessages(qwen, "x", [], reply('{"faultType":"Offline"}'))).toBeNull();
     const failing = (async () => { throw new Error("down"); }) as unknown as typeof fetch;
     expect(await triageMessages(qwen, "x", [], failing)).toBeNull();
+  });
+
+  it("asks for symptoms, not causes, and sends pictures to Qwen's vision model only", async () => {
+    const { seen, impl } = capture();
+    const images = [{ contentType: "image/png", base64: toBase64(new TextEncoder().encode("PNG!").buffer as ArrayBuffer) }];
+    await triageMessages(qwen, { text: "屏幕报错", images }, ["Offline"], impl);
+    await triageMessages({ provider: "DEEPSEEK", apiKey: "sk-deep-5678" }, { text: "屏幕报错", images }, ["Offline"], impl);
+    const [vision, deepseek] = seen.map((s) => JSON.parse(String(s.init.body)));
+    expect(vision.messages[0].content).toContain("Do not guess the cause");
+    expect(vision.model).toBe("qwen3-vl-plus");
+    expect(vision.response_format).toBeUndefined();
+    expect(vision.messages[1].content[1]).toEqual({ type: "image_url", image_url: { url: "data:image/png;base64,UE5HIQ==" } });
+    expect(deepseek.model).toBe("deepseek-flash");
+    expect(typeof deepseek.messages[1].content).toBe("string"); // DeepSeek reads text only
+    // A vision reply wrapped in prose still parses.
+    expect(await triageMessages(qwen, { text: "x", images }, ["Offline"], reply('Here you go: {"summary":"Screen shows E12","digest":"- Picture: E12 on screen","ticketType":"FAULT","faultType":"Offline"}'))).toEqual({
+      summary: "Screen shows E12",
+      digest: "- Picture: E12 on screen",
+      ticketType: "FAULT",
+      faultType: "Offline"
+    });
+  });
+
+  it("transcribes voice messages with Qwen's speech model, and not with DeepSeek", async () => {
+    const seen: any[] = [];
+    const impl = (async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ choices: [{ message: { content: [{ text: "充电桩离线了" }] } }] }));
+    }) as unknown as typeof fetch;
+    const voice = { contentType: "audio/ogg", base64: "T2dnUw==" };
+    expect(await transcribeAudio(qwen, voice, impl)).toBe("充电桩离线了");
+    expect(seen[0]).toMatchObject({ model: "qwen3-asr-flash", messages: [{ role: "user", content: [{ type: "input_audio", input_audio: { data: "data:audio/ogg;base64,T2dnUw==" } }] }] });
+    expect(await transcribeAudio({ provider: "DEEPSEEK", apiKey: "k" }, voice, impl)).toBeNull();
+    expect(await transcribeAudio(qwen, voice, reply("", 500))).toBeNull();
+    expect(seen).toHaveLength(1);
   });
 
   it("never echoes the key in a test error", async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Plus, Search } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../components/Form";
 import { useAuth } from "../auth/AuthContext";
 import { markSeen } from "../pi/notifications";
@@ -11,7 +11,9 @@ import { STATUS_BADGE, STATUS_LABEL, STATUS_ORDER, TICKET_TYPE_LABEL, formatDate
 
 export function TicketListPanel() {
   const [status, setStatus] = useState<"" | TicketStatus>("");
-  const [query, setQuery] = useState("");
+  // ?q= pre-fills the search (links from "earlier tickets like this").
+  const [searchParams] = useSearchParams();
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [type, setType] = useState<"" | TicketType | "NONE">("");
   // Cached per status filter so re-entering the tab (or switching filters back)
   // paints instantly, then revalidates.
@@ -29,13 +31,16 @@ export function TicketListPanel() {
   }, [tickets, user?.id]);
 
   // Ticket type, then free-text search across ticket number, order, company,
-  // product name and summary.
+  // product name, SN, fault type and summary.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return tickets.filter(
       (t) =>
         (!type || (type === "NONE" ? !t.ticketType : t.ticketType === type)) &&
-        (!q || [t.ticketNo, t.orderNo, t.customerCompany, t.productNameEn, t.productNameZh, t.summary].some((v) => (v ?? "").toLowerCase().includes(q)))
+        (!q ||
+          [t.ticketNo, t.orderNo, t.customerCompany, t.productNameEn, t.productNameZh, t.serialNumber, t.faultType, t.summary].some((v) =>
+            (v ?? "").toLowerCase().includes(q)
+          ))
     );
   }, [tickets, query, type]);
 

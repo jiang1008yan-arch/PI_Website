@@ -83,6 +83,14 @@ export function repeatSettings(windowDays: unknown, threshold: unknown): RepeatS
   };
 }
 
+export async function loadRepeatSettings(db: D1Database): Promise<RepeatSettings> {
+  const rows = (
+    await db.prepare("SELECT optionKey, value FROM appOptions WHERE optionKey IN ('repeatFaultDays', 'repeatFaultThreshold')").all<{ optionKey: string; value: string }>()
+  ).results ?? [];
+  const get = (key: string) => rows.find((r) => r.optionKey === key)?.value;
+  return repeatSettings(get("repeatFaultDays"), get("repeatFaultThreshold"));
+}
+
 // Start of the look-back window, in SQLite's datetime text format.
 export function repeatWindowStart(now: Date, windowDays: number): string {
   return new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");

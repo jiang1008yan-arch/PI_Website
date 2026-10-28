@@ -1,7 +1,7 @@
 import { all, first, id } from "../../lib/db";
 import type { AppUser } from "../../lib/types";
 import { isKnownSerial, normalizeSerial } from "../../lib/devices";
-import { buildFaultRanking, isRepeatFault, repeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
+import { buildFaultRanking, isRepeatFault, loadRepeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
 import { canConfirmFault, canCreateTicket, canReadTicket, canUseTickets, seesOnlyOwnTickets, type TicketStatus } from "../../lib/ticketAccess";
 import {
   addTicketAttachment,
@@ -15,6 +15,8 @@ import {
   setTicketType
 } from "../../lib/ticketService";
 import { afterTicketChange } from "../../lib/feishu/sync";
+import { feishuEnabled, listBotChats } from "../../lib/feishu/client";
+import { findSimilarTickets } from "../../lib/similarTickets";
 import { body, createApp } from "./_shared";
 
 export const ticketRoutes = createApp();
@@ -28,7 +30,7 @@ for (const path of ["/tickets", "/tickets/*"]) {
 }
 
 // Paths under /tickets/ that are not a ticket id.
-const NON_TICKET_PATHS = new Set(["products", "stats", "fault-ranking"]);
+const NON_TICKET_PATHS = new Set(["products", "stats", "fault-ranking", "similar"]);
 
 // Sales may open only the tickets in their name — the ticket itself and
 // everything under it (attachments, assignment, …). Unknown ids fall through
@@ -95,15 +97,6 @@ async function approvedPisForOrder(db: D1Database, orderNo: string) {
   );
 }
 
-async function loadRepeatSettings(db: D1Database) {
-  const rows = await all<{ optionKey: string; value: string }>(
-    db,
-    "SELECT optionKey, value FROM appOptions WHERE optionKey IN ('repeatFaultDays', 'repeatFaultThreshold')"
-  );
-  const get = (key: string) => rows.find((r) => r.optionKey === key)?.value;
-  return repeatSettings(get("repeatFaultDays"), get("repeatFaultThreshold"));
-}
-
 // How often this product has had this confirmed fault within the window.
 async function repeatInfo(db: D1Database, productId: string | null, faultType: string | null, now: Date) {
   if (!productId || !faultType) return null;
@@ -123,12 +116,44 @@ async function repeatInfo(db: D1Database, productId: string | null, faultType: s
 // Staff-created ticket (no customer link). ADMIN and SERVICE create tickets
 // directly and name the responsible people (SALES cannot create). Product is
 // required and the questionnaire is validated exactly like the public submission.
+// Optionally a customer group the Feishu bot is in, told when the ticket is
+// created and resolved.
 ticketRoutes.post("/tickets", async (c) => {
   if (!canCreateTicket(c.get("user"))) return c.json({ error: "Your role cannot create tickets" }, 403);
   const d = await body<any>(c);
-  const created = await createTicket(c.env, d, { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") });
+  const chatId = String(d.feishuSourceChatId ?? "").trim() || null;
+  if (chatId) {
+    const chats = feishuEnabled(c.env) ? await listBotChats(c.env).catch(() => []) : [];
+    if (chatId === c.env.FEISHU_SERVICE_CHAT_ID || !chats.some((ch) => ch.chatId === chatId)) {
+      return c.json({ error: "Choose a customer group the Feishu bot is in." }, 400);
+    }
+  }
+  const created = await createTicket(
+    c.env,
+    { ...d, feishuSourceChatId: chatId, feishuSourceMessageId: null },
+    { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") }
+  );
   afterTicketChange(c, created.id, { kind: "created" });
-  return c.json(created);
+  return c.json({ id: created.id, ticketNo: created.ticketNo });
+});
+
+// Earlier tickets like the one being created (SN, production order, customer,
+// fault type): shown on the New ticket page before it is submitted.
+ticketRoutes.get("/tickets/similar", async (c) => {
+  if (!canCreateTicket(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
+  return c.json(
+    await findSimilarTickets(
+      c.env.DB,
+      {
+        serialNumber: c.req.query("serialNumber"),
+        orderNo: c.req.query("orderNo"),
+        customerCompany: c.req.query("customerCompany"),
+        productId: c.req.query("productId"),
+        faultType: c.req.query("faultType")
+      },
+      new Date()
+    )
+  );
 });
 
 // Catalog products a ticket can be about: identity columns of ACTIVE products

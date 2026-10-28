@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
 import { ticketProductOptionLabel } from "../tickets/productOptionLabel";
+import { SimilarTicketsPanel } from "../tickets/SimilarTicketsPanel";
 import { usePiLines } from "../tickets/usePiLines";
 import type { PublicProduct, TicketField, User } from "../types";
 
@@ -44,6 +45,9 @@ export function CreateTicketPage() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [assignedSalesId, setAssignedSalesId] = useState("");
   const [assignedServiceId, setAssignedServiceId] = useState("");
+  // A customer group the Feishu bot is in, told when the ticket is created and resolved.
+  const [chats, setChats] = useState<{ chatId: string; name: string }[]>([]);
+  const [notifyChat, setNotifyChat] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -59,6 +63,7 @@ export function CreateTicketPage() {
       setProducts(p.data);
       setUsers(u.data);
     })().catch(() => setError("Could not load the form."));
+    api.get("/feishu/chats").then((res) => setChats(res.data)).catch(() => setChats([]));
   }, []);
 
   // Pre-fill the creator's own side, mirroring the link flow.
@@ -99,7 +104,8 @@ export function CreateTicketPage() {
         serialNumber: serialNumber.trim() || undefined,
         answers,
         assignedSalesId: assignedSalesId || undefined,
-        assignedServiceId: assignedServiceId || undefined
+        assignedServiceId: assignedServiceId || undefined,
+        feishuSourceChatId: notifyChat || undefined
       });
       navigate(`/tickets/${res.data.id}`);
     } catch (err: any) {
@@ -161,7 +167,24 @@ export function CreateTicketPage() {
             <Field label="Contact details (email or phone) *">
               <input value={contactInfo} onChange={(e) => setContactInfo(e.target.value)} maxLength={200} required />
             </Field>
+            {chats.length > 0 && (
+              <Field label="Notify a customer group in Feishu (optional)">
+                <select value={notifyChat} onChange={(e) => setNotifyChat(e.target.value)}>
+                  <option value="">Don't notify any group</option>
+                  {chats.map((ch) => (
+                    <option key={ch.chatId} value={ch.chatId}>{ch.name}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
           </div>
+        </Section>
+
+        <Section title="Earlier tickets like this">
+          <SimilarTicketsPanel serialNumber={serialNumber} orderNo={orderNo} customerCompany={customerCompany} productId={effectiveProductId} />
+          {!serialNumber && !orderNo.trim() && !customerCompany.trim() && (
+            <p className="text-sm text-[#63749b]">Enter the customer, production order or SN to see earlier tickets for them.</p>
+          )}
         </Section>
 
         <Section title="Request details">

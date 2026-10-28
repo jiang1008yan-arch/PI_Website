@@ -89,16 +89,29 @@ describe("device status intake", () => {
     expect(text).toContain("PO-2026-0901");
     const draftId = alert.body.elements.find((e: any) => e.tag === "button").behaviors[0].value.draftId;
 
-    // Pressing it opens the usual form, starting from the SN, order and customer.
+    // Pressing it moves the request to the presser's private chat with the bot
+    // (the group card says who took it); there it opens the usual form,
+    // starting from the SN, order and customer.
     calls = [];
-    await cardAction({ action: "open_draft", draftId }, {}, "om_1");
+    expect((await cardAction({ action: "open_draft", draftId }, {}, "om_1")).body.toast.type).toBe("success");
     await h.settle();
-    const form = JSON.parse(calls.find((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_1")!.body.content);
+    const dm = calls.find((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "interactive")!;
+    expect(dm.body.content).toContain("Device alert: SN CHG-0901-0001");
+    expect(calls.find((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_1")!.body.content).toContain("Test SERVICE is preparing a ticket");
+    // Pressing the group card again points back to the private chat.
+    expect((await cardAction({ action: "open_draft", draftId }, {}, "om_1")).body.toast.type).toBe("info");
+
+    const dmCard = (await h.db.prepare("SELECT cardMessageId FROM feishuDrafts WHERE id = ?").bind(draftId).first<any>()).cardMessageId;
+    expect(dmCard).toMatch(/^om_/);
+    calls = [];
+    await cardAction({ action: "open_draft", draftId }, {}, dmCard);
+    await h.settle();
+    const form = JSON.parse(calls.find((c) => c.method === "PATCH" && c.path === `/im/v1/messages/${dmCard}`)!.body.content);
     const inputs = Object.fromEntries(form.body.elements.find((e: any) => e.tag === "form").elements.filter((e: any) => e.tag === "input").map((e: any) => [e.name, e.default_value]));
     expect(inputs).toMatchObject({ orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" });
     expect(JSON.stringify(form)).toContain("Device SN:** CHG-0901-0001");
 
-    const created = await cardAction({ action: "confirm_draft", draftId }, { contactName: "Site manager", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" }, "om_1");
+    const created = await cardAction({ action: "confirm_draft", draftId }, { contactName: "Site manager", orderNo: "PO-2026-0901", customerCompany: "Iberia Charge SL" }, dmCard);
     expect(created.body.toast.type).toBe("success");
     await h.settle();
     const ticket = await h.db.prepare("SELECT id, serialNumber, assignedServiceId, feishuSourceChatId FROM tickets").first<any>();

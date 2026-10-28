@@ -108,13 +108,15 @@ export async function createTicket(
       serialNumber
     )
     .run();
+  let initialNoteId: string | null = null;
   if (input.initialNote?.text.trim()) {
+    initialNoteId = id("tup");
     await db
       .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note) VALUES (?, ?, ?, 'NOTE', ?)")
-      .bind(id("tup"), ticketId, input.initialNote.actorId, input.initialNote.text.trim().slice(0, 4000))
+      .bind(initialNoteId, ticketId, input.initialNote.actorId, input.initialNote.text.trim().slice(0, 4000))
       .run();
   }
-  return { id: ticketId, ticketNo };
+  return { id: ticketId, ticketNo, initialNoteId };
 }
 
 export async function changeTicketStatus(db: D1Database, user: AppUser, ticketId: string, to: TicketStatus) {
@@ -202,6 +204,27 @@ export async function addTicketAttachment(
     .bind(attachmentId, ticketId, updateId, fileName, file.contentType || "application/octet-stream", file.body.byteLength, r2Key, user.id)
     .run();
   return { id: attachmentId, fileName, contentType: file.contentType, size: file.body.byteLength };
+}
+
+// Files already in R2 (material collected in Feishu) attached to a ticket
+// update as they are, without copying them.
+export async function attachStoredFiles(
+  db: D1Database,
+  ticketId: string,
+  updateId: string,
+  uploadedById: string,
+  files: { fileName: string; contentType: string; size: number; r2Key: string }[]
+) {
+  if (!files.length) return;
+  await db.batch(
+    files.map((f) =>
+      db
+        .prepare(
+          "INSERT INTO ticketAttachments (id, ticketId, updateId, fileName, contentType, size, r2Key, uploadedById) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(id("att"), ticketId, updateId, f.fileName.slice(0, 200) || "file", f.contentType || "application/octet-stream", f.size, f.r2Key, uploadedById)
+    )
+  );
 }
 
 // "Take" a ticket: become its after-sales owner and start work on it.

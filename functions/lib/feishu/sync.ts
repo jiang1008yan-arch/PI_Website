@@ -119,7 +119,13 @@ async function deliver(env: Env, payload: Payload) {
 
   // 1. The owner's card, in their private chat with the bot: refreshed in
   // place; after a hand-over the old card says so and the new owner gets one.
-  if (t.feishuCardMessageId && t.feishuCardOwnerId === t.assignedServiceId) {
+  // A ticket its owner created from a request in our private chat already
+  // has its card (the request card, now saying "created"), so no second card
+  // asks for a status right away; it turns into the ticket card on
+  // "Update progress" or at the next change.
+  if (change.kind === "created" && t.feishuCardMessageId) {
+    // nothing to send
+  } else if (t.feishuCardMessageId && t.feishuCardOwnerId === t.assignedServiceId) {
     await updateCard(env, t.feishuCardMessageId, card);
   } else {
     if (t.feishuCardMessageId) await updateCard(env, t.feishuCardMessageId, handedOverCard(t.ticketNo, t.serviceName));

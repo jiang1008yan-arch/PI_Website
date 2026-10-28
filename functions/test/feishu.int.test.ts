@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setAiFetch } from "../lib/aiTriage";
 import { setFeishuFetch } from "../lib/feishu/client";
 import { drainFeishuOutbox } from "../lib/feishu/sync";
+import { runScheduledJobs } from "../scheduled";
 import { createHarness, seedProduct, type Harness } from "./harness";
 
 // The Feishu bot end to end against a fake Feishu Open API: binding, @bot
@@ -15,6 +16,8 @@ let h: Harness;
 let calls: Call[];
 let failing: boolean;
 let nextId: number;
+// Cards the fake Feishu refused as invalid; any is a bug.
+let refused: string[];
 
 const SERVICE_CHAT = "oc_service";
 const CUSTOMER_CHAT = "oc_customer";
@@ -28,10 +31,43 @@ function fakeFeishu(): typeof fetch {
     const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
     if (path.startsWith("/auth/v3/tenant_access_token")) return json({ code: 0, tenant_access_token: "t-1", expire: 7200 });
     if (failing) return json({ code: 99991400, msg: "rate limited" });
+    // Like Feishu: a card with an input allowing more than 1000 characters is refused whole.
+    if (typeof body?.content === "string" && /"max_length":(\d+)/.test(body.content) && [...body.content.matchAll(/"max_length":(\d+)/g)].some((m) => Number(m[1]) > 1000)) {
+      refused.push(path);
+      return json({ code: 230099, msg: "Failed to create card content, ErrMsg: max_length exceed the default maximum 1000" });
+    }
     if (path.startsWith("/bitable/") && init?.method === "POST") return json({ code: 0, data: { record: { record_id: `rec_${++nextId}` } } });
     if (path.startsWith("/bitable/")) return json({ code: 0, data: { items: [{ field_name: "工单号", type: 1 }, { field_name: "提交日期", type: 5 }] } });
-    if (path.startsWith("/im/v1/messages/om_parent") && (init?.method ?? "GET") === "GET") {
-      return json({ code: 0, data: { items: [{ msg_type: "text", body: { content: JSON.stringify({ text: "Charger on PO-2026-0901 keeps going offline" }) } }] } });
+    const method = init?.method ?? "GET";
+    // Files of messages in the bot's private chat; none inside a merged forward.
+    const resource = path.match(/^\/im\/v1\/messages\/([^/]+)\/resources\/([^?]+)\?type=(image|file)$/);
+    if (resource && method === "GET") {
+      if (resource[1].startsWith("om_sub")) return json({ code: 234043, msg: "Unsupported message type" });
+      const files: Record<string, [string, string]> = {
+        img_1: ["image/png", "PNG!"],
+        file_voice: ["audio/ogg", "OggS-voice"],
+        file_video: ["video/mp4", "mp4-bytes"],
+        file_doc: ["application/octet-stream", "log line"]
+      };
+      const [type, data] = files[resource[2]] ?? ["application/octet-stream", "?"];
+      return new Response(data, { headers: { "content-type": type, "content-length": String(data.length) } });
+    }
+    if (path.startsWith("/im/v1/messages/om_merge") && method === "GET") {
+      const sub = (id: string, msg_type: string, content: unknown) => ({ message_id: id, msg_type, chat_id: CUSTOMER_CHAT, upper_message_id: "om_merge", body: { content: JSON.stringify(content) } });
+      return json({
+        code: 0,
+        data: {
+          items: [
+            { message_id: "om_merge", msg_type: "merge_forward", chat_id: "oc_dm", body: { content: "Merged and Forwarded Message" } },
+            sub("om_sub1", "text", { text: "Charger on PO-2026-0901 keeps going offline" }),
+            sub("om_sub2", "image", { image_key: "img_1" }),
+            sub("om_sub3", "text", { text: "从昨天开始的" })
+          ]
+        }
+      });
+    }
+    if (path.startsWith("/im/v1/chats") && method === "GET") {
+      return json({ code: 0, data: { items: [{ chat_id: SERVICE_CHAT, name: "After-sales" }, { chat_id: CUSTOMER_CHAT, name: "Iberia Charge 售后" }], has_more: false } });
     }
     return json({ code: 0, data: { message_id: `om_${++nextId}` } });
   }) as typeof fetch;
@@ -63,6 +99,7 @@ beforeEach(async () => {
     AI_KEY_SECRET: "test-ai-master"
   });
   calls = [];
+  refused = [];
   failing = false;
   nextId = 0;
   setFeishuFetch(fakeFeishu());
@@ -70,6 +107,7 @@ beforeEach(async () => {
   await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_sales' WHERE id = ?").bind(h.users.SALES.id).run();
 });
 afterEach(async () => {
+  expect(refused).toEqual([]);
   setFeishuFetch(null);
   setAiFetch(null);
   await h.close();
@@ -123,91 +161,360 @@ describe("one Feishu identity", () => {
   });
 });
 
-describe("turning a chat message into a ticket", () => {
+describe("collecting a ticket request in the private chat", () => {
+  let aiModels: string[];
+  const event = (messageId: string, msgType: string, content: unknown, opts: { openId?: string; chatType?: string; chatId?: string; time?: number } = {}) =>
+    push("/feishu/events", {
+      schema: "2.0",
+      header: { event_id: `e-${messageId}`, token: "vt", event_type: "im.message.receive_v1" },
+      event: {
+        sender: { sender_id: { open_id: opts.openId ?? "ou_service" }, sender_type: "user" },
+        message: {
+          message_id: messageId,
+          chat_id: opts.chatId ?? "oc_dm",
+          chat_type: opts.chatType ?? "p2p",
+          message_type: msgType,
+          create_time: String(opts.time ?? Date.now()),
+          content: JSON.stringify(content)
+        }
+      }
+    });
+  const text = (messageId: string, value: string, opts: Parameters<typeof event>[3] = {}) => event(messageId, "text", { text: value }, opts);
+  const openDraft = async () => (await h.db.prepare("SELECT * FROM feishuDrafts WHERE ticketId IS NULL AND dismissedAt IS NULL AND expiredAt IS NULL").first<any>())!;
+  const items = async (draftId: string) => (await h.db.prepare("SELECT * FROM feishuDraftItems WHERE draftId = ? ORDER BY position").bind(draftId).all<any>()).results;
+  const cardsTo = (openId: string) => messages((c) => c.body?.receive_id === openId && c.body.msg_type === "interactive");
+  const textsTo = (openId: string) => messages((c) => c.body?.receive_id === openId && c.body.msg_type === "text").map((c) => JSON.parse(c.body.content).text as string);
+  const patched = (messageId: string) => JSON.parse(messages((c) => c.method === "PATCH" && c.path === `/im/v1/messages/${messageId}`).at(-1)!.body.content);
+  const formOf = (card: any) => card.body.elements.find((e: any) => e.tag === "form").elements;
+
   beforeEach(async () => {
     await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    aiModels = [];
+    setAiFetch((async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      aiModels.push(body.model);
+      const content =
+        body.model === "qwen3-asr-flash"
+          ? "屏幕一直显示 E12"
+          : JSON.stringify({
+              summary: "Screen shows E12 and the charger stops charging",
+              digest: "- Customer reports the charger stops charging\n- Picture: screen shows E12",
+              ticketType: "FAULT",
+              faultType: "Screen fault"
+            });
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+    }) as unknown as typeof fetch);
   });
 
-  it("a direct message first gets a small 'create a ticket?' card; Ignore closes it, Create opens the form", async () => {
+  it("a direct message opens one collecting card; Discard closes it and the next message starts a new request", async () => {
+    await text("om_t1", "客户说充电桩坏了");
+    await h.settle();
+    const card = cardsTo("ou_service");
+    expect(card).toHaveLength(1);
+    const json = JSON.stringify(JSON.parse(card[0].body.content));
+    expect(json).toContain('"action":"open_draft"');
+    expect(json).toContain('"action":"dismiss_draft"');
+    expect(json).toContain('"action":"remove_item"');
+    expect(json).toContain("1 text");
+    expect(json).not.toContain("confirm_draft"); // no form yet, and no AI has run
+    const first = await openDraft();
+
+    await text("om_t2", "SN 在照片里");
+    await h.settle();
+    expect(cardsTo("ou_service")).toHaveLength(1); // the same card, redrawn
+    expect(JSON.stringify(patched(first.cardMessageId))).toContain("2 texts");
+
+    expect((await cardAction("ou_service", { action: "dismiss_draft", draftId: first.id }, {}, "e-dismiss", first.cardMessageId)).body.toast.type).toBe("info");
+    await h.settle();
+    expect(patched(first.cardMessageId).header.title.content).toBe("Discarded");
+    await text("om_t3", "another customer");
+    await h.settle();
+    expect((await openDraft()).id).not.toBe(first.id);
+    expect(cardsTo("ou_service")).toHaveLength(2);
+  });
+
+  it("messages forwarded one by one at the same time land in one request, in order, with their files saved", async () => {
+    const t = Date.now();
+    await Promise.all([
+      event("om_img", "image", { image_key: "img_1" }, { time: t + 1 }),
+      text("om_txt", "充电桩屏幕报错", { time: t }),
+      event("om_voice", "audio", { file_key: "file_voice", duration: 12000 }, { time: t + 2 }),
+      event("om_video", "media", { file_key: "file_video", image_key: "thumb", file_name: "site.mp4", duration: 30000 }, { time: t + 3 })
+    ]);
+    await h.settle();
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<any>()).n).toBe(1);
+    const draft = await openDraft();
+    const list = await items(draft.id);
+    expect(list.map((i: any) => i.kind)).toEqual(["TEXT", "IMAGE", "AUDIO", "VIDEO"]);
+    expect(list[1]).toMatchObject({ contentType: "image/png", size: 4, problem: null });
+    expect(list[3]).toMatchObject({ fileName: "site.mp4", durationMs: 30000 });
+    expect(await (await h.env.FILES.get(list[1].r2Key))!.text()).toBe("PNG!");
+    expect(cardsTo("ou_service")).toHaveLength(1);
+    expect(draft.text).toBe("充电桩屏幕报错\n[Picture]\n[Voice message 0:12]\n[Video 0:30]");
+  });
+
+  it("a merged forward is expanded: its texts are kept, its files listed as not saved, and its group offered for notices", async () => {
+    await event("om_merge", "merge_forward", "Merged and Forwarded Message");
+    await h.settle();
+    const draft = await openDraft();
+    const list = await items(draft.id);
+    expect(list.map((i: any) => [i.kind, i.text, i.problem])).toEqual([
+      ["TEXT", "Charger on PO-2026-0901 keeps going offline", null],
+      ["IMAGE", null, "IN_FORWARD"],
+      ["TEXT", "从昨天开始的", null]
+    ]);
+    expect(draft.suggestedChatId).toBe(CUSTOMER_CHAT);
+    expect(cardsTo("ou_service")[0].body.content).toContain("forward this one on its own");
+
+    await cardAction("ou_service", { action: "open_draft", draftId: draft.id }, {}, "e-open-merge", draft.cardMessageId);
+    await h.settle();
+    const notify = formOf(patched(draft.cardMessageId)).find((e: any) => e.name === "notifyChat");
+    expect(notify.initial_option).toBe(CUSTOMER_CHAT);
+    expect(notify.options.map((o: any) => o.value)).toEqual(["none", CUSTOMER_CHAT]); // never the internal group
+  });
+
+  it("only after-sales and admins collect requests; an @ in a group only reminds them privately", async () => {
+    await text("om_g1", "@_user_1 please log this", { chatType: "group", chatId: CUSTOMER_CHAT });
+    await text("om_g2", "@_user_1 help", { chatType: "group", chatId: CUSTOMER_CHAT, openId: "ou_customer" });
+    await text("om_s1", "客户的桩坏了", { openId: "ou_sales" });
+    await text("om_u1", "hello", { openId: "ou_stranger" });
+    await h.settle();
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM feishuDrafts").first<any>()).n).toBe(0);
+    expect(textsTo("ou_service")[0]).toContain("forward the customer's messages to me here in our private chat");
+    expect(messages((c) => c.body?.receive_id === CUSTOMER_CHAT || c.body?.receive_id === "ou_customer")).toHaveLength(0);
+    expect(textsTo("ou_sales")[0]).toContain("Only after-sales and admins");
+    expect(cardsTo("ou_stranger")[0].body.content).toContain("/api/auth/feishu/start");
+  });
+
+  it("Prepare ticket reads voice and pictures with Qwen; Re-recognize keeps hand edits; the ticket gets the files and tells the chosen group", async () => {
+    await h.request("SERVICE", "PUT", "/me/ai", { provider: "QWEN", apiKey: "sk-service-key-1" });
+    const t = Date.now();
+    await text("om_a", "客户反馈", { time: t });
+    await event("om_b", "image", { image_key: "img_1" }, { time: t + 1 });
+    await event("om_c", "audio", { file_key: "file_voice", duration: 5000 }, { time: t + 2 });
+    await h.settle();
+    const draft = await openDraft();
+    aiModels = [];
+    await cardAction("ou_service", { action: "open_draft", draftId: draft.id }, {}, "e-prep", draft.cardMessageId);
+    await h.settle();
+    expect(aiModels.sort()).toEqual(["qwen3-asr-flash", "qwen3-vl-plus"]);
+    let form = patched(draft.cardMessageId);
+    expect(JSON.stringify(form)).toContain("Screen shows E12");
+    expect(JSON.stringify(form)).toContain("屏幕一直显示 E12"); // the transcript is listed
+    expect(formOf(form).find((e: any) => e.name === "faultType").initial_option).toBe("Screen fault");
+    expect(formOf(form).find((e: any) => e.name === "details").default_value).toBe("- Customer reports the charger stops charging\n- Picture: screen shows E12");
+
+    // New material while the form is open: a note, not a redraw.
+    calls = [];
+    await text("om_d", "SN 是 CHG-0901-0001");
+    await h.settle();
+    expect(messages((c) => c.method === "PATCH")).toHaveLength(0);
+    expect(textsTo("ou_service")[0]).toContain("Press Re-recognize");
+
+    // Remove the picture (a form button: what was typed is kept) — the form says the material changed.
+    const picture = (await items(draft.id)).find((i: any) => i.kind === "IMAGE");
+    await cardAction("ou_service", { action: "remove_item", draftId: draft.id, itemId: picture.id }, { contactName: "Ana", summary: "Display error E12" }, "e-rm", draft.cardMessageId);
+    await h.settle();
+    form = patched(draft.cardMessageId);
+    expect(JSON.stringify(form)).toContain("1 added, 1 removed");
+    expect(formOf(form).find((e: any) => e.name === "contactName").default_value).toBe("Ana");
+    expect(await h.env.FILES.get(picture.r2Key)).toBeNull();
+
+    // Re-recognize: the hand-written summary stays; the voice is not transcribed again.
+    aiModels = [];
+    await cardAction("ou_service", { action: "rerun_draft", draftId: draft.id }, { contactName: "Ana", summary: "Display error E12", details: "- E12 since Monday", faultType: "Screen fault" }, "e-rerun", draft.cardMessageId);
+    await h.settle();
+    expect(aiModels).toEqual(["qwen-plus"]);
+    form = patched(draft.cardMessageId);
+    expect(formOf(form).find((e: any) => e.name === "summary").default_value).toBe("Display error E12");
+    expect(formOf(form).find((e: any) => e.name === "details").default_value).toBe("- E12 since Monday");
+    expect(JSON.stringify(form)).not.toContain("removed");
+
+    calls = [];
+    const created = await cardAction(
+      "ou_service",
+      { action: "confirm_draft", draftId: draft.id },
+      { contactName: "Ana", summary: "Display error E12", details: "- E12 since Monday", ticketType: "FAULT", faultType: "Screen fault", notifyChat: CUSTOMER_CHAT },
+      "e-create",
+      draft.cardMessageId
+    );
+    expect(created.body.toast.type).toBe("success");
+    await h.settle();
+    const ticket = await h.db.prepare("SELECT * FROM tickets").first<any>();
+    expect(ticket).toMatchObject({ summary: "Display error E12", faultType: "Screen fault", feishuSourceChatId: CUSTOMER_CHAT, feishuSourceMessageId: null });
+    const detail = (await h.request("SERVICE", "GET", `/tickets/${ticket.id}`)).body;
+    expect(detail.attachments.map((a: any) => a.fileName)).toEqual(["voice-1.ogg"]);
+    expect(detail.updates[0].note).toMatch(/^- E12 since Monday\n\nFrom Feishu:\n/);
+    expect(detail.updates[0].note).toContain("[Voice message 0:05] 屏幕一直显示 E12");
+    const receipt = messages((c) => c.body?.receive_id === CUSTOMER_CHAT).map((c) => JSON.parse(c.body.content).text);
+    expect(receipt[0]).toContain(ticket.ticketNo);
+    // The creator owns the ticket: the request card stands for it, no second card asks for a status.
+    expect(cardsTo("ou_service")).toHaveLength(0);
+    expect(ticket.feishuCardMessageId).toBe(draft.cardMessageId);
+    const done = JSON.stringify(patched(draft.cardMessageId));
+    expect(done).toContain(`Ticket ${ticket.ticketNo} created`);
+    expect(done).not.toContain("update_form");
+    await cardAction("ou_service", { action: "show_ticket", ticketId: ticket.id }, {}, "e-show", draft.cardMessageId);
+    await h.settle();
+    const working = patched(draft.cardMessageId);
+    expect(working.header.title.content).toBe(`${ticket.ticketNo} · New`);
+    expect(JSON.stringify(working)).toContain('"action":"update"');
+    // The attached file outlives the request's cleanup.
+    await runScheduledJobs(h.env, new Date());
+    const voiceKey = (await h.db.prepare("SELECT r2Key FROM ticketAttachments").first<any>()).r2Key;
+    expect(await h.env.FILES.get(voiceKey)).not.toBeNull();
+    // A second press does not create another ticket.
+    expect((await cardAction("ou_service", { action: "confirm_draft", draftId: draft.id }, { contactName: "Ana" }, "e-create-2", draft.cardMessageId)).body.toast.type).toBe("info");
+  });
+
+  it("pictures the AI cannot read fall back to the text; when the AI gives nothing the form says so", async () => {
+    await h.request("SERVICE", "PUT", "/me/ai", { provider: "QWEN", apiKey: "sk-service-key-1" });
+    let textFails = false;
+    setAiFetch((async (_url: string, init: RequestInit) => {
+      const model = JSON.parse(String(init.body)).model;
+      aiModels.push(model);
+      if (model === "qwen3-vl-plus" || textFails) return new Response(JSON.stringify({ error: { message: "Model not exist." } }), { status: 404 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: "Charger offline, E12 on screen", ticketType: "FAULT", faultType: "none" }) } }] }));
+    }) as unknown as typeof fetch);
+    await text("om_f1", "一直离线，屏幕显示 E12");
+    await event("om_f2", "image", { image_key: "img_1" });
+    await h.settle();
+    const draft = await openDraft();
+    aiModels = [];
+    await cardAction("ou_service", { action: "open_draft", draftId: draft.id }, {}, "e-f-prep", draft.cardMessageId);
+    await h.settle();
+    expect(aiModels).toEqual(["qwen3-vl-plus", "qwen-plus"]);
+    expect(formOf(patched(draft.cardMessageId)).find((e: any) => e.name === "summary").default_value).toBe("Charger offline, E12 on screen");
+
+    textFails = true;
+    await cardAction("ou_service", { action: "rerun_draft", draftId: draft.id }, { contactName: "Ana" }, "e-f-rerun", draft.cardMessageId);
+    await h.settle();
+    expect(JSON.stringify(patched(draft.cardMessageId))).toContain("The AI could not make a suggestion this time");
+  });
+
+  it("without a Qwen key the form says what the AI did not read, and no customer group is told by default", async () => {
+    await h.request("SERVICE", "PUT", "/me/ai", { provider: "DEEPSEEK", apiKey: "sk-deep-5678" });
+    await text("om_x", "黑屏");
+    await event("om_y", "image", { image_key: "img_1" });
+    await event("om_z", "media", { file_key: "file_video", file_name: "a.mp4" });
+    await h.settle();
+    const draft = await openDraft();
+    aiModels = [];
+    await cardAction("ou_service", { action: "open_draft", draftId: draft.id }, {}, "e-open-ds", draft.cardMessageId);
+    await h.settle();
+    expect(aiModels).toEqual(["deepseek-flash"]);
+    const form = JSON.stringify(patched(draft.cardMessageId));
+    expect(form).toContain("Pictures were not read by the AI");
+    expect(form).toContain("Videos are not read by the AI");
+    await cardAction("ou_service", { action: "confirm_draft", draftId: draft.id }, { contactName: "Li", notifyChat: "none" }, "e-c-ds", draft.cardMessageId);
+    await h.settle();
+    expect((await h.db.prepare("SELECT feishuSourceChatId FROM tickets").first<any>()).feishuSourceChatId).toBeNull();
+    expect(messages((c) => c.body?.receive_id === CUSTOMER_CHAT)).toHaveLength(0);
+  });
+
+  it("someone else's request cannot be touched, and discarded requests lose their files", async () => {
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_admin' WHERE id = ?").bind(h.users.ADMIN.id).run();
+    await event("om_f", "file", { file_key: "file_doc", file_name: "log.txt" });
+    await h.settle();
+    const draft = await openDraft();
+    const [file] = await items(draft.id);
+    expect(file).toMatchObject({ kind: "FILE", fileName: "log.txt" });
+    expect((await cardAction("ou_admin", { action: "open_draft", draftId: draft.id }, {}, "e-other", draft.cardMessageId)).body.toast.content).toContain("someone else");
+    await cardAction("ou_service", { action: "dismiss_draft", draftId: draft.id }, {}, "e-d", draft.cardMessageId);
+    await runScheduledJobs(h.env, new Date());
+    expect(await h.env.FILES.get(file.r2Key)).toBeNull();
+    expect(await items(draft.id)).toEqual([]);
+  });
+});
+
+describe("earlier tickets like this one", () => {
+  const seedTicket = (id: string, fields: Record<string, unknown>) =>
+    h.db
+      .prepare(
+        `INSERT INTO tickets (id, ticketNo, seq, status, customerCompany, orderNo, contactName, contactInfo, productId, answers, serialNumber, faultType, summary, createdAt)
+         VALUES (?, ?, ?, ?, ?, ?, 'x', 'x', ?, '{}', ?, ?, ?, ?)`
+      )
+      .bind(
+        id,
+        `T-${id}`,
+        Number(id.replace(/\D/g, "")) || 1,
+        fields.status ?? "RESOLVED",
+        fields.customerCompany ?? "",
+        fields.orderNo ?? "",
+        fields.productId ?? null,
+        fields.serialNumber ?? null,
+        fields.faultType ?? null,
+        fields.summary ?? null,
+        fields.createdAt ?? new Date().toISOString().slice(0, 19).replace("T", " ")
+      )
+      .run();
+
+  beforeEach(async () => {
+    await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
+    await h.db
+      .prepare(
+        `INSERT INTO pi (id, piNo, seq, date, language, status, customerCompany, productionOrderNo, createdById, approvedAt)
+         VALUES ('pi_a', 'ZH-001', 1, '2026-10-01', 'ZH', 'APPROVED', 'Iberia Charge SL', 'PO-2026-0901', ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(h.users.SALES.id)
+      .run();
+    await h.db.prepare("INSERT INTO devices (id, serialNumber, piId, createdById) VALUES ('d1', 'CHG-0901-0001', 'pi_a', ?)").bind(h.users.SERVICE.id).run();
+    await seedTicket("t1", { serialNumber: "CHG-0901-0001", status: "IN_PROGRESS", customerCompany: "Iberia Charge SL", orderNo: "PO-2026-0901", summary: "Offline since Monday" });
+    await seedTicket("t2", { orderNo: "po-2026-0901", customerCompany: "Iberia Charge SL" });
+    await seedTicket("t3", { customerCompany: "IBERIA CHARGE, S.L." });
+    await seedTicket("t4", { customerCompany: "Iberia Charge", createdAt: "2020-01-01 00:00:00" }); // old and resolved: not shown
+    await seedTicket("t5", { faultType: "Screen fault", customerCompany: "Other Co" });
+    await seedTicket("t6", { faultType: "Screen fault", customerCompany: "Old Co", createdAt: "2020-01-01 00:00:00" });
+  });
+
+  it("lists the same device, order, customer and fault, each ticket once, warning about an open one on the device", async () => {
+    const res = await h.request(
+      "SERVICE",
+      "GET",
+      `/tickets/similar?serialNumber=chg-0901-0001&orderNo=PO-2026-0901&customerCompany=${encodeURIComponent("iberia charge sl")}&faultType=${encodeURIComponent("Screen fault")}`
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.layers.map((l: any) => [l.key, l.tickets.map((t: any) => t.id), l.openDuplicate])).toEqual([
+      ["SN", ["t1"], true],
+      ["ORDER", ["t2"], false],
+      ["CUSTOMER", ["t3"], false],
+      ["FAULT", ["t5"], false]
+    ]);
+    expect(res.body.layers[0].tickets[0].summary).toBe("Offline since Monday");
+    expect((await h.request("SALES", "GET", "/tickets/similar?orderNo=PO-2026-0901")).status).toBe(403);
+  });
+
+  it("shows them on the Feishu form before the ticket is created", async () => {
     await push("/feishu/events", {
       schema: "2.0",
-      header: { event_id: "e-dm", token: "vt", event_type: "im.message.receive_v1" },
+      header: { event_id: "e-sim", token: "vt", event_type: "im.message.receive_v1" },
       event: {
         sender: { sender_id: { open_id: "ou_service" }, sender_type: "user" },
-        message: { message_id: "om_dm", chat_id: "oc_dm", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text: "你好" }) }
+        message: { message_id: "om_sim", chat_id: "oc_dm", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text: "CHG-0901-0001 黑屏" }) }
       }
     });
     await h.settle();
-    const prompt = messages((c) => c.body?.msg_type === "interactive");
-    expect(prompt).toHaveLength(1);
-    const promptJson = JSON.parse(prompt[0].body.content);
-    const buttons = promptJson.body.elements.filter((e: any) => e.tag === "button").map((b: any) => b.behaviors[0].value.action);
-    expect(buttons).toEqual(["open_draft", "dismiss_draft"]);
-    expect(JSON.stringify(promptJson)).not.toContain("confirm_draft"); // no form yet
-    const draftId = promptJson.body.elements.find((e: any) => e.tag === "button").behaviors[0].value.draftId;
-
-    // Ignore: the card is replaced, nothing created.
-    expect((await cardAction("ou_service", { action: "dismiss_draft", draftId }, {}, "e-ignore", "om_prompt")).body.toast.type).toBe("info");
+    const draft = (await h.db.prepare("SELECT * FROM feishuDrafts").first<any>())!;
+    await cardAction("ou_service", { action: "open_draft", draftId: draft.id }, {}, "e-sim-open", draft.cardMessageId);
     await h.settle();
-    const ignored = messages((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_prompt");
-    expect(JSON.parse(ignored[0].body.content).header.title.content).toContain("Ignored");
-
-    // Create: the card turns into the form.
-    calls = [];
-    await cardAction("ou_service", { action: "open_draft", draftId }, {}, "e-open", "om_prompt");
-    await h.settle();
-    const opened = messages((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_prompt");
-    expect(JSON.stringify(JSON.parse(opened[0].body.content))).toContain("confirm_draft");
-    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM tickets").first<{ n: number }>())?.n).toBe(0);
+    const form = JSON.stringify(JSON.parse(messages((c) => c.method === "PATCH" && c.path === `/im/v1/messages/${draft.cardMessageId}`).at(-1)!.body.content));
+    expect(form).toContain("Earlier tickets like this");
+    expect(form).toContain("Same device (SN CHG-0901-0001)");
+    expect(form).toContain("already has an open ticket");
+    expect(form).toContain("[T-t1](https://portal.example/tickets/t1)");
+    expect(form).toContain("Same customer (Iberia Charge SL)");
   });
 
-  it("a staff @bot reply sends a private confirmation card; confirming creates the ticket and its group card", async () => {
-    const event = {
-      schema: "2.0",
-      header: { event_id: "e1", token: "vt", event_type: "im.message.receive_v1" },
-      event: {
-        sender: { sender_id: { open_id: "ou_service" }, sender_type: "user" },
-        message: { message_id: "om_reply", parent_id: "om_parent", chat_id: CUSTOMER_CHAT, chat_type: "group", message_type: "text", content: JSON.stringify({ text: "@_user_1 please log this" }) }
-      }
-    };
-    expect((await push("/feishu/events", event)).status).toBe(200);
-    expect((await push("/feishu/events", event)).status).toBe(200); // redelivery is ignored
+  it("the portal's New ticket can tell a customer group the bot is in, and no other", async () => {
+    const productId = await seedProduct(h.db);
+    const base = { contactName: "Li", contactInfo: "x", productId, answers: {} };
+    expect((await h.request("SERVICE", "GET", "/feishu/chats")).body).toEqual([{ chatId: CUSTOMER_CHAT, name: "Iberia Charge 售后" }]);
+    expect((await h.request("SERVICE", "POST", "/tickets", { ...base, feishuSourceChatId: "oc_unknown" })).status).toBe(400);
+    expect((await h.request("SERVICE", "POST", "/tickets", { ...base, feishuSourceChatId: SERVICE_CHAT })).status).toBe(400);
+    const ok = await h.request("SERVICE", "POST", "/tickets", { ...base, feishuSourceChatId: CUSTOMER_CHAT });
+    expect(ok.status).toBe(200);
     await h.settle();
-
-    const drafts = await h.db.prepare("SELECT * FROM feishuDrafts").all<any>();
-    expect(drafts.results).toHaveLength(1);
-    expect(drafts.results[0]).toMatchObject({ sourceChatId: CUSTOMER_CHAT, sourceMessageId: "om_parent", aiSummary: null });
-    expect(drafts.results[0].text).toContain("keeps going offline");
-    const confirmCard = messages((c) => c.path.includes("receive_id_type=open_id"));
-    expect(confirmCard.map((c) => c.body.receive_id)).toEqual(["ou_service"]);
-
-    // Contact name is required.
-    expect((await cardAction("ou_service", { action: "confirm_draft", draftId: drafts.results[0].id }, {})).body.toast.type).toBe("warning");
-    const created = await cardAction(
-      "ou_service",
-      { action: "confirm_draft", draftId: drafts.results[0].id },
-      { customerCompany: "Iberia Charge SL", orderNo: "PO-2026-0901", contactName: "Ana", faultType: "Offline / no network" },
-      "e-confirm",
-      "om_confirm_card"
-    );
-    expect(created.body.toast).toMatchObject({ type: "success" });
-    await h.settle();
-
-    const ticket = await h.db.prepare("SELECT * FROM tickets").first<any>();
-    expect(ticket).toMatchObject({ status: "NEW", orderNo: "PO-2026-0901", faultType: "Offline / no network", feishuSourceChatId: CUSTOMER_CHAT });
-    expect(ticket.feishuCardMessageId).toMatch(/^om_/);
-    // The creator owns the ticket and gets its card privately; the group is not told; the customer got a receipt reply only.
-    expect(ticket.assignedServiceId).toBe(h.users.SERVICE.id);
-    expect(messages((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "interactive" && c.body.content.includes(ticket.ticketNo))).toHaveLength(1);
-    expect(messages((c) => c.body?.receive_id === SERVICE_CHAT)).toHaveLength(0);
-    const receipt = messages((c) => c.path === "/im/v1/messages/om_parent/reply");
-    expect(JSON.parse(receipt[0].body.content).text).toContain(ticket.ticketNo);
-    // The private card was updated to say the ticket exists; a second confirm is refused.
-    expect(messages((c) => c.method === "PATCH" && c.path === "/im/v1/messages/om_confirm_card")).toHaveLength(1);
-    expect((await cardAction("ou_service", { action: "confirm_draft", draftId: drafts.results[0].id }, { contactName: "Ana" })).body.toast.type).toBe("info");
-    // Timeline: the quoted customer message, then the fault confirmation.
-    const timeline = (await h.request("SERVICE", "GET", `/tickets/${ticket.id}`)).body.updates.map((u: any) => u.note);
-    expect(timeline[0]).toContain("From Feishu:");
+    expect(messages((c) => c.body?.receive_id === CUSTOMER_CHAT).map((c) => JSON.parse(c.body.content).text)[0]).toContain(ok.body.ticketNo);
   });
 });
 

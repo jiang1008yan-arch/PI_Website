@@ -51,7 +51,7 @@ describe("the cron endpoint", () => {
     expect((await h.raw("POST", "/internal/cron", "", { "x-cron-secret": "wrong" })).status).toBe(401);
     const ok = await h.raw("POST", "/internal/cron", "", { "x-cron-secret": "cron-secret" });
     expect(ok.status).toBe(200);
-    expect(Object.keys(ok.body.jobs)).toEqual(["purgeExpired", "feishuOutbox", "expireDrafts", "ownerReminders", "weeklySummary", "deviceOffline"]);
+    expect(Object.keys(ok.body.jobs)).toEqual(["purgeExpired", "feishuOutbox", "expireDrafts", "draftFiles", "ownerReminders", "weeklySummary", "deviceOffline"]);
     h.env.CRON_SECRET = undefined;
     expect((await h.raw("POST", "/internal/cron", "", { "x-cron-secret": "" })).status).toBe(401);
   });
@@ -124,18 +124,24 @@ describe("weekly summary", () => {
 });
 
 describe("Feishu request expiry", () => {
-  it("greys out requests left for six hours, and refuses them afterwards", async () => {
+  it("greys out requests nothing was added to for six hours, and refuses them afterwards", async () => {
     const now = new Date();
     await h.db
       .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_old', 'ou_service', 'oc_dm', 'om_src', 'hi', 'om_prompt_old', ?)")
       .bind(hoursAgo(now, 7))
       .run();
     await h.db
-      .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_new', 'ou_service', 'oc_dm', 'om_src2', 'hi', 'om_prompt_new', ?)")
+      .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt) VALUES ('fdr_new', 'ou_admin', 'oc_dm', 'om_src2', 'hi', 'om_prompt_new', ?)")
       .bind(hoursAgo(now, 1))
+      .run();
+    // Started long ago but added to an hour ago: still open (one per person).
+    await h.db
+      .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt, updatedAt) VALUES ('fdr_busy', 'ou_sales', '', '', 'hi', 'om_prompt_busy', ?, ?)")
+      .bind(hoursAgo(now, 9), hoursAgo(now, 1))
       .run();
     expect(isDraftExpired({ createdAt: hoursAgo(now, 7) }, now)).toBe(true);
     expect(isDraftExpired({ createdAt: hoursAgo(now, 5) }, now)).toBe(false);
+    expect(isDraftExpired({ createdAt: hoursAgo(now, 9), updatedAt: hoursAgo(now, 1) }, now)).toBe(false);
 
     // Opening the old one is refused and its card greyed out.
     const res = await h.raw(
@@ -157,6 +163,6 @@ describe("Feishu request expiry", () => {
     await runScheduledJobs(h.env, now);
     expect(sent((c) => c.method === "PATCH").map((c) => c.path)).toEqual(["/im/v1/messages/om_prompt_old"]);
     const rows = await h.db.prepare("SELECT id, expiredAt IS NOT NULL AS expired FROM feishuDrafts ORDER BY id").all<any>();
-    expect(rows.results).toEqual([{ id: "fdr_new", expired: 0 }, { id: "fdr_old", expired: 1 }]);
+    expect(rows.results).toEqual([{ id: "fdr_busy", expired: 0 }, { id: "fdr_new", expired: 0 }, { id: "fdr_old", expired: 1 }]);
   });
 });

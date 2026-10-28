@@ -10,7 +10,9 @@ Until the secrets below are set, the bot is off and the portal works exactly as 
    - `im:message.group_at_msg:readonly` — receive messages that @ the bot in groups
    - `im:message.p2p_msg:readonly` — receive direct messages to the bot
    - `im:message:send_as_bot` — send and update messages as the bot
-   - `im:message:readonly` — read the quoted customer message when staff reply with @bot
+   - `im:message:readonly` — read the sub-messages of a merged forward sent to the bot
+   - `im:resource` — download the pictures, voice messages, videos and files sent to the bot
+   - `im:chat:readonly` — list the groups the bot is in (the "Notify a customer group" option)
    The bot does **not** need the sensitive "read all group messages" permission.
 3. To join customers' external groups, enable external sharing for the app (对外共享) — this needs admin review.
 4. **Events & callbacks** (事件与回调), "send to developer server":
@@ -52,27 +54,38 @@ in `workers/cron/wrangler.toml`:
 npx wrangler secret put CRON_SECRET --config workers/cron/wrangler.toml
 ```
 
-The jobs: purge expired PIs, retry failed Feishu pushes, grey out Feishu requests left for 6 hours, remind owners about
+The jobs: purge expired PIs, retry failed Feishu pushes, grey out Feishu requests left for 6 hours, delete the files of
+discarded or expired requests, remind owners about
 tickets not updated for 24 hours, the Monday summary, and device offline alerts. Locally, run them by hand:
 `curl -X POST http://localhost:8788/api/internal/cron -H "x-cron-secret: <CRON_SECRET>"`.
 
 ## 3. Day-to-day use
 
 - Add the bot to the internal after-sales group and to each customer's external group.
-- **The rule: @ the bot in a group, or message it directly, when you want a ticket.** Agree this with after-sales and customers.
-- The bot always asks first with a small card, "要把这条消息创建为售后工单吗？", with **创建工单** and **忽略**.
-  Ignoring it costs nothing; casual messages simply get ignored.
-- **Create a ticket from a customer's message:** reply to that message and @ the bot. You get the question card privately;
-  **创建工单** turns it into a short form (with an AI suggestion, if enabled — AI runs only at this point), and nothing is created
-  until you press **Create ticket**. A customer who @s the bot directly gets the question card in the internal group instead.
-- The customer group only ever sees "ticket registered" and "ticket resolved".
+- **The rule: tickets are created by after-sales (and admins) only, in their private chat with the bot, or on the portal's
+  New ticket page** (docs/plans/2026-10-27-feishu-collect-and-similar-tickets.md). @ the bot in a group and it only reminds
+  after-sales privately to forward the messages; anyone else's @ is ignored, and sales who message it are told to ask after-sales.
+- **Collect the material:** select the customer's messages and forward them to the bot — **merged** or **one by one** — and add
+  anything you like (your own notes, the SN, more pictures). Everything you send goes into your one open request, listed on a
+  card with a **Remove** button per item, until you create the ticket or press **Discard**. Feishu does not let bots download
+  pictures, voice messages or videos **inside a merged forward**: forward those one by one (the card marks them). Files over
+  50 MB are listed but not saved.
+- **Prepare ticket** runs the AI once (if you set up a key) and turns the card into the form: a one-line description of the
+  symptoms (never a guessed cause), the ticket type and fault type, plus **earlier tickets like this** — the same SN (with a
+  warning if one is still open), production order, customer, and fault type in the repeat window. Nothing is created until you
+  press **Create ticket**; the saved pictures, voice messages, videos and files become attachments of the ticket's first note.
+  Material sent after the form opened is added and announced in a message; press **Re-recognize** to include it (fields you
+  changed by hand are kept).
+- **Notify a customer group** (optional, off unless chosen; preselected when the forwarded messages came from one group the bot
+  is in): that group gets only "ticket registered" and "ticket resolved".
 - **Whoever creates a ticket owns it, and works it privately:** the ticket's card (status / note) is sent in a private message to its
   after-sales owner and updates in place; a hand-over moves the card to the new owner. The sales person gets private notes about
   changes. The after-sales group is not told about every ticket.
 - **The after-sales group gets:** a summary every Monday from 9:00 Beijing time (last week's new / resolved tickets, every open ticket
-  by owner, overdue ones in red, repeat faults), repeat-fault alerts, device alerts, and requests from customers who @ the bot.
+  by owner, overdue ones in red, repeat faults), repeat-fault alerts and device alerts. **Create ticket** on a device alert moves it
+  into the presser's private chat with the bot as their open request (the group card says who took it).
 - **Reminders:** an owner whose open ticket has not been updated for 24 hours gets one private reminder a day listing such tickets.
-- **Requests expire:** a "create a ticket?" card or form not submitted within 6 hours turns grey; @ the bot again.
+- **Requests expire:** a request nothing was added to for 6 hours turns grey; the next message starts a new one.
 - **Find in the form:** type part of a production order, customer or SN and press **Find** to pick from what is already in the
   system; a production order or SN written in the message is filled in automatically.
 - **Who is who:** both bots know a person by one Feishu identity (`union_id`), linked either by an admin entering the
@@ -86,8 +99,13 @@ tickets not updated for 24 hours, the Monday summary, and device offline alerts.
   fault type). Only faults count in Fault Analytics.
 - **AI suggestions are optional and personal.** Each person who wants them saves their own key under the user menu →
   **AI Assistant**: Qwen (阿里云百炼 → API-KEY, default model `qwen-plus`) or DeepSeek (platform.deepseek.com, default model
-  `deepseek-flash`). The key is checked, stored encrypted and only shown masked. AI runs only when that person presses **创建工单**,
-  and suggests a summary, the ticket type and the fault type; nothing is applied until they press **Create ticket**.
+  `deepseek-flash`). The key is checked, stored encrypted and only shown masked. AI runs only when that person presses **Prepare
+  ticket** or **Re-recognize**, and suggests a one-line symptom summary, **Details** (a few lines putting together the text,
+  what the pictures show and what the voice messages say, plus key facts such as SN, error codes and what was tried), the ticket
+  type and the fault type; nothing is applied until they press **Create ticket**. The Details, as corrected, become the
+  ticket's first note, above the original messages. A ticket created this way by its own after-sales owner keeps the request
+  card as its card: it says "created", and **Update progress** turns it into the ticket card with the status form. With a Qwen key it also transcribes voice messages (`qwen3-asr-flash`) and reads up to 4 pictures
+  (`qwen3-vl-plus`); DeepSeek reads text only. Videos are never read — the form says what the AI did not look at.
 
 ## 3a. Product requests → the requirement pool (Feishu Bitable)
 

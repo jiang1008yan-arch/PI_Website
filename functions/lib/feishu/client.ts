@@ -1,8 +1,8 @@
 import type { Env } from "../types";
 
 // Minimal Feishu Open Platform client: tenant token, send/reply/update
-// messages, read a message. Everything goes through `feishuFetch`, which tests
-// replace with a fake.
+// messages, read a message and download its files, list the bot's groups.
+// Everything goes through `feishuFetch`, which tests replace with a fake.
 
 const BASE = "https://open.feishu.cn/open-apis";
 
@@ -83,10 +83,56 @@ export async function addBitableRecord(env: Env, appToken: string, tableId: stri
   return String(data.record?.record_id ?? "");
 }
 
-export async function getMessageText(env: Env, messageId: string): Promise<string> {
+// A message as the "get message" API returns it. For a merged forward the
+// list is the forward itself followed by its sub-messages (upper_message_id).
+export type FeishuMessageItem = {
+  message_id: string;
+  msg_type: string;
+  chat_id?: string;
+  upper_message_id?: string;
+  create_time?: string;
+  body?: { content?: string };
+};
+
+export async function getMessageItems(env: Env, messageId: string): Promise<FeishuMessageItem[]> {
   const data = await call(env, "GET", `/im/v1/messages/${encodeURIComponent(messageId)}`);
-  const item = data.items?.[0];
-  return item ? messageContentToText(item.msg_type, item.body?.content) : "";
+  return data.items ?? [];
+}
+
+export type Download = { ok: true; body: ArrayBuffer; contentType: string } | { ok: false; tooLarge: boolean; size: number | null; error?: string };
+
+// A picture ("image") or voice message / video / file ("file") of a message
+// the bot can see. Feishu refuses files inside merged forwards (234043).
+export async function downloadResource(env: Env, messageId: string, fileKey: string, type: "image" | "file", maxBytes: number): Promise<Download> {
+  const res = await fetchImpl(`${BASE}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${type}`, {
+    headers: { authorization: `Bearer ${await tenantToken(env)}` }
+  });
+  const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+  if (!res.ok || contentType.includes("application/json")) {
+    const data: any = await res.json().catch(() => ({}));
+    return { ok: false, tooLarge: false, size: null, error: `${data.code ?? res.status} ${data.msg ?? ""}`.trim() };
+  }
+  const declared = Number(res.headers.get("content-length") ?? 0);
+  if (declared > maxBytes) {
+    await res.body?.cancel();
+    return { ok: false, tooLarge: true, size: declared };
+  }
+  const body = await res.arrayBuffer();
+  if (body.byteLength > maxBytes) return { ok: false, tooLarge: true, size: body.byteLength };
+  return { ok: true, body, contentType };
+}
+
+// Groups the bot is in (the customer groups a ticket can report back to).
+export async function listBotChats(env: Env): Promise<{ chatId: string; name: string }[]> {
+  const chats: { chatId: string; name: string }[] = [];
+  let pageToken = "";
+  for (let page = 0; page < 5; page++) {
+    const data = await call(env, "GET", `/im/v1/chats?page_size=100${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`);
+    for (const item of data.items ?? []) if (item.chat_id) chats.push({ chatId: String(item.chat_id), name: String(item.name ?? "") || String(item.chat_id) });
+    if (!data.has_more || !data.page_token) break;
+    pageToken = String(data.page_token);
+  }
+  return chats;
 }
 
 // Plain text out of a message's JSON content: text messages and rich-text

@@ -1,7 +1,7 @@
 import { checkOfflineDevices } from "./lib/deviceMonitor";
 import { feishuEnabled } from "./lib/feishu/client";
 import { remindStaleOwners, sendWeeklySummaryIfDue } from "./lib/feishu/digest";
-import { expireStaleDrafts } from "./lib/feishu/drafts";
+import { expireStaleDrafts, purgeAbandonedDraftFiles } from "./lib/feishu/drafts";
 import { drainFeishuOutbox } from "./lib/feishu/sync";
 import type { Env } from "./lib/types";
 
@@ -58,6 +58,8 @@ export async function runScheduledJobs(env: Env, now: Date): Promise<Record<stri
     // Retry Feishu pushes that failed (see lib/feishu/sync.ts).
     ["feishuOutbox", () => drainFeishuOutbox(env)],
     ["expireDrafts", () => (feishuEnabled(env) ? expireStaleDrafts(env, now) : Promise.resolve(0))],
+    // Files of discarded or expired Feishu requests (created tickets keep theirs).
+    ["draftFiles", () => purgeAbandonedDraftFiles(env)],
     ["ownerReminders", () => (feishuEnabled(env) ? remindStaleOwners(env, now) : Promise.resolve(0))],
     ["weeklySummary", () => (feishuEnabled(env) ? sendWeeklySummaryIfDue(env, now) : Promise.resolve(false))],
     ["deviceOffline", () => checkOfflineDevices(env, now)]

@@ -179,6 +179,18 @@ export type RepeatInfo = {
   tickets: { id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null }[];
 };
 
+// Earlier tickets like one being created (functions/lib/similarTickets.ts).
+export type SimilarTickets = {
+  windowDays: number;
+  layers: {
+    key: "SN" | "ORDER" | "CUSTOMER" | "FAULT";
+    value: string;
+    total: number;
+    openDuplicate: boolean;
+    tickets: { id: string; ticketNo: string; createdAt: string; customerCompany: string; status: TicketStatus; summary: string | null }[];
+  }[];
+};
+
 export type FaultRanking = {
   rows: {
     productId: string | null;
