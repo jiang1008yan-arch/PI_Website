@@ -53,6 +53,12 @@
 - 合并转发的子消息都来自同一个机器人所在的群时自动预选。
 - 选了：建单发“已收到，正在处理”，解决发“已解决”（沿用现有逻辑）。网页新建页有同样的选项。
 
+### 建单后补充材料（2026-10-28 实测后加）
+- 工单卡片上的 **Add pictures / files**：之后在私聊发的文字、图片、语音、视频、文件都收进“Add to TK-…”卡片（可逐条 Remove），按 **Save to ticket** 后作为一条进度记录写进工单：文字是记录内容，其余是附件。
+- 复用请求的机制（`feishuDrafts.targetTicketId`）：每人同时只有一个在收集的东西，有未完成的建单请求时先处理它；Cancel 或 30 分钟未保存则什么都不加，文件由定时任务清理。
+- 卡片表单不能上传文件（飞书限制），所以走“在聊天里发”的方式。
+- 状态：New 可以直接到 Resolved（当场处理好的），网页和飞书一致；Resolved 仍要求先确认类型和故障类型。
+
 ## 实现
 
 - `migrations/0021_feishu_draft_items.sql`：`feishuDraftItems`；`feishuDrafts` 加 `updatedAt`、`dismissedAt`、`formOpenedAt`、`aiItemIds`、`suggestedChatId`；每人一张未完成草稿的唯一索引；把迁移前遗留的未完成消息草稿标为过期。

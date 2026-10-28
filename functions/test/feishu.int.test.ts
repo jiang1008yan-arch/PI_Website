@@ -425,6 +425,81 @@ describe("collecting a ticket request in the private chat", () => {
     expect(await h.env.FILES.get(file.r2Key)).toBeNull();
     expect(await items(draft.id)).toEqual([]);
   });
+
+  it("Add pictures / files on a ticket card collects what is sent next and saves it as one progress update", async () => {
+    // A ticket created from a request, whose card offers New → Resolved and Add pictures / files.
+    await text("om_n1", "充电枪拔不出来");
+    await h.settle();
+    const request = await openDraft();
+    await cardAction("ou_service", { action: "confirm_draft", draftId: request.id }, { contactName: "Ana" }, "e-n-create", request.cardMessageId);
+    await h.settle();
+    const ticket = await h.db.prepare("SELECT * FROM tickets").first<any>();
+    await cardAction("ou_service", { action: "show_ticket", ticketId: ticket.id }, {}, "e-n-show", request.cardMessageId);
+    await h.settle();
+    const card = patched(request.cardMessageId);
+    expect(formOf(card).find((e: any) => e.name === "status").options.map((o: any) => o.value)).toEqual(["IN_PROGRESS", "RESOLVED"]);
+    expect(JSON.stringify(card)).toContain('"action":"add_to_ticket"');
+
+    calls = [];
+    expect((await cardAction("ou_service", { action: "add_to_ticket", ticketId: ticket.id }, {}, "e-add", request.cardMessageId)).body.toast.content).toContain(ticket.ticketNo);
+    await h.settle();
+    const addCardMessage = cardsTo("ou_service");
+    expect(addCardMessage).toHaveLength(1);
+    expect(JSON.parse(addCardMessage[0].body.content).header.title.content).toBe(`Add to ${ticket.ticketNo}`);
+    // A second press says so; nothing new is started.
+    expect((await cardAction("ou_service", { action: "add_to_ticket", ticketId: ticket.id }, {}, "e-add-2", request.cardMessageId)).body.toast.content).toContain("Already adding");
+
+    await text("om_n2", "已更换充电枪，客户确认可以正常使用");
+    await event("om_n3", "image", { image_key: "img_1" });
+    await h.settle();
+    const addition = await openDraft();
+    expect(addition.targetTicketId).toBe(ticket.id);
+    expect(JSON.stringify(patched(addition.cardMessageId))).toContain("1 text · 1 picture");
+    // Only Save, Cancel and Remove work on it.
+    expect((await cardAction("ou_service", { action: "open_draft", draftId: addition.id }, {}, "e-add-open", addition.cardMessageId)).body.toast.content).toContain("Save to ticket");
+
+    const saved = await cardAction("ou_service", { action: "save_addition", draftId: addition.id }, {}, "e-add-save", addition.cardMessageId);
+    expect(saved.body.toast.type).toBe("success");
+    await h.settle();
+    const detail = (await h.request("SERVICE", "GET", `/tickets/${ticket.id}`)).body;
+    const update = detail.updates.find((u: any) => u.note?.startsWith("已更换充电枪"));
+    expect(update.note).toBe("已更换充电枪，客户确认可以正常使用\n[Picture]");
+    expect(detail.attachments.filter((a: any) => a.updateId === update.id).map((a: any) => a.fileName)).toEqual(["picture-1.png"]);
+    expect(patched(addition.cardMessageId).header.title.content).toBe(`Added to ${ticket.ticketNo}`);
+    // The saved files stay; the next message starts a new request.
+    await runScheduledJobs(h.env, new Date());
+    expect(await h.env.FILES.get((await items(addition.id))[1].r2Key)).not.toBeNull();
+    await text("om_n4", "另一个客户");
+    await h.settle();
+    expect((await openDraft()).targetTicketId).toBeNull();
+  });
+
+  it("Add pictures / files waits for an open request, and Cancel adds nothing", async () => {
+    await h.db
+      .prepare(
+        `INSERT INTO tickets (id, ticketNo, seq, status, customerCompany, orderNo, contactName, contactInfo, productId, answers, assignedServiceId)
+         VALUES ('t1', 'TK-1', 1, 'IN_PROGRESS', 'Co', '', 'x', 'x', NULL, '{}', ?)`
+      )
+      .bind(h.users.SERVICE.id)
+      .run();
+    await text("om_p1", "新的问题");
+    await h.settle();
+    expect((await cardAction("ou_service", { action: "add_to_ticket", ticketId: "t1" }, {}, "e-p-add")).body.toast.content).toContain("open ticket request");
+    await cardAction("ou_service", { action: "dismiss_draft", draftId: (await openDraft()).id }, {}, "e-p-d", (await openDraft()).cardMessageId);
+
+    await cardAction("ou_service", { action: "add_to_ticket", ticketId: "t1" }, {}, "e-p-add-2");
+    await h.settle();
+    await event("om_p2", "image", { image_key: "img_1" });
+    await h.settle();
+    const addition = await openDraft();
+    const [picture] = await items(addition.id);
+    await cardAction("ou_service", { action: "dismiss_draft", draftId: addition.id }, {}, "e-p-cancel", addition.cardMessageId);
+    await h.settle();
+    expect(patched(addition.cardMessageId).header.title.content).toBe("Cancelled");
+    await runScheduledJobs(h.env, new Date());
+    expect(await h.env.FILES.get(picture.r2Key)).toBeNull();
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM ticketUpdates WHERE ticketId = 't1'").first<any>()).n).toBe(0);
+  });
 });
 
 describe("earlier tickets like this one", () => {

@@ -28,7 +28,7 @@ export const STATUS_TEXT: Record<TicketCardData["status"], string> = {
 
 // Next statuses offered on the card — the same transitions as the portal.
 const NEXT: Record<TicketCardData["status"], TicketCardData["status"][]> = {
-  NEW: ["IN_PROGRESS"],
+  NEW: ["IN_PROGRESS", "RESOLVED"],
   IN_PROGRESS: ["RESOLVED"],
   RESOLVED: ["CLOSED", "IN_PROGRESS"],
   CLOSED: []
@@ -81,6 +81,8 @@ export function ticketCard(t: TicketCardData, portalUrl: string | null) {
       ]
     });
   }
+  // Pictures and files cannot go through a card form: they are sent in the chat.
+  if (t.status !== "CLOSED") elements.push(callbackButton("Add pictures / files", { action: "add_to_ticket", ticketId: t.id }));
   if (portalUrl) elements.push(md(`[Open in portal](${portalUrl}/tickets/${t.id})`));
   return {
     schema: "2.0",
@@ -180,6 +182,52 @@ export function collectCard(d: { draftId: string; items: CardItem[] }) {
         callbackButton("Discard", { action: "dismiss_draft", draftId: d.draftId })
       ]
     }
+  };
+}
+
+// "Add to ticket": material for an existing ticket, collected like a request.
+export function addCard(d: { draftId: string; ticketNo: string; items: CardItem[] }) {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain(`Add to ${d.ticketNo}`), template: "turquoise" },
+    body: {
+      elements: [
+        md(
+          `Send me what belongs to **${esc(d.ticketNo)}** now: texts, pictures, voice messages, videos and files, one by one. Texts become the progress note; everything else is attached. Nothing is added until you press **Save to ticket** (within 30 minutes).`
+        ),
+        ...itemElements(d.draftId, d.items, false),
+        callbackButton("Save to ticket", { action: "save_addition", draftId: d.draftId }, { type: "primary" }),
+        callbackButton("Cancel", { action: "dismiss_draft", draftId: d.draftId })
+      ]
+    }
+  };
+}
+
+export function addedCard(ticketNo: string, items: CardItem[]) {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain(`Added to ${ticketNo}`), template: "green" },
+    body: { elements: [md(`${collectedCounts(items)} added to the ticket's progress.`)] }
+  };
+}
+
+export function addCancelledCard() {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain("Cancelled"), template: "grey" },
+    body: { elements: [md("Nothing was added to the ticket.")] }
+  };
+}
+
+export function addExpiredCard() {
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    header: { title: plain("Not added"), template: "grey" },
+    body: { elements: [md("Save to ticket was not pressed within 30 minutes, so nothing was added. Press Add pictures / files on the ticket card to start again.")] }
   };
 }
 

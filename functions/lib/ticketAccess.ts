@@ -29,7 +29,7 @@ export const canAssignSalesSide = (user: AppUser) => user.role === "ADMIN" || us
 export const canAssignServiceSide = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
 
 const TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
-  NEW: ["IN_PROGRESS"],
+  NEW: ["IN_PROGRESS", "RESOLVED"], // fixed on the spot
   IN_PROGRESS: ["RESOLVED"],
   RESOLVED: ["CLOSED", "IN_PROGRESS"], // reopen allowed
   CLOSED: []

@@ -24,7 +24,7 @@ export const TICKET_TYPE_LABEL: Record<TicketType, string> = {
 
 // Mirrors functions/lib/ticketAccess.ts TRANSITIONS.
 export const TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
-  NEW: ["IN_PROGRESS"],
+  NEW: ["IN_PROGRESS", "RESOLVED"],
   IN_PROGRESS: ["RESOLVED"],
   RESOLVED: ["CLOSED", "IN_PROGRESS"],
   CLOSED: []

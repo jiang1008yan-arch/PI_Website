@@ -139,6 +139,11 @@ describe("Feishu request expiry", () => {
       .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt, updatedAt) VALUES ('fdr_busy', 'ou_sales', '', '', 'hi', 'om_prompt_busy', ?, ?)")
       .bind(hoursAgo(now, 9), hoursAgo(now, 1))
       .run();
+    // "Add to ticket" left alone for an hour: past its 30 minutes.
+    await h.db
+      .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, cardMessageId, createdAt, targetTicketId) VALUES ('fdr_add', 'ou_presales', '', '', '', 'om_prompt_add', ?, 't1')")
+      .bind(hoursAgo(now, 1))
+      .run();
     expect(isDraftExpired({ createdAt: hoursAgo(now, 7) }, now)).toBe(true);
     expect(isDraftExpired({ createdAt: hoursAgo(now, 5) }, now)).toBe(false);
     expect(isDraftExpired({ createdAt: hoursAgo(now, 9), updatedAt: hoursAgo(now, 1) }, now)).toBe(false);
@@ -161,8 +166,15 @@ describe("Feishu request expiry", () => {
     await h.db.prepare("UPDATE feishuDrafts SET expiredAt = NULL WHERE id = 'fdr_old'").run();
     calls = [];
     await runScheduledJobs(h.env, now);
-    expect(sent((c) => c.method === "PATCH").map((c) => c.path)).toEqual(["/im/v1/messages/om_prompt_old"]);
+    const patches = sent((c) => c.method === "PATCH");
+    expect(patches.map((c) => c.path).sort()).toEqual(["/im/v1/messages/om_prompt_add", "/im/v1/messages/om_prompt_old"]);
+    expect(patches.find((c) => c.path.endsWith("om_prompt_add"))!.body.content).toContain("Not added");
     const rows = await h.db.prepare("SELECT id, expiredAt IS NOT NULL AS expired FROM feishuDrafts ORDER BY id").all<any>();
-    expect(rows.results).toEqual([{ id: "fdr_busy", expired: 0 }, { id: "fdr_new", expired: 0 }, { id: "fdr_old", expired: 1 }]);
+    expect(rows.results).toEqual([
+      { id: "fdr_add", expired: 1 },
+      { id: "fdr_busy", expired: 0 },
+      { id: "fdr_new", expired: 0 },
+      { id: "fdr_old", expired: 1 }
+    ]);
   });
 });

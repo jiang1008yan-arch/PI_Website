@@ -1,4 +1,4 @@
-import { all } from "../db";
+import { all, first } from "../db";
 import { canReadPictures, canTranscribe, toBase64, transcribeAudio, triageMessages, type AiConfig, type AiMedia } from "../aiTriage";
 import { findKnownReferences } from "../lookup";
 import { findSimilarTickets } from "../similarTickets";
@@ -6,7 +6,7 @@ import { canCreateTicket } from "../ticketAccess";
 import { FAULT_TYPE_OPTION_KEY } from "../ticketService";
 import type { AppUser, Env } from "../types";
 import { loadUserAiConfig } from "../userAi";
-import { bindCard, collectCard, collectedCounts, draftCard, type CardItem, type DraftPrefill } from "./cards";
+import { addCard, bindCard, collectCard, collectedCounts, draftCard, type CardItem, type DraftPrefill } from "./cards";
 import { siteBase } from "./piBot/notifyPi";
 import { getMessageItems, listBotChats, messageContentToText, sendCard, sendText, updateCard } from "./client";
 import { addMaterials, compileDraftText, getOrOpenDraft, loadDraft, loadItems, refreshDraftText, sqlTime, type DraftItem, type DraftRow } from "./drafts";
@@ -40,6 +40,14 @@ export async function faultTypes(db: D1Database) {
 
 export const toCardItems = (items: DraftItem[]): CardItem[] =>
   items.map((i) => ({ id: i.id, kind: i.kind, text: i.text, fileName: i.fileName, durationMs: i.durationMs, problem: i.problem }));
+
+// The card of an open request while material comes in: a new ticket
+// request, or "Add to ticket" for an existing one.
+export async function collectingCard(env: Env, draft: Pick<DraftRow, "id" | "targetTicketId">, items: DraftItem[]) {
+  if (!draft.targetTicketId) return collectCard({ draftId: draft.id, items: toCardItems(items) });
+  const ticket = await first<{ ticketNo: string }>(env.DB, "SELECT ticketNo FROM tickets WHERE id = ?", draft.targetTicketId);
+  return addCard({ draftId: draft.id, ticketNo: ticket?.ticketNo ?? "the ticket", items: toCardItems(items) });
+}
 
 // DM the "Sign in with Feishu" link: the one way (besides an admin entering
 // the mobile number) a Feishu account gets linked, always with the portal
@@ -111,16 +119,16 @@ export async function handleIncomingMessage(env: Env, event: any) {
   }
   if (created) {
     const shown = await loadItems(env.DB, draft.id);
-    const cardMessageId = await sendCard(env, target.type, target.id, collectCard({ draftId: draft.id, items: toCardItems(shown) }));
+    const cardMessageId = await sendCard(env, target.type, target.id, await collectingCard(env, draft, shown));
     await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draft.id).run();
     // Messages forwarded together may have landed while the card was sent.
     const now2 = await loadItems(env.DB, draft.id);
-    if (cardMessageId && now2.length !== shown.length) await updateCard(env, cardMessageId, collectCard({ draftId: draft.id, items: toCardItems(now2) }));
+    if (cardMessageId && now2.length !== shown.length) await updateCard(env, cardMessageId, await collectingCard(env, draft, now2));
     return;
   }
   // Another message of the batch is still sending the card; it picks this up.
   const current = await loadDraft(env.DB, draft.id);
-  if (current?.cardMessageId) await updateCard(env, current.cardMessageId, collectCard({ draftId: draft.id, items: toCardItems(await loadItems(env.DB, draft.id)) }));
+  if (current?.cardMessageId) await updateCard(env, current.cardMessageId, await collectingCard(env, current, await loadItems(env.DB, draft.id)));
 }
 
 // Voice messages transcribed and pictures read (Qwen), then one suggestion
@@ -269,7 +277,8 @@ export async function renderDraftForm(env: Env, draftId: string, cardMessageId: 
 
 // Redraws the collecting card after an item was removed.
 export async function refreshCollectCard(env: Env, draftId: string, cardMessageId: string) {
-  await updateCard(env, cardMessageId, collectCard({ draftId, items: toCardItems(await loadItems(env.DB, draftId)) }));
+  const draft = await loadDraft(env.DB, draftId);
+  if (draft) await updateCard(env, cardMessageId, await collectingCard(env, draft, await loadItems(env.DB, draftId)));
 }
 
 const EXTENSION: Record<string, string> = {

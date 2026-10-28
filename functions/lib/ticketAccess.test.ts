@@ -73,7 +73,8 @@ describe("isValidTransition", () => {
     ["NEW", "IN_PROGRESS"],
     ["IN_PROGRESS", "RESOLVED"],
     ["RESOLVED", "CLOSED"],
-    ["RESOLVED", "IN_PROGRESS"] // reopen
+    ["RESOLVED", "IN_PROGRESS"], // reopen
+    ["NEW", "RESOLVED"] // fixed on the spot
   ];
 
   it("permits exactly the modelled transitions", () => {
@@ -81,7 +82,7 @@ describe("isValidTransition", () => {
   });
 
   it("rejects skips, reversals, and anything out of CLOSED", () => {
-    expect(isValidTransition("NEW", "RESOLVED")).toBe(false);
+    expect(isValidTransition("NEW", "CLOSED")).toBe(false);
     expect(isValidTransition("IN_PROGRESS", "NEW")).toBe(false);
     expect(isValidTransition("CLOSED", "IN_PROGRESS")).toBe(false);
     expect(isValidTransition("NEW", "NEW")).toBe(false);

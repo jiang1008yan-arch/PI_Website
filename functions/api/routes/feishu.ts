@@ -1,9 +1,20 @@
 import type { Context } from "hono";
 import { first } from "../../lib/db";
 import { TICKET_TYPES } from "../../lib/aiTriage";
-import { alertTakenCard, collectCard, dismissedCard, draftCard, expiredDraftCard, ticketCard, type DraftPrefill } from "../../lib/feishu/cards";
+import {
+  addCancelledCard,
+  addCard,
+  addedCard,
+  alertTakenCard,
+  collectCard,
+  dismissedCard,
+  draftCard,
+  expiredDraftCard,
+  ticketCard,
+  type DraftPrefill
+} from "../../lib/feishu/cards";
 import { lookup, matchOptions, resolveMatch } from "../../lib/lookup";
-import { addMaterials, isDraftExpired, loadDraft, loadItems, openDraftOf, removeItem, sqlTime, type DraftRow } from "../../lib/feishu/drafts";
+import { addMaterials, isDraftExpired, loadDraft, loadItems, openAddition, openDraftOf, removeItem, sqlTime, type DraftRow } from "../../lib/feishu/drafts";
 import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
 import {
@@ -203,6 +214,8 @@ feishuRoutes.post("/feishu/card", async (c) => {
         runLater(c, () => updateCard(env, messageId, ticketCard(t, env.APP_BASE_URL ?? null)));
         return c.json(toast("info", "Opening the ticket…"));
       }
+      case "add_to_ticket":
+        return c.json(await startAddition(c, env, user, operator, String(value.ticketId ?? "")));
     }
 
     // Everything below acts on a ticket request; only after-sales and admins make tickets.
@@ -210,6 +223,10 @@ feishuRoutes.post("/feishu/card", async (c) => {
     const found = await openRequestFor(c, env, String(value.draftId ?? ""), operator, messageId, { allowUnclaimedAlert: value.action === "open_draft" });
     if ("reply" in found) return c.json(found.reply);
     const draft = found.draft;
+    // "Add to ticket" only saves, cancels or removes items.
+    if (draft.targetTicketId && !["save_addition", "dismiss_draft", "remove_item"].includes(String(value.action))) {
+      return c.json(toast("info", "This card adds to an existing ticket: press Save to ticket."));
+    }
 
     switch (value.action) {
       case "open_draft": {
@@ -221,8 +238,8 @@ feishuRoutes.post("/feishu/card", async (c) => {
       }
       case "dismiss_draft": {
         await env.DB.prepare("UPDATE feishuDrafts SET dismissedAt = ? WHERE id = ?").bind(sqlTime(new Date()), draft.id).run();
-        if (messageId) runLater(c, () => updateCard(env, messageId, dismissedCard()));
-        return c.json(toast("info", "Discarded."));
+        if (messageId) runLater(c, () => updateCard(env, messageId, draft.targetTicketId ? addCancelledCard() : dismissedCard()));
+        return c.json(toast("info", draft.targetTicketId ? "Cancelled." : "Discarded."));
       }
       case "remove_item": {
         if (!(await removeItem(env, draft.id, String(value.itemId ?? ""), new Date()))) return c.json(toast("info", "Already removed."));
@@ -251,6 +268,9 @@ feishuRoutes.post("/feishu/card", async (c) => {
       }
       case "confirm_draft":
         return c.json(await confirmDraft(c, env, user, draft, form, messageId));
+      case "save_addition":
+        if (!draft.targetTicketId) return c.json(toast("error", "Unknown action."));
+        return c.json(await saveAddition(c, env, user, draft, messageId));
       default:
         return c.json(toast("error", "Unknown action."));
     }
@@ -373,6 +393,56 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
     }
   });
   return toast("success", `Ticket ${created.ticketNo} created.`);
+}
+
+// "Add pictures / files" on a ticket card: what the person sends next in our
+// private chat is collected for that ticket, like a request, until they save.
+async function startAddition(c: Context, env: Env, user: AppUser, operator: FeishuPerson, ticketId: string) {
+  if (!canCreateTicket(user)) return toast("warning", "Only after-sales and admins can add files here. Use the portal instead.");
+  const ticket = await first<{ id: string; ticketNo: string; status: string }>(env.DB, "SELECT id, ticketNo, status FROM tickets WHERE id = ?", ticketId);
+  if (!ticket) return toast("error", "This ticket no longer exists.");
+  if (ticket.status === "CLOSED") return toast("info", "This ticket is closed.");
+  const target = privateTarget(operator);
+  if (!target) return toast("error", "Something went wrong. Please try again.");
+  const { draft, created } = await openAddition(env, requesterKey(operator), ticket.id, new Date());
+  if (!created) {
+    if (draft.targetTicketId === ticket.id) return toast("info", `Already adding to ${ticket.ticketNo}: send the pictures and files in our private chat.`);
+    return toast(
+      "warning",
+      draft.targetTicketId ? "You are adding to another ticket: save or cancel that first." : "You have an open ticket request: create the ticket or discard it first."
+    );
+  }
+  runLater(c, async () => {
+    const cardMessageId = await sendCard(env, target.type, target.id, addCard({ draftId: draft.id, ticketNo: ticket.ticketNo, items: [] }));
+    await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draft.id).run();
+    // Something sent while the card was on its way is shown now.
+    const items = await loadItems(env.DB, draft.id);
+    if (cardMessageId && items.length) await updateCard(env, cardMessageId, addCard({ draftId: draft.id, ticketNo: ticket.ticketNo, items: toCardItems(items) }));
+  });
+  return toast("info", `Send me the pictures and files for ${ticket.ticketNo} in our private chat.`);
+}
+
+// "Save to ticket": the texts become one progress note, the files its attachments.
+async function saveAddition(c: Context, env: Env, user: AppUser, draft: DraftRow, cardMessageId: string | null) {
+  const items = await loadItems(env.DB, draft.id);
+  if (!items.length) return toast("info", "Send me something to add first.");
+  const ticketId = draft.targetTicketId!;
+  // Claim it first, so two presses cannot add it twice.
+  const claim = await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ? AND ticketId IS NULL").bind(ticketId, draft.id).run();
+  if (!claim.meta?.changes) return toast("info", "Already added.");
+  try {
+    const updateId = await addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true });
+    await attachStoredFiles(env.DB, ticketId, updateId, user.id, attachmentsFromItems(items));
+  } catch (error) {
+    await env.DB.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ?").bind(draft.id).run();
+    throw error;
+  }
+  const ticketNo = (await first<{ ticketNo: string }>(env.DB, "SELECT ticketNo FROM tickets WHERE id = ?", ticketId))?.ticketNo ?? "the ticket";
+  runLater(c, async () => {
+    await pushTicketChange(env, ticketId, { kind: "note" });
+    if (cardMessageId) await updateCard(env, cardMessageId, addedCard(ticketNo, toCardItems(items)));
+  });
+  return toast("success", `Added to ${ticketNo}.`);
 }
 
 // Groups the bot is in, for "Notify customer group" on the portal's New

@@ -62,4 +62,11 @@ describe("a ticket request's text and time limit", () => {
     expect(isDraftExpired({ createdAt: "2026-10-27 11:00:00", expiredAt: "2026-10-27 11:30:00" }, now)).toBe(true);
     expect(isDraftExpired({ createdAt: "2026-10-01 00:00:00", kind: "DEVICE_ALERT" }, now)).toBe(false);
   });
+
+  it("gives Add to ticket 30 minutes from the last addition", () => {
+    const now = new Date("2026-10-27T12:00:00Z");
+    expect(isDraftExpired({ createdAt: "2026-10-27 11:40:00", targetTicketId: "t1" }, now)).toBe(false);
+    expect(isDraftExpired({ createdAt: "2026-10-27 11:20:00", targetTicketId: "t1" }, now)).toBe(true);
+    expect(isDraftExpired({ createdAt: "2026-10-27 11:00:00", updatedAt: "2026-10-27 11:45:00", targetTicketId: "t1" }, now)).toBe(false);
+  });
 });

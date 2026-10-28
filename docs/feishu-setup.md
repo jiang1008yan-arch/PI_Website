@@ -86,6 +86,13 @@ tickets not updated for 24 hours, the Monday summary, and device offline alerts.
   into the presser's private chat with the bot as their open request (the group card says who took it).
 - **Reminders:** an owner whose open ticket has not been updated for 24 hours gets one private reminder a day listing such tickets.
 - **Requests expire:** a request nothing was added to for 6 hours turns grey; the next message starts a new one.
+- **Status on the ticket card:** New → In progress or straight to Resolved (fixed on the spot), In progress → Resolved,
+  Resolved → Closed or back to In progress — the same rules as the portal. Resolving needs the type (and, for a fault, the
+  fault type).
+- **Add pictures / files to a ticket:** press it on the ticket card, then send the texts, pictures, voice messages, videos and
+  files in the private chat, one by one. They are listed on an "Add to TK-…" card (with Remove) and go onto the ticket as one
+  progress update — texts as the note, the rest attached — when you press **Save to ticket**. Cancel, or 30 minutes without
+  saving, adds nothing. It waits while you have an open ticket request (create or discard that first).
 - **Find in the form:** type part of a production order, customer or SN and press **Find** to pick from what is already in the
   system; a production order or SN written in the message is filled in automatically.
 - **Who is who:** both bots know a person by one Feishu identity (`union_id`), linked either by an admin entering the

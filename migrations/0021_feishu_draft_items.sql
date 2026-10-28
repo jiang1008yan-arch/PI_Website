@@ -25,14 +25,16 @@ CREATE INDEX feishuDraftItems_draft_idx ON feishuDraftItems(draftId, position);
 
 -- Last time material was added (the 6-hour limit counts from here), Discard,
 -- when the form was prepared, which items the last AI run saw, the AI's
--- roll-up of all the material, and the customer group the forwarded messages
--- came from.
+-- roll-up of all the material, the customer group the forwarded messages
+-- came from, and — for "Add to ticket" — the existing ticket the material
+-- goes to instead of a new one.
 ALTER TABLE feishuDrafts ADD COLUMN updatedAt TEXT;
 ALTER TABLE feishuDrafts ADD COLUMN dismissedAt TEXT;
 ALTER TABLE feishuDrafts ADD COLUMN formOpenedAt TEXT;
 ALTER TABLE feishuDrafts ADD COLUMN aiItemIds TEXT;
 ALTER TABLE feishuDrafts ADD COLUMN aiDigest TEXT;
 ALTER TABLE feishuDrafts ADD COLUMN suggestedChatId TEXT;
+ALTER TABLE feishuDrafts ADD COLUMN targetTicketId TEXT;
 
 -- Requests from before this change are closed: each person now has one open
 -- request at a time, kept unique below.

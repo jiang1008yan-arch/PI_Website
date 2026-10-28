@@ -89,8 +89,13 @@ describe("cards", () => {
     expect(card.config.update_multi).toBe(true);
     const all = flat(elementsOf(card));
     const callbacks = all.filter((e) => e.tag === "button").map((b) => b.behaviors[0].value);
-    expect(callbacks).toEqual([{ action: "take", ticketId: "tkt_1" }, { action: "update", ticketId: "tkt_1" }]);
-    expect(all.find((e) => e.tag === "select_static").options.map((o: any) => o.value)).toEqual(["IN_PROGRESS"]);
+    expect(callbacks).toEqual([
+      { action: "take", ticketId: "tkt_1" },
+      { action: "update", ticketId: "tkt_1" },
+      { action: "add_to_ticket", ticketId: "tkt_1" }
+    ]);
+    // A problem fixed on the spot can be resolved straight away.
+    expect(all.find((e) => e.tag === "select_static").options.map((o: any) => o.value)).toEqual(["IN_PROGRESS", "RESOLVED"]);
     // Customer-supplied text in markdown is escaped, not formatted.
     const facts = all.find((e) => e.tag === "markdown").content as string;
     expect(facts).toContain("**Contact:** Ana \\*x\\*");
@@ -104,7 +109,7 @@ describe("cards", () => {
 
   it("Take is offered only while nobody owns the ticket", () => {
     const owned = flat(elementsOf(ticketCard({ ...ticket, serviceName: "Dev Service", status: "IN_PROGRESS" }, null)));
-    expect(owned.filter((e) => e.tag === "button").map((b) => b.behaviors[0].value.action)).toEqual(["update"]);
+    expect(owned.filter((e) => e.tag === "button").map((b) => b.behaviors[0].value.action)).toEqual(["update", "add_to_ticket"]);
     const facts = owned.find((e) => e.tag === "markdown").content as string;
     expect(facts).toContain("**Type:** not classified");
     const fault = flat(elementsOf(ticketCard({ ...ticket, ticketType: "FAULT", faultType: "Offline" }, null)));
