@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileDraftText, isDraftExpired } from "./drafts";
+import { compileDraftText, isDraftExpired } from "./ticketRequest";
 import { materialsFromContent, materialsFromForward } from "./materials";
 
 describe("what a Feishu message contributes to a ticket request", () => {

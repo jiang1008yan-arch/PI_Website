@@ -1,7 +1,7 @@
 import { checkOfflineDevices } from "./lib/deviceMonitor";
 import { feishuEnabled } from "./lib/feishu/client";
 import { remindStaleOwners, sendWeeklySummaryIfDue } from "./lib/feishu/digest";
-import { expireStaleDrafts, purgeAbandonedDraftFiles } from "./lib/feishu/drafts";
+import { expireStaleDrafts, purgeAbandonedDraftFiles } from "./lib/feishu/ticketRequest";
 import { drainFeishuOutbox } from "./lib/feishu/sync";
 import type { Env } from "./lib/types";
 

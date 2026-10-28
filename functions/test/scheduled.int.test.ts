@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setFeishuFetch } from "../lib/feishu/client";
 import { groupReminders, weeklySummaryKey } from "../lib/feishu/digest";
-import { isDraftExpired } from "../lib/feishu/drafts";
+import { isDraftExpired } from "../lib/feishu/ticketRequest";
 import { runScheduledJobs } from "../scheduled";
 import { createHarness, seedProduct, type Harness } from "./harness";
 
