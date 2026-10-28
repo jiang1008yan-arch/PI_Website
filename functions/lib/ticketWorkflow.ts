@@ -16,8 +16,23 @@ import type { AppUser, Env } from "./types";
 // response (HTTP status on the web, a toast in Feishu).
 
 export class TicketError extends Error {
-  constructor(message: string, readonly status: 400 | 403 | 404) {
+  constructor(message: string, readonly status: 400 | 403 | 404 | 409) {
     super(message);
+  }
+}
+
+// Commits one change. A guarded batch (one that moves the status) is rolled
+// back by workflowGuard when the ticket no longer had the status it was read
+// with, i.e. someone else moved it first (website and Feishu card at once).
+async function commit(db: D1Database, statements: D1PreparedStatement[]) {
+  if (!statements.length) return;
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    if (/CHECK constraint failed: ok = 1/.test(String((error as Error)?.message))) {
+      throw new TicketError("This ticket was already changed by someone else. Refresh to see its latest state.", 409);
+    }
+    throw error;
   }
 }
 
@@ -68,10 +83,26 @@ export function ownersForCreator(creator: AppUser | null | undefined, input: Pic
   return { assignedSalesId, assignedServiceId };
 }
 
+// What a ticket created from a Feishu request starts with besides its fields.
+// Never taken from a request body.
+export type FeishuCreateOptions = {
+  // Files already in R2, attached to the first note.
+  initialFiles?: StoredFile[];
+  // Type / fault type picked on the request card. Skipped, as if not picked,
+  // when the creator may not classify tickets or the value is not valid.
+  ticketType?: unknown;
+  faultType?: unknown;
+  // The request card, which becomes the ticket's card when the creator is its
+  // after-sales owner (no second card is sent).
+  feishuCardMessageId?: string | null;
+  // The device alert request (feishuDrafts id) the ticket was created from.
+  alertDraftId?: string | null;
+};
+
 export async function createTicket(
   env: Env,
   input: NewTicket,
-  opts: { requireProduct: boolean; validateQuestionnaire: boolean; creator?: AppUser | null }
+  opts: { requireProduct: boolean; validateQuestionnaire: boolean; creator?: AppUser | null } & FeishuCreateOptions
 ) {
   const db = env.DB;
   const customerCompany = String(input.customerCompany ?? "").trim().slice(0, 200);
@@ -136,12 +167,75 @@ export async function createTicket(
         .bind(initialNoteId, ticketId, input.initialNote.actorId, input.initialNote.text.trim().slice(0, 4000))
     );
   }
-  await db.batch(statements);
+  if (initialNoteId && opts.initialFiles?.length) {
+    statements.push(...storedFileStatements(db, ticketId, initialNoteId, input.initialNote!.actorId, opts.initialFiles));
+  }
+  const classification = opts.creator ? await classifyNewTicket(db, opts.creator, ticketId, opts) : { statements: [], toPool: false };
+  statements.push(...classification.statements);
+  const ownCard = Boolean(opts.feishuCardMessageId && opts.creator && owners.assignedServiceId === opts.creator.id);
+  if (ownCard) {
+    statements.push(
+      db.prepare("UPDATE tickets SET feishuCardMessageId = ?, feishuCardOwnerId = ? WHERE id = ?").bind(opts.feishuCardMessageId, opts.creator!.id, ticketId)
+    );
+  }
+  if (opts.alertDraftId) {
+    statements.push(db.prepare("UPDATE deviceStatus SET alertTicketId = ? WHERE alertDraftId = ?").bind(ticketId, opts.alertDraftId));
+  }
+  await commit(db, statements);
   const changes: TicketChange[] = [{ kind: "created" }];
-  return { id: ticketId, ticketNo, initialNoteId, changes };
+  // As before, a fault type picked at creation sends no fault change.
+  if (classification.toPool) changes.push({ kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true });
+  return { id: ticketId, ticketNo, initialNoteId, ownCard, changes };
+}
+
+// The type / fault type picked when a Feishu request becomes a ticket: a
+// non-fault type, else a fault type from the list (which makes it a fault),
+// else just the fault type. Written like setTicketType / confirmTicketFault.
+async function classifyNewTicket(db: D1Database, user: AppUser, ticketId: string, opts: FeishuCreateOptions) {
+  const none = { statements: [] as D1PreparedStatement[], toPool: false };
+  if (!canConfirmFault(user)) return none;
+  const ticketType = TICKET_TYPES.find((t) => t === opts.ticketType);
+  const faultType = String(opts.faultType ?? "").trim();
+  const typeNote = (type: TicketType) =>
+    db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)").bind(id("tup"), ticketId, user.id, `Ticket type: ${TICKET_TYPE_TEXT[type]}`);
+  if (ticketType && ticketType !== "FAULT") {
+    return {
+      statements: [db.prepare("UPDATE tickets SET ticketType=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticketType, ticketId), typeNote(ticketType)],
+      toPool: ticketType === "PRODUCT_REQUEST"
+    };
+  }
+  if (faultType) {
+    if (!(await isFaultTypeOption(db, faultType))) return none;
+    return { statements: faultStatements(db, user, ticketId, faultType), toPool: false };
+  }
+  if (ticketType === "FAULT") {
+    return { statements: [db.prepare("UPDATE tickets SET ticketType='FAULT', updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticketId), typeNote("FAULT")], toPool: false };
+  }
+  return none;
 }
 
 export async function changeTicketStatus(db: D1Database, user: AppUser, ticketId: string, to: TicketStatus) {
+  const status = await statusStatements(db, user, ticketId, to);
+  await commit(db, status.statements);
+  const changes: TicketChange[] = [{ kind: "status", to }];
+  return { from: status.from, to, changes };
+}
+
+// A status change and/or a progress note in one go (the Feishu card's "Update").
+export async function updateProgress(db: D1Database, user: AppUser, ticketId: string, d: { status?: TicketStatus; note?: string }) {
+  if (!d.status && !d.note) throw new TicketError("Choose a status or write a note.", 400);
+  const status = d.status ? await statusStatements(db, user, ticketId, d.status) : null;
+  const note = d.note ? await noteStatements(db, user, ticketId, d.note) : null;
+  await commit(db, [...(status?.statements ?? []), ...(note?.statements ?? [])]);
+  const changes: TicketChange[] = [];
+  if (d.status) changes.push({ kind: "status", to: d.status });
+  if (d.note) changes.push({ kind: "note" });
+  return { changes };
+}
+
+// Moving the status, guarded: the UPDATE matches only while the ticket still
+// has the status it was read with.
+async function statusStatements(db: D1Database, user: AppUser, ticketId: string, to: TicketStatus) {
   if (!canChangeStatus(user)) throw new TicketError("Forbidden", 403);
   const ticket = await first<{ id: string; status: TicketStatus; ticketType: TicketType | null; faultType: string | null }>(
     db,
@@ -153,14 +247,16 @@ export async function changeTicketStatus(db: D1Database, user: AppUser, ticketId
   // Statistics depend on every resolved ticket being classified.
   if (to === "RESOLVED" && !ticket.ticketType) throw new TicketError("Choose the ticket type before resolving it.", 400);
   if (to === "RESOLVED" && ticket.ticketType === "FAULT" && !ticket.faultType) throw new TicketError("Confirm the fault type before resolving it.", 400);
-  await db.batch([
-    db.prepare("UPDATE tickets SET status=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(to, ticket.id),
+  const statements = [
+    db.prepare("UPDATE tickets SET status=?, updatedAt=CURRENT_TIMESTAMP WHERE id=? AND status=?").bind(to, ticket.id, ticket.status),
+    // workflowGuard has CHECK (ok = 1): no row matched → the batch rolls back.
+    db.prepare("INSERT INTO workflowGuard (ok) VALUES (changes())"),
+    db.prepare("DELETE FROM workflowGuard"),
     db
       .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, statusFrom, statusTo) VALUES (?, ?, ?, 'STATUS', ?, ?)")
       .bind(id("tup"), ticket.id, user.id, ticket.status, to)
-  ]);
-  const changes: TicketChange[] = [{ kind: "status", to }];
-  return { from: ticket.status, to, changes };
+  ];
+  return { from: ticket.status, statements };
 }
 
 // A progress update, or a follow-up note added to an earlier update
@@ -173,6 +269,18 @@ export async function addTicketNote(
   rawNote: string,
   opts: { parentId?: string | null; withAttachments?: boolean; files?: StoredFile[] } = {}
 ): Promise<{ id: string; changes: TicketChange[] }> {
+  const note = await noteStatements(db, user, ticketId, rawNote, opts);
+  await commit(db, note.statements);
+  return { id: note.id, changes: [{ kind: "note" }] };
+}
+
+async function noteStatements(
+  db: D1Database,
+  user: AppUser,
+  ticketId: string,
+  rawNote: string,
+  opts: { parentId?: string | null; withAttachments?: boolean; files?: StoredFile[] } = {}
+) {
   if (!canWriteNote(user)) throw new TicketError("Forbidden", 403);
   const note = String(rawNote ?? "").trim();
   if (!note && !opts.withAttachments) throw new TicketError("Note is required", 400);
@@ -190,12 +298,12 @@ export async function addTicketNote(
     parentId = parent.parentId ?? parent.id; // follow-ups stay one level deep
   }
   const updateId = id("tup");
-  await db.batch([
+  const statements = [
     db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, parentId) VALUES (?, ?, ?, 'NOTE', ?, ?)").bind(updateId, ticket.id, user.id, note.slice(0, 4000), parentId),
     db.prepare("UPDATE tickets SET updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticket.id),
     ...storedFileStatements(db, ticket.id, updateId, user.id, opts.files ?? [])
-  ]);
-  return { id: updateId, changes: [{ kind: "note" }] };
+  ];
+  return { id: updateId, statements };
 }
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -233,11 +341,6 @@ export async function addTicketAttachment(
 
 // Files already in R2 (material collected in Feishu) attached to a ticket
 // update as they are, without copying them.
-export async function attachStoredFiles(db: D1Database, ticketId: string, updateId: string, uploadedById: string, files: StoredFile[]) {
-  if (!files.length) return;
-  await db.batch(storedFileStatements(db, ticketId, updateId, uploadedById, files));
-}
-
 function storedFileStatements(db: D1Database, ticketId: string, updateId: string, uploadedById: string, files: StoredFile[]) {
   return files.map((f) =>
     db
@@ -253,8 +356,9 @@ export async function takeTicket(db: D1Database, user: AppUser, ticketId: string
   if (!canAssignServiceSide(user) || !canChangeStatus(user)) throw new TicketError("Forbidden", 403);
   const ticket = await first<{ id: string; status: TicketStatus }>(db, "SELECT id, status FROM tickets WHERE id=?", ticketId);
   if (!ticket) throw new TicketError("Not found", 404);
-  await assignTicket(db, user, ticket.id, { assignedServiceId: user.id });
-  if (ticket.status === "NEW") await changeTicketStatus(db, user, ticket.id, "IN_PROGRESS");
+  const assign = await assignStatements(db, user, ticket.id, { assignedServiceId: user.id });
+  const status = ticket.status === "NEW" ? await statusStatements(db, user, ticket.id, "IN_PROGRESS") : null;
+  await commit(db, [...assign.statements, ...(status?.statements ?? [])]);
   const changes: TicketChange[] = [{ kind: "taken" }];
   return { changes };
 }
@@ -268,6 +372,18 @@ export async function assignTicket(
   ticketId: string,
   d: { assignedSalesId?: string | null; assignedServiceId?: string | null }
 ): Promise<{ changed: boolean; changes: TicketChange[] }> {
+  const assign = await assignStatements(db, user, ticketId, d);
+  if (!assign.statements.length) return { changed: false, changes: [] };
+  await commit(db, assign.statements);
+  return { changed: true, changes: [{ kind: "assigned", newOwnerIds: assign.newOwnerIds }] };
+}
+
+async function assignStatements(
+  db: D1Database,
+  user: AppUser,
+  ticketId: string,
+  d: { assignedSalesId?: string | null; assignedServiceId?: string | null }
+) {
   const ticket = await first<{ id: string; assignedSalesId: string | null; assignedServiceId: string | null }>(
     db,
     "SELECT id, assignedSalesId, assignedServiceId FROM tickets WHERE id=?",
@@ -285,7 +401,7 @@ export async function assignTicket(
   if (setSales && (d.assignedSalesId || null) !== ticket.assignedSalesId) {
     changes.push({ column: "assignedSalesId", label: "Sales owner", from: ticket.assignedSalesId, to: d.assignedSalesId || null });
   }
-  if (!changes.length) return { changed: false, changes: [] };
+  if (!changes.length) return { statements: [], newOwnerIds: [] };
 
   const ids = [...new Set(changes.flatMap((ch) => [ch.from, ch.to]).filter((v): v is string => Boolean(v)))];
   const names = new Map(
@@ -297,19 +413,19 @@ export async function assignTicket(
     if (ch.to && !names.has(ch.to)) throw new TicketError("Unknown user.", 400);
   }
   const name = (v: string | null) => (v ? names.get(v) ?? "unknown" : "(none)");
-  await db.batch([
+  const statements = [
     db.prepare(`UPDATE tickets SET ${changes.map((ch) => `${ch.column}=?`).join(", ")}, updatedAt=CURRENT_TIMESTAMP WHERE id=?`).bind(...changes.map((ch) => ch.to), ticket.id),
     ...changes.map((ch) =>
       db
         .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
         .bind(id("tup"), ticket.id, user.id, `${ch.label}: ${name(ch.from)} → ${name(ch.to)} (changed by ${user.displayName})`)
     )
-  ]);
+  ];
   const newOwnerIds = [
     changes.find((ch) => ch.column === "assignedServiceId")?.to ?? null,
     changes.find((ch) => ch.column === "assignedSalesId")?.to ?? null
   ].filter((v): v is string => Boolean(v) && v !== user.id);
-  return { changed: true, changes: [{ kind: "assigned", newOwnerIds }] };
+  return { statements, newOwnerIds };
 }
 
 const CUSTOMER_FIELDS = [
@@ -346,7 +462,7 @@ export async function setTicketCustomer(
     notes.push(`${f.label}: ${ticket[f.key] || "(none)"} → ${value || "(none)"}`);
   }
   if (!notes.length) return { changed: false, changes: [] };
-  await db.batch([
+  await commit(db, [
     db
       .prepare("UPDATE tickets SET customerCompany=?, orderNo=?, contactName=?, contactInfo=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
       .bind(next.customerCompany, next.orderNo, next.contactName, next.contactInfo, ticket.id),
@@ -383,7 +499,7 @@ export async function setTicketProduct(
   if (serialNumber && serialNumber !== ticket.serialNumber && !(await isKnownSerial(db, serialNumber))) {
     throw new TicketError("That SN is not known to the system.", 400);
   }
-  await db.batch([
+  await commit(db, [
     db
       .prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
       .bind(productId, productModel, serialNumber, ticket.id)
@@ -423,7 +539,7 @@ export async function setTicketType(
         .bind(id("tup"), ticket.id, user.id, `Ticket type: ${TICKET_TYPE_TEXT[ticketType]}`)
     );
   }
-  await db.batch(statements);
+  await commit(db, statements);
   const becameProductRequest = ticketType === "PRODUCT_REQUEST" && ticket.ticketType !== "PRODUCT_REQUEST";
   return { ticketType, becameProductRequest, changes: [{ kind: "type", ticketType, toPool: becameProductRequest }] };
 }
@@ -436,17 +552,25 @@ export async function confirmTicketFault(db: D1Database, user: AppUser, ticketId
   const faultType = String(rawFaultType ?? "").trim();
   const ticket = await first<{ id: string; productId: string | null }>(db, "SELECT id, productId FROM tickets WHERE id=?", ticketId);
   if (!ticket) throw new TicketError("Not found", 404);
-  const allowed = await all<{ value: string }>(db, "SELECT value FROM appOptions WHERE optionKey = ?", FAULT_TYPE_OPTION_KEY);
-  if (!allowed.some((o) => o.value === faultType)) throw new TicketError("Choose a fault type from the list.", 400);
-  await db.batch([
-    db
-      .prepare("UPDATE tickets SET faultType=?, ticketType='FAULT', faultConfirmedById=?, faultConfirmedAt=CURRENT_TIMESTAMP, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
-      .bind(faultType, user.id, ticket.id),
-    db
-      .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
-      .bind(id("tup"), ticket.id, user.id, `Fault type confirmed: ${faultType}`)
-  ]);
+  if (!(await isFaultTypeOption(db, faultType))) throw new TicketError("Choose a fault type from the list.", 400);
+  await commit(db, faultStatements(db, user, ticket.id, faultType));
   const repeat = await repeatInfo(db, ticket.productId, faultType, new Date());
   const changes: TicketChange[] = [{ kind: "fault", repeat: repeat?.isRepeat ? repeat : null }];
   return { productId: ticket.productId, faultType, repeat, changes };
+}
+
+async function isFaultTypeOption(db: D1Database, faultType: string) {
+  const allowed = await all<{ value: string }>(db, "SELECT value FROM appOptions WHERE optionKey = ?", FAULT_TYPE_OPTION_KEY);
+  return allowed.some((o) => o.value === faultType);
+}
+
+function faultStatements(db: D1Database, user: AppUser, ticketId: string, faultType: string) {
+  return [
+    db
+      .prepare("UPDATE tickets SET faultType=?, ticketType='FAULT', faultConfirmedById=?, faultConfirmedAt=CURRENT_TIMESTAMP, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
+      .bind(faultType, user.id, ticketId),
+    db
+      .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
+      .bind(id("tup"), ticketId, user.id, `Fault type confirmed: ${faultType}`)
+  ];
 }

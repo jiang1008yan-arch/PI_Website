@@ -1,6 +1,5 @@
 import type { Context } from "hono";
 import { first } from "../../lib/db";
-import { TICKET_TYPES } from "../../lib/aiTriage";
 import {
   addCancelledCard,
   addCard,
@@ -36,12 +35,9 @@ import { userForFeishu } from "../../lib/feishu/identity";
 import { canCreateTicket } from "../../lib/ticketAccess";
 import {
   addTicketNote,
-  attachStoredFiles,
-  changeTicketStatus,
-  confirmTicketFault,
   createTicket,
-  setTicketType,
   takeTicket,
+  updateProgress,
   TicketError
 } from "../../lib/ticketWorkflow";
 import type { TicketStatus } from "../../lib/ticketAccess";
@@ -198,11 +194,8 @@ feishuRoutes.post("/feishu/card", async (c) => {
         const status = String(form.status ?? "").trim();
         const note = String(form.note ?? "").trim();
         if (!status && !note) return c.json(toast("info", "Choose a status or write a note."));
-        const changes = [
-          ...(status ? (await changeTicketStatus(env.DB, user, ticketId, status as TicketStatus)).changes : []),
-          ...(note ? (await addTicketNote(env.DB, user, ticketId, note)).changes : [])
-        ];
-        runLater(c, () => pushTicketChanges(env, ticketId, changes));
+        const updated = await updateProgress(env.DB, user, ticketId, { status: (status || undefined) as TicketStatus | undefined, note });
+        runLater(c, () => pushTicketChanges(env, ticketId, updated.changes));
         return c.json(toast("success", "Ticket updated."));
       }
       case "show_ticket": {
@@ -342,36 +335,27 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
         text: details ? `${details}\n\nFrom Feishu:\n${draft.text || "(files only)"}` : `From Feishu: ${draft.text || "(files only)"}`
       }
     },
-    { requireProduct: false, validateQuestionnaire: false, creator: user }
+    {
+      requireProduct: false,
+      validateQuestionnaire: false,
+      creator: user,
+      initialFiles: attachmentsFromItems(items),
+      // Type and fault type are optional here, and only after-sales/admin may set them.
+      ticketType: form.ticketType,
+      faultType: formText(form, "faultType"),
+      // When the creator owns the new ticket, this card becomes its card: no second one is sent.
+      feishuCardMessageId: cardMessageId,
+      // A ticket from a device alert is linked to that alert.
+      alertDraftId: draft.kind === "DEVICE_ALERT" ? draft.id : null
+    }
   ).catch(async (error) => {
     await release();
     throw error;
   });
   await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ?").bind(created.id, draft.id).run();
-  // When the creator owns the new ticket, this card becomes its card: no second one is sent.
-  const owner = await first<{ assignedServiceId: string | null }>(env.DB, "SELECT assignedServiceId FROM tickets WHERE id = ?", created.id);
-  const ownCard = Boolean(cardMessageId && owner?.assignedServiceId === user.id);
-  if (ownCard) {
-    await env.DB.prepare("UPDATE tickets SET feishuCardMessageId = ?, feishuCardOwnerId = ? WHERE id = ?").bind(cardMessageId, user.id, created.id).run();
-  }
-  if (created.initialNoteId) await attachStoredFiles(env.DB, created.id, created.initialNoteId, user.id, attachmentsFromItems(items));
-  // A ticket from a device alert is linked to that alert.
-  if (draft.kind === "DEVICE_ALERT") await env.DB.prepare("UPDATE deviceStatus SET alertTicketId = ? WHERE alertDraftId = ?").bind(created.id, draft.id).run();
-  // Type and fault type are optional here, and only after-sales/admin may set them.
-  const ticketType = TICKET_TYPES.find((t) => t === form.ticketType);
-  const fault = formText(form, "faultType");
-  let toPool = false;
-  if (ticketType && ticketType !== "FAULT") {
-    toPool = await setTicketType(env.DB, user, created.id, { ticketType }).then((r) => r.becameProductRequest).catch(() => false);
-  } else if (fault) {
-    await confirmTicketFault(env.DB, user, created.id, fault).catch(() => undefined);
-  } else if (ticketType === "FAULT") {
-    await setTicketType(env.DB, user, created.id, { ticketType }).catch(() => undefined);
-  }
 
   runLater(c, async () => {
     await pushTicketChanges(env, created.id, created.changes);
-    if (toPool) await pushTicketChanges(env, created.id, [{ kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true }]);
     if (cardMessageId) {
       await updateCard(
         env,
@@ -384,7 +368,7 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
           aiFaultType: null,
           faultTypes: [],
           createdTicketNo: created.ticketNo,
-          createdTicketId: ownCard ? created.id : null,
+          createdTicketId: created.ownCard ? created.id : null,
           items: toCardItems(items),
           portalUrl: env.APP_BASE_URL ?? null
         })
