@@ -38,6 +38,28 @@ export function afterTicketChange(c: Context, ticketId: string, changes: TicketC
   }
 }
 
+// Feishu bookkeeping on tickets: which card a ticket has and whose it is, its
+// requirement-pool record, when its owner was last reminded. Not ticket state
+// (the Ticket workflow writes that) and never on the timeline; written only
+// here, except the card a ticket is created with.
+export type FeishuBookkeeping = {
+  feishuCardMessageId?: string | null;
+  feishuCardOwnerId?: string | null;
+  bitableRecordId?: string | null;
+  lastRemindedAt?: string | null;
+};
+
+const BOOKKEEPING_COLUMNS = ["feishuCardMessageId", "feishuCardOwnerId", "bitableRecordId", "lastRemindedAt"] as const;
+
+export async function setFeishuBookkeeping(db: D1Database, ticketIds: string[], d: FeishuBookkeeping) {
+  const columns = BOOKKEEPING_COLUMNS.filter((column) => d[column] !== undefined);
+  if (!columns.length || !ticketIds.length) return;
+  await db
+    .prepare(`UPDATE tickets SET ${columns.map((column) => `${column}=?`).join(", ")} WHERE id IN (${ticketIds.map(() => "?").join(",")})`)
+    .bind(...columns.map((column) => d[column]), ...ticketIds)
+    .run();
+}
+
 // One push per change, in order.
 export async function pushTicketChanges(env: Env, ticketId: string, changes: TicketChange[]) {
   for (const change of changes) await pushTicketChange(env, ticketId, change);
@@ -128,9 +150,7 @@ async function deliver(env: Env, payload: Payload) {
     if (t.feishuCardMessageId) await updateCard(env, t.feishuCardMessageId, handedOverCard(t.ticketNo, t.serviceName));
     const owner = feishuTarget({ feishuUnionId: t.serviceUnionId, feishuOpenId: t.serviceOpenId });
     const cardMessageId = owner ? await sendCard(env, owner.type, owner.id, card) : null;
-    await env.DB.prepare("UPDATE tickets SET feishuCardMessageId=?, feishuCardOwnerId=? WHERE id=?")
-      .bind(cardMessageId, cardMessageId ? t.assignedServiceId : null, t.id)
-      .run();
+    await setFeishuBookkeeping(env.DB, [t.id], { feishuCardMessageId: cardMessageId, feishuCardOwnerId: cardMessageId ? t.assignedServiceId : null });
     // An owner who cannot be reached in Feishu: tell the linked admins once,
     // when the ticket gets that owner.
     if (!owner && t.assignedServiceId && (change.kind === "created" || change.kind === "assigned" || change.kind === "taken")) {
@@ -178,7 +198,7 @@ async function deliver(env: Env, payload: Payload) {
     const target = pool ? parsePoolUrl(pool.value) : null;
     if (target) {
       const recordId = await addBitableRecord(env, target.appToken, target.tableId, poolRecordFields(t, env.APP_BASE_URL ?? null));
-      await env.DB.prepare("UPDATE tickets SET bitableRecordId=? WHERE id=?").bind(recordId || "unknown", t.id).run();
+      await setFeishuBookkeeping(env.DB, [t.id], { bitableRecordId: recordId || "unknown" });
     }
   }
 

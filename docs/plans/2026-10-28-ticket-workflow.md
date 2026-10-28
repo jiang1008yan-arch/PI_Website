@@ -87,3 +87,8 @@ Commit locally only. No push and no PR until reviewed.
 - **A.** Creating a ticket with a fault type does not send the `fault` event, so it raises no
   repeat-fault alert. Web confirmation of a fault does.
 - **B.** `setProduct` writes no timeline entry, unlike every other ticket change.
+- **C.** Found while doing this: `POST /tickets` passes the whole request body into `createTicket`.
+  A staff user can therefore send an `initialNote` whose `actorId` is someone else, giving a first
+  note in another person's name. The Feishu-only inputs added here (stored files, picked type,
+  card, device alert) are deliberately kept in `createTicket`'s options, so the body cannot reach
+  them. Closing this would mean picking the allowed fields out of the body.

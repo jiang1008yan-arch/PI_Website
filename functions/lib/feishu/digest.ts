@@ -4,6 +4,7 @@ import type { Env } from "../types";
 import { weeklySummaryCard, type WeeklySummary } from "./cards";
 import { sendCard, sendText } from "./client";
 import { feishuTarget } from "./identity";
+import { setFeishuBookkeeping } from "./sync";
 
 // Scheduled nudges (run by the cron trigger, see functions/scheduled.ts):
 // - each after-sales owner is reminded, in one private message, about open
@@ -65,9 +66,7 @@ export async function remindStaleOwners(env: Env, now: Date): Promise<number> {
   for (const m of messages) {
     if (!m.target) continue;
     await sendText(env, m.target.type, m.target.id, m.text);
-    await env.DB.prepare(`UPDATE tickets SET lastRemindedAt = ? WHERE id IN (${m.ticketIds.map(() => "?").join(",")})`)
-      .bind(sqlTime(now), ...m.ticketIds)
-      .run();
+    await setFeishuBookkeeping(env.DB, m.ticketIds, { lastRemindedAt: sqlTime(now) });
   }
   return messages.length;
 }
