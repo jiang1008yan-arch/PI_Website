@@ -43,7 +43,7 @@ import {
   setTicketType,
   takeTicket,
   TicketError
-} from "../../lib/ticketService";
+} from "../../lib/ticketWorkflow";
 import type { TicketStatus } from "../../lib/ticketAccess";
 import type { AppUser, Env } from "../../lib/types";
 import { createApp } from "./_shared";

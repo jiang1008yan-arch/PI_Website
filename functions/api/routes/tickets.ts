@@ -13,7 +13,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   setTicketCustomer,
   setTicketType
-} from "../../lib/ticketService";
+} from "../../lib/ticketWorkflow";
 import { afterTicketChange } from "../../lib/feishu/sync";
 import { feishuEnabled, listBotChats } from "../../lib/feishu/client";
 import { findSimilarTickets } from "../../lib/similarTickets";

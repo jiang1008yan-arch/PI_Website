@@ -1,6 +1,6 @@
 import { all, id } from "../../lib/db";
 import { canManageFaultTypes } from "../../lib/ticketAccess";
-import { FAULT_TYPE_OPTION_KEY } from "../../lib/ticketService";
+import { FAULT_TYPE_OPTION_KEY } from "../../lib/ticketWorkflow";
 import { admin, body, createApp } from "./_shared";
 
 // Option lists are ADMIN-managed, except the after-sales fault type list,

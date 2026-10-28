@@ -3,7 +3,7 @@ import { canReadPictures, canTranscribe, toBase64, transcribeAudio, triageMessag
 import { findKnownReferences } from "../lookup";
 import { findSimilarTickets } from "../similarTickets";
 import { canCreateTicket } from "../ticketAccess";
-import { FAULT_TYPE_OPTION_KEY } from "../ticketService";
+import { FAULT_TYPE_OPTION_KEY } from "../ticketWorkflow";
 import type { AppUser, Env } from "../types";
 import { loadUserAiConfig } from "../userAi";
 import { addCard, bindCard, collectCard, collectedCounts, draftCard, type CardItem, type DraftPrefill } from "./cards";

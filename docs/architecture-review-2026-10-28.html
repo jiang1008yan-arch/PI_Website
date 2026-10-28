@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Architecture review — sales-portal</title>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
+  </script>
+  <style>
+    .seam { border-style: dashed !important; }
+    .deep { background: linear-gradient(135deg, #0f172a, #1e293b); color: #f8fafc; }
+    .lbl { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    pre.mermaid { background: transparent; margin: 0; display: flex; justify-content: center; }
+    .leak { color: #dc2626; }
+  </style>
+</head>
+<body class="bg-stone-50 text-slate-900 font-sans">
+<main class="max-w-6xl mx-auto px-4 sm:px-6 py-12 space-y-12">
+
+  <header class="space-y-4">
+    <p class="lbl text-slate-500">Architecture review · 2026-10-28 · branch claude/improve-codebase-architecture-8e980e</p>
+    <h1 class="font-serif text-4xl">sales-portal：deepening opportunities</h1>
+    <p class="text-sm text-slate-600 max-w-3xl">前提：<b>所有功能保持不变</b>。每张卡片都列出现有的回归网（哪些测试已经锁住行为）以及唯一可能的可见变化。PI 一侧（piWorkflow / piAccess / piCapabilities / piItemCodec）在之前几轮已经 deepen 过，这里只在它们被绕过的地方出现。</p>
+    <div class="flex flex-wrap gap-4 text-xs text-slate-600 items-center">
+      <span class="flex items-center gap-2"><span class="inline-block w-5 h-4 border border-slate-400 bg-white"></span>module</span>
+      <span class="flex items-center gap-2"><span class="inline-block w-5 h-4 border-2 border-slate-500 seam"></span>seam</span>
+      <span class="flex items-center gap-2"><span class="inline-block w-5 h-0.5 bg-red-600"></span>leak / 绕过</span>
+      <span class="flex items-center gap-2"><span class="inline-block w-5 h-4 deep rounded"></span>deep module</span>
+      <span class="flex items-center gap-2"><span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Strong</span><span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800">Worth exploring</span><span class="px-2 py-0.5 rounded bg-slate-200 text-slate-700">Speculative</span></span>
+    </div>
+    <nav class="flex flex-wrap gap-2 text-xs">
+      <a href="#c1" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">1 Ticket workflow</a>
+      <a href="#c2" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">2 Effective version reader</a>
+      <a href="#c3" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">3 Ticket request lifecycle</a>
+      <a href="#c4" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">4 One Feishu transport</a>
+      <a href="#c5" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">5 Ticket capabilities kernel</a>
+      <a href="#c6" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">6 Line item kernel in shared/</a>
+      <a href="#c7" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">7 One session-scoped list cache</a>
+      <a href="#c8" class="px-2 py-1 rounded border bg-white hover:bg-slate-100">8 Typed wire contract</a>
+      <a href="#top" class="px-2 py-1 rounded border bg-emerald-50 hover:bg-emerald-100">Top recommendation</a>
+    </nav>
+  </header>
+
+  <section id="candidates" class="space-y-10">
+
+    <!-- ========== C1 ========== -->
+    <article id="c1" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">1 · Ticket workflow：一个模块写所有 Ticket 变化</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800">Strong</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">local-substitutable (D1 / Miniflare)</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">functions/lib/ticketService.ts · functions/api/routes/tickets.ts:270 · functions/api/routes/feishu.ts:201,312-396,356,360 · functions/lib/feishu/sync.ts:134,184 · functions/lib/feishu/digest.ts:68 · functions/api/routes/_shared.ts:3</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — 7 个 writer，写入不原子</p>
+          <pre class="mermaid">
+flowchart LR
+  WEB[routes/tickets.ts] --> TS[ticketService]
+  FS[routes/feishu.ts] --> TS
+  WEB -. "UPDATE tickets (product)<br/>无 ticketUpdates" .-> T[(tickets)]
+  FS -. "card cols / deviceStatus" .-> T
+  SY[feishu/sync.ts] -.-> T
+  DG[feishu/digest.ts] -.-> T
+  TS --> T
+  TS --> U[(ticketUpdates)]
+  linkStyle 2,3,4,5 stroke:#dc2626,stroke-width:2px
+          </pre>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — plan → 一个 D1 batch</p>
+          <pre class="mermaid">
+flowchart LR
+  WEB[routes/tickets.ts<br/>parse + dispatch] --> W
+  FS[routes/feishu.ts<br/>parse + dispatch] --> W
+  SY[sync / digest] --> W
+  W["ticketWorkflow<br/>create · status · note · owner<br/>type · fault · product · card-binding"]:::deep --> B{{"one batch"}}
+  B --> T[(tickets)]
+  B --> U[(ticketUpdates)]
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a,stroke-width:3px
+          </pre>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd><code>ticketService</code> 名义上是唯一 writer，但 7 处绕过它；<code>createTicket</code> 的 INSERT ticket 和 INSERT note 是两次 <code>.run()</code>；Feishu 确认工单串了 7 次以上独立写入，分类失败还被 <code>.catch(() =&gt; false)</code> 吞掉，中途失败会留下半张工单。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>照 <code>piWorkflow</code> 的形状：每个 Ticket 变化返回一组 statement，由 runner 一次 batch 提交；创建工单一次性接收 type / fault / 附件 / card 绑定。route 和 Feishu 只 parse、查 access、dispatch。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>locality：所有 Ticket 写入集中一处</li>
+          <li>create + note + type + fault 原子</li>
+          <li>leverage：web、Feishu、cron 共用一个 interface</li>
+          <li>测试直接打 workflow interface</li>
+          <li><code>TicketError</code> 不再泄漏进 <code>_shared.ts</code></li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700">
+        <b>回归网：</b>aftersales / ticketActivity / ticketTypes / feishu 四个 int test 已经从 HTTP 锁住行为，重构期间保持全绿即可。
+        <b class="text-amber-700">唯一可见变化（可选）：</b><code>PATCH /tickets/:id/product</code> 目前不写活动日志，违反 CONTEXT.md 的 “every change is logged”。要严格零变化，可以先保持不记日志。
+      </div>
+    </article>
+
+    <!-- ========== C2 ========== -->
+    <article id="c2" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">2 · Effective version reader：ADR-0001 的规则只写一次</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800">Strong</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">local-substitutable (D1)</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">functions/api/routes/pi.ts:269-271,606-621,677-710,736 · functions/api/routes/tickets.ts:89-94 · functions/lib/lookup.ts:20-22 · functions/api/routes/lookup.ts:20 · functions/lib/deviceMonitor.ts:19-20,112-113 · functions/scheduled.ts:28-34 · web/src/pages/PiDetailPage.tsx:64,82,167 · web/src/pages/PiPage.tsx:115-124</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — 每个读者自己拼 COALESCE(json_extract…)</p>
+          <div class="space-y-1.5">
+            <div class="h-8 border-l-4 border-red-500 bg-red-50 px-2 flex items-center text-xs">routes/pi.ts ×4 <span class="ml-auto text-red-600">revisionInProgress ? snapshot : row</span></div>
+            <div class="h-8 border-l-4 border-red-500 bg-red-50 px-2 flex items-center text-xs">routes/tickets.ts <span class="ml-auto text-red-600">TRIM + '' 回退</span></div>
+            <div class="h-8 border-l-4 border-red-500 bg-red-50 px-2 flex items-center text-xs">lib/lookup.ts + routes/lookup.ts <span class="ml-auto text-red-600">无 TRIM</span></div>
+            <div class="h-8 border-l-4 border-red-500 bg-red-50 px-2 flex items-center text-xs">deviceMonitor.ts ×2</div>
+            <div class="h-8 border-l-4 border-red-500 bg-red-50 px-2 flex items-center text-xs">scheduled.ts（保留期）</div>
+            <div class="h-8 border-l-4 border-amber-500 bg-amber-50 px-2 flex items-center text-xs">web: PiDetailPage ×3, PiPage <span class="ml-auto text-amber-700">APPROVED || revisionInProgress</span></div>
+            <div class="h-8 border-l-4 border-slate-300 bg-slate-50 px-2 flex items-center text-xs text-slate-500">D1: pi.effectiveSnapshot / pi.*</div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — 一个厚 band</p>
+          <div class="space-y-1.5">
+            <div class="h-8 border-l-4 border-slate-300 bg-slate-50 px-2 flex items-center text-xs">routes · lookup · tickets · deviceMonitor · scheduled · web</div>
+            <div class="deep rounded px-3 py-4 text-xs space-y-1 border-2 border-slate-900">
+              <p class="lbl text-slate-300">effectivePi module</p>
+              <p>· <code>EFFECTIVE_HEADER(col)</code> SQL 片段（production order、customer…）</p>
+              <p>· <code>HAS_EFFECTIVE_VERSION</code> 谓词</p>
+              <p>· <code>readEffective(db, piId)</code> → ZH + linked EN header/items</p>
+              <p class="text-slate-400">内部：revisionInProgress / effectiveSnapshot / TRIM 规则</p>
+            </div>
+            <div class="h-8 border-l-4 border-slate-300 bg-slate-50 px-2 flex items-center text-xs text-slate-500">D1: pi.effectiveSnapshot / pi.*</div>
+          </div>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd>“读 approved PI 时要先看 revisionInProgress，再读 effectiveSnapshot” 在服务端被手写了约 9 次、客户端 4 次；TRIM 和空串回退在各个拷贝之间已经不一致（tickets.ts:90 vs lookup.ts:20）。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>一个 <code>effectivePi</code> 模块持有 SQL 片段和读取函数；调用方只问 “approved PIs / 这个 PI 的 effective version”，不再碰 <code>effectiveSnapshot</code>。客户端的判断放进 <code>shared/piCapabilities</code>。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>locality：ADR-0001 的后果只在一处</li>
+          <li>新增 “approved PI” 查询不会漏</li>
+          <li>一张 table test 覆盖所有读者</li>
+          <li>TRIM 不一致消失</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">ADR-0001：<b>不冲突</b>，这是在落实它写下的后果，不是重开这个决定。</div>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>回归网：</b>approval / lookup / devices / scheduled int test。<b class="text-amber-700">需要先定：</b>TRIM 统一成哪一种。lookup 目前不 TRIM，带空格的旧数据在 lookup 里可能匹配不到；选 “TRIM” 会让这些行开始可以被匹配到。</div>
+    </article>
+
+    <!-- ========== C3 ========== -->
+    <article id="c3" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">3 · Ticket request lifecycle：给 feishuDrafts 的状态机一个家</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800">Strong</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">local-substitutable (D1 + R2)</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">functions/api/routes/feishu.ts:134-165,231-276,294-437 · functions/lib/feishu/intake.ts:107-215 · functions/lib/feishu/drafts.ts · functions/lib/deviceMonitor.ts:48,56 · functions/scheduled.ts（expiry job）</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — 状态分散，sentinel 是约定</p>
+          <pre class="mermaid">
+flowchart TB
+  subgraph F["routes/feishu.ts (/feishu/card · 两个 switch)"]
+    a1[ownership + expiry guard]
+    a2["claim: ticketId='CREATING'"]
+    a3[confirm / discard / add-to-ticket]
+  end
+  I[feishu/intake.ts<br/>append items · AI roll-up] -.-> D[(feishuDrafts<br/>feishuDraftItems)]
+  F -. "~10 处 UPDATE" .-> D
+  DM[deviceMonitor.ts<br/>device alert → request] -.-> D
+  DR[feishu/drafts.ts] --> D
+  linkStyle 0,1,2 stroke:#dc2626,stroke-width:2px
+          </pre>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — 一个 interface，状态机在里面</p>
+          <pre class="mermaid">
+flowchart TB
+  F[routes/feishu.ts<br/>verify · dispatch] --> R
+  I[intake: 解析消息] --> R
+  DM[deviceMonitor] --> R
+  CR[cron] --> R
+  R["ticketRequest<br/>open · append · confirm · discard · expire<br/>(claim / release / ownership / 6h expiry / targetTicketId 内部)"]:::deep
+  R --> D[(feishuDrafts + items)]
+  R -- confirm --> W[ticketWorkflow]
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a,stroke-width:3px
+          </pre>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd>Ticket request / Add to ticket / Request expiry 的状态机没有自己的模块：约 15 处 inline 写 <code>feishuDrafts</code>，分布在 4 个文件；<code>'CREATING'</code> sentinel 的 claim/release 只在一个 route 里靠约定维持。这是最近两次提交改动最多的地方。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd><code>ticketRequest</code> 模块成为 <code>feishuDrafts</code>/<code>feishuDraftItems</code> 的唯一 writer：open / append / confirm / discard / expire。confirm 内部调用候选 1 的 ticketWorkflow。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>locality：request 规则集中一处</li>
+          <li><code>/feishu/card</code> 缩成纯 dispatch</li>
+          <li>状态机可以不经 Feishu HTTP 测试</li>
+          <li>R2 文件清理跟着 discard/expire 走</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>回归网：</b>feishu.int.test.ts（837 行，假 Feishu HTTP 驱动）+ drafts / materials 单测。纯结构调整，没有可见变化。<b>依赖：</b>最好在候选 1 之后做，这样 confirm 能一次原子提交。</div>
+    </article>
+
+    <!-- ========== C4 ========== -->
+    <article id="c4" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">4 · One Feishu transport：两个 bot，一个 client</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Worth exploring</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">true external (mock)</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">functions/lib/feishu/client.ts:7-44 · functions/lib/feishu/piBot/client.ts:6-59 · piBot/config.ts · functions/api/routes/feishu.ts:61,82,97,124 · functions/api/routes/feishuPi.ts:31,33,47,64,75 · functions/api/routes/feishuAuth.ts:60 · functions/lib/feishu/identity.ts:22</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — 两份拷贝，已经漂移</p>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div class="border border-slate-300 rounded p-2 space-y-1">
+              <p class="lbl text-slate-500">after-sales bot</p>
+              <p>token：单槽，提前 60s 刷新</p>
+              <p>call → <code>data.data</code></p>
+              <p>错误：<code>Error</code></p>
+              <p>setFeishuFetch</p>
+              <p>verify · dedupe · toast · runLater</p>
+              <p>userForFeishu（openId 回退）</p>
+            </div>
+            <div class="border border-slate-300 rounded p-2 space-y-1">
+              <p class="lbl text-slate-500">PI Assistant</p>
+              <p>token：Map，提前 5 min 刷新</p>
+              <p>call → 整个 <code>data</code></p>
+              <p>错误：<code>FeishuApiError</code></p>
+              <p>setPiBotFetch</p>
+              <p>verify · dedupe · toast · later（再写一遍）</p>
+              <p class="leak">userByUnionId（<b>无</b> openId 回退）</p>
+            </div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — app 参数化；两个 app = 两个 adapter</p>
+          <div class="space-y-2 text-xs">
+            <div class="flex gap-2"><div class="flex-1 border border-slate-300 rounded p-2 text-center">after-sales routes</div><div class="flex-1 border border-slate-300 rounded p-2 text-center">PI Assistant routes</div></div>
+            <div class="border-2 border-slate-500 seam rounded p-1 text-center lbl text-slate-500">seam：FeishuApp {appId, appSecret}</div>
+            <div class="deep rounded p-3 border-2 border-slate-900 space-y-1">
+              <p class="lbl text-slate-300">feishu transport</p>
+              <p>outbound：token cache · call · sendCard / updateCard · 文件下载</p>
+              <p>inbound：verify → dedupe → identity → handler · toast · waitUntil</p>
+            </div>
+            <div class="border-2 border-slate-500 seam rounded p-1 text-center lbl text-slate-500">seam：fetch（prod: open.feishu.cn · test: 一个 fake）</div>
+          </div>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd>两个 bot 各自持有 token / call / sendCard / 签名校验 / 事件去重 / toast / 后台任务，细节已经漂移；PI Assistant 的身份查找绕过了 <code>identity.userForFeishu</code>，丢掉了 CONTEXT.md 描述的 <code>feishuOpenId</code> legacy 回退。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>一个按 app 参数化的 Feishu transport：outbound 一套，inbound 一条流水线（verify → dedupe → resolve identity → handler）。两个 bot 的 config 就是两个 adapter，所以这是真实的 seam。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>leverage：两个 bot 用同一个 interface</li>
+          <li>测试只装一个 fake fetch</li>
+          <li>身份规则只在 identity 一处</li>
+          <li>删掉约 150 行重复</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>回归网：</b>feishu.int + piAssistant.int（两者都用假 Feishu）。<b class="text-amber-700">需要先定：</b>统一 token 提前刷新的时间（60s 还是 5min），以及 PI Assistant 是否接上 openId 回退（只影响尚未升级到 unionId 的旧用户）。</div>
+    </article>
+
+    <!-- ========== C5 ========== -->
+    <article id="c5" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">5 · Ticket capabilities kernel：照 piCapabilities 再做一次</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Worth exploring</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">in-process</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">functions/lib/ticketAccess.ts:12-36 · web/src/tickets/ticketShared.ts:25-31 · functions/lib/feishu/cards.ts:30 · functions/lib/ticketService.ts:132,194 · web/src/pages/TicketDetail.tsx:28,29,100-107,192,201 · TicketListPanel.tsx:28 · pi/DeviceSerials.tsx:19 · pages/Home.tsx:36 · PI 一侧：pages/PiPage.tsx:128-138 · pages/PiDetailPage.tsx:79-82 vs piAccess.ts:135-151</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — mass diagram：interface 跟 implementation 一样宽</p>
+          <div class="flex items-end gap-6 h-56 px-4">
+            <div class="flex flex-col items-center gap-1">
+              <div class="w-20 h-44 border-2 border-slate-500 bg-slate-100 flex items-center justify-center text-[10px] text-center p-1">8 个 predicate<br/>canStatus · canNote · canFault · canAssign …</div>
+              <span class="lbl text-slate-500">interface</span>
+            </div>
+            <div class="flex flex-col items-center gap-1">
+              <div class="w-20 h-48 border-2 border-slate-500 bg-slate-50 flex items-center justify-center text-[10px] text-center p-1">全部是<br/><code>ADMIN || SERVICE</code></div>
+              <span class="lbl text-slate-500">implementation</span>
+            </div>
+            <div class="flex-1 space-y-1 text-[11px] self-center">
+              <p class="leak">TRANSITIONS ×3（server · web · cards NEXT）</p>
+              <p class="leak">resolve 前置条件 ×2</p>
+              <p class="leak">client 里 ~12 处 role 判断</p>
+              <p class="leak">canConfirmFault 被借去管 PATCH /product</p>
+            </div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — interface 窄，规则在里面</p>
+          <div class="flex items-end gap-6 h-56 px-4">
+            <div class="flex flex-col items-center gap-1">
+              <div class="w-20 h-14 border-2 border-slate-900 bg-white flex items-center justify-center text-[10px] text-center p-1">capabilitiesFor(<br/>role, ticket)</div>
+              <span class="lbl text-slate-500">interface</span>
+            </div>
+            <div class="flex flex-col items-center gap-1">
+              <div class="w-24 h-48 deep rounded border-2 border-slate-900 flex flex-col justify-center text-[10px] p-2 gap-1">
+                <p class="lbl text-slate-300">shared/ticketCapabilities</p>
+                <p>transitions</p><p>resolve blocker</p><p>type / fault 规则</p><p>role → 能力</p>
+              </div>
+              <span class="lbl text-slate-500">implementation</span>
+            </div>
+            <div class="flex-1 space-y-1 text-[11px] self-center text-slate-600">
+              <p>server：ticketAccess = kernel + ownership + Verdict</p>
+              <p>web：读同一份 kernel 做 UI gating</p>
+              <p>cards：读同一份 transitions</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd><code>ticketAccess</code> 是 shallow 的：8 个同样 body 的 predicate，只返回 boolean，没有 table test；状态转移表复制了 3 份，客户端自己写 role 判断。PI 的 revision / commerce decision / download 规则也被复制进了客户端，绕过了 <code>shared/piCapabilities</code>。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>新增 bundle-neutral 的 <code>shared/ticketCapabilities.ts</code>（作用于 role、status、ticketType、faultType）；服务端在它上面叠 ownership 和 <code>Verdict</code>。同时把 canStartRevision / canAbandonRevision / canExport 移进 <code>piCapabilities</code>。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>locality：一条规则只改一次</li>
+          <li>UI 和服务端不会再不一致</li>
+          <li>一张 table test 覆盖两个 bundle</li>
+          <li>interface 从 8 个函数缩到 1 个</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>回归网：</b>ticketAccess.test + piAccess.test + piCapabilities.test + 各 int test。纯 in-process，按 piCapabilities 的先例做，没有可见变化。</div>
+    </article>
+
+    <!-- ========== C6 ========== -->
+    <article id="c6" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">6 · Line item kernel：把 codec 和金额公式移进 shared/</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Worth exploring</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">in-process</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">web/src/pi/piItemCodec.ts · web/src/pi/lineItemFields.ts · web/src/pi/modelRule.ts:88-119 · functions/lib/piLink.ts:61-118 · functions/api/routes/pi.ts:144-153 · functions/lib/piWorkflow.ts:111-121,234-252 · functions/lib/feishu/piBot/notifyPi.ts:66-73 · piCard.ts:60 · usePiEditor.ts:90,157 · PiDetailPage.tsx:251 · LineItem.tsx:32,207 · excel/tokens.ts:21,61 · pi/piDiff.ts:57-116 · pages/PiPage.tsx:117-120,192-207</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — seam 只存在于 web bundle</p>
+          <pre class="mermaid">
+flowchart LR
+  subgraph WEB[web]
+    C[piItemCodec + lineItemFields]
+    X1[modelRule.ts] -. "fieldValues.find('__modelRule')" .-> FV
+    X2[piDiff.ts] -. "自己 JSON.parse" .-> FV
+    X3[PiPage.addProduct] -. "手拼 fieldValues" .-> FV
+    C --> FV((fieldValues))
+  end
+  subgraph SRV[functions]
+    P1[routes/pi parseFieldValues] -.-> FV2((fieldValues))
+    P2[piWorkflow toItemInput] -.-> FV2
+    P3[notifyPi parseFieldValues] -.-> FV2
+    P4[piLink：再抄一遍 modelRule] -.-> FV2
+  end
+  linkStyle 0,1,2,4,5,6,7 stroke:#dc2626,stroke-width:2px
+          </pre>
+          <p class="text-[11px] text-red-600 mt-1">金额公式 q·p·(1−d/100) 写了 7 次（含 Excel 公式和 PI Assistant card）</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — 一个 bundle-neutral kernel</p>
+          <pre class="mermaid">
+flowchart LR
+  WEB[web：editor · diff · Excel] --> K
+  SRV[functions：routes · piWorkflow · piLink · piBot card] --> K
+  K["shared/lineItem<br/>parse ⇄ encode · getMeta / setMeta<br/>upsertField · lineAmount · generatedModel"]:::deep
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a,stroke-width:3px
+          </pre>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd>CONTEXT.md 规定 <code>fieldValues</code> 只能经过 piItemCodec / lineItemFields，但这条 seam 只在 web 存在：服务端有 3 个各自的 parser，<code>piLink</code> 复制了 modelRule；客户端有 4 处绕过。<code>submittedSnapshot</code> 存字符串、<code>effectiveSnapshot</code> 存数组，读的人必须知道是哪一种。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>把 codec、field semantics、金额公式和 generated model 移进 <code>shared/</code>（跟 piCapabilities 同样的 tsconfig 安排），两个 bundle 都从这里取；snapshot 的读取统一走 codec，不再关心存储编码。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>leverage：一个 kernel，约 15 个调用点</li>
+          <li>金额公式只有 1 份</li>
+          <li>现有 codec / modelRule 测试原样搬过去</li>
+          <li>CONTEXT.md 的规则真正成立</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>回归网：</b>piItemCodec / lineItemFields / modelRule（443 行）/ piDiff 单测 + approval int。<b class="text-amber-700">注意：</b><code>modelRule.ts</code> 的合成字段用 sortOrder -10 / -9+i，而 lineItemFields 写的是 -1；搬迁时必须<b>保留现有值</b>，否则 Excel 里 Model 行的顺序会变。</div>
+    </article>
+
+    <!-- ========== C7 ========== -->
+    <article id="c7" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">7 · One session-scoped list cache</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Worth exploring</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">in-process</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-red-100 text-red-800">潜在数据可见性问题</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">web/src/hooks/useCachedList.ts:10-37 · web/src/pi/piListCache.ts:16-43 · web/src/api/client.ts:28-33 · web/src/tickets/TicketListPanel.tsx:20-23 · web/src/pi/usePiEditor.ts:125-164（fieldOptionsCache）· web/src/pi/notifications.ts</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — 同样的代码两份，key 规则不同</p>
+          <pre class="mermaid">
+sequenceDiagram
+  participant A as 用户 A (SERVICE)
+  participant C as useCachedList<br/>key "tickets:NEW"
+  participant B as 用户 B (SALES)
+  A->>C: 写入全部工单
+  A->>A: logout（不刷新页面，不清缓存）
+  B->>C: login → 打开 Tickets
+  C-->>B: 先画出 A 的列表
+  Note over B: revalidate 完成前<br/>看到不该看的工单
+          </pre>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After — 一个模块，key 按用户，logout 即清</p>
+          <div class="space-y-2 text-xs">
+            <div class="flex gap-2"><div class="flex-1 border rounded p-2 text-center">PI 列表</div><div class="flex-1 border rounded p-2 text-center">tickets</div><div class="flex-1 border rounded p-2 text-center">products</div><div class="flex-1 border rounded p-2 text-center">field options</div></div>
+            <div class="deep rounded p-3 border-2 border-slate-900 space-y-1">
+              <p class="lbl text-slate-300">listCache</p>
+              <p>useCachedList(key, fetcher) — key 自动加 userId</p>
+              <p>memory + sessionStorage · race guard</p>
+              <p>监听 AUTH_LOGOUT_EVENT → 清空全部</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd><code>useCachedList</code> 和 <code>piListCache</code> 是同一套 stale-while-revalidate 代码复制两份；前者 key 不含用户，<code>clearStoredSession</code> 也不清它，所以同一个标签页换人登录时，可能短暂显示上一个人的工单列表，而 SALES 只应该看到自己的工单。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>合并成一个 cache 模块：key 自动加用户、logout 时清空、race guard 只写一次；piListCache 变成它的一个调用方。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>删掉一份重复的 implementation</li>
+          <li>缓存的隔离规则只在一处</li>
+          <li>race guard 可以单测</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>回归网：</b>目前<b>没有</b>测试，需要先补一个缓存测试。<b class="text-amber-700">可见变化：</b>换人登录后不再闪出上一个人的列表；这是修 bug，不是改功能。</div>
+    </article>
+
+    <!-- ========== C8 ========== -->
+    <article id="c8" class="rounded-xl border border-slate-200 bg-white p-6 space-y-5 shadow-sm">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-serif text-2xl mr-2">8 · Typed wire contract：shared 类型 + 按领域分的 api 模块</h2>
+        <span class="px-2 py-0.5 rounded text-xs bg-slate-200 text-slate-700">Speculative</span>
+        <span class="px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-800">in-process</span>
+      </div>
+      <p class="font-mono text-xs text-slate-600 leading-relaxed">web/src/api/client.ts · web/src/types.ts · functions/lib/types.ts · shared/piCapabilities.ts:11-15 · 32 个模块里约 121 处 api.*（Products.tsx 15 · usePiEditor 13 · PiPage 10 · Permissions 8）· err.response?.data?.error ×31</p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">Before — client 是 56 行的 axios 封装</p>
+          <div class="text-xs space-y-1.5">
+            <div class="border rounded p-2">19 个 page 各自写 URL 字符串、各自 cast 响应</div>
+            <div class="border rounded p-2">web/types.ts 是对服务端 <code>any</code> 的手写猜测</div>
+            <div class="border border-red-300 bg-red-50 rounded p-2 text-red-700"><code>revisionInProgress: number | boolean</code> 两种类型；Role / PiStatus / TicketStatus 各声明 3–4 次</div>
+            <div class="border rounded p-2"><code>/products/:id/fields</code> 被 3 个模块各自请求，usePiEditor 的缓存被 PiPage 绕过</div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="lbl text-slate-500 mb-2">After</p>
+          <div class="text-xs space-y-2">
+            <div class="flex gap-2"><div class="flex-1 border rounded p-2 text-center">pages</div></div>
+            <div class="grid grid-cols-3 gap-2">
+              <div class="deep rounded p-2 text-center">piApi</div>
+              <div class="deep rounded p-2 text-center">ticketApi</div>
+              <div class="deep rounded p-2 text-center">productApi</div>
+            </div>
+            <div class="border-2 border-slate-500 seam rounded p-2 text-center">shared/wire.ts：Role · PiStatus · TicketStatus · PI / Ticket / User 形状</div>
+            <div class="flex gap-2"><div class="flex-1 border rounded p-2 text-center">functions routes（同一份类型）</div></div>
+          </div>
+        </div>
+      </div>
+
+      <dl class="grid md:grid-cols-3 gap-4 text-sm">
+        <div><dt class="lbl text-slate-500">Problem</dt><dd>请求和响应的形状没有一个共同的 interface：服务端返回 <code>any</code>，客户端靠手写类型和 cast，已经出现漂移；URL、错误提取、去重缓存散在每个 page 里。</dd></div>
+        <div><dt class="lbl text-slate-500">Solution</dt><dd>把 enum 和 wire 形状放进 <code>shared/</code>，客户端按领域分 api 模块，由它们持有 URL、类型和错误提取；page 只调函数。</dd></div>
+        <div><dt class="lbl text-slate-500">Wins</dt><dd><ul class="list-disc pl-4 space-y-0.5">
+          <li>编译期发现漂移</li>
+          <li>page 不再认识 URL</li>
+          <li>一份错误提取</li>
+        </ul></dd></div>
+      </dl>
+      <div class="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700"><b>为什么是 Speculative：</b>改动面最大（约 120 个调用点），收益是分散的，而且不集中消除某一类 bug。更适合在 1–6 做完之后按领域逐步迁移。</div>
+    </article>
+
+    <!-- ========== Quick deletions ========== -->
+    <article class="rounded-xl border border-dashed border-slate-300 bg-stone-100 p-6 space-y-3">
+      <h2 class="font-serif text-xl">顺手可做：deletion test 直接通过的小项</h2>
+      <ul class="text-sm space-y-1.5 list-disc pl-5">
+        <li><code>functions/lib/schema.ts</code> + <code>db.ts getDb</code>：<code>getDb</code> 没有任何调用方；schema 停在约第 10 个 migration（缺 deviceStatus、feishuDrafts、revision 列，role enum 只有 3 个）。<b class="text-red-700">风险：</b><code>npm run db:generate</code> 仍然读它，运行会生成错误的 migration。可以删掉，或者至少移除这个 script。</li>
+        <li><code>sqlTime</code> 复制了 6 次以上，<code>parseSqlTime</code> 3 次，<code>sameSecret</code> 2 次（internal.ts:9 / devices.ts:17）→ 各留一份。</li>
+        <li><code>TICKET_TYPES</code> 放在 <code>aiTriage.ts</code>，ticket type 的标签写了 3 次（ticketService:41 · cards:37 · sync:199）→ 移到 Ticket 领域（与候选 5 一起做）。</li>
+        <li><code>ticketNumber.ts</code> 和 <code>piNumber.ts</code> 是同一个 INSERT-then-UPDATE…RETURNING 序列 → 共用一个 sequence 函数。</li>
+        <li><code>userAi.ts</code> + <code>aiKeys.ts</code> 是对同一个概念 Personal AI key 的 shallow 拆分，而 <code>aiSettings.ts:60</code> 自己写表 → 合成一个模块。</li>
+        <li><code>similarTickets.ts:87</code> 去掉字符串 <code>'From Feishu: '</code>，这个字符串由 <code>feishu.ts:343</code> 写入：两个模块靠一个字面量耦合。</li>
+        <li>CONTEXT.md 已经过时：<code>piReviewEvents.action</code> 实际还有 <code>REVISION_STARTED / REVISION_ABANDONED</code>。</li>
+      </ul>
+    </article>
+  </section>
+
+  <section id="top" class="rounded-2xl deep p-8 space-y-4 shadow-lg">
+    <p class="lbl text-emerald-300">Top recommendation</p>
+    <h2 class="font-serif text-3xl"><a href="#c1" class="underline decoration-emerald-400 underline-offset-4">1 · Ticket workflow</a></h2>
+    <p class="text-slate-200 max-w-3xl">Ticket 是项目里增长最快、改得最勤的领域，而它的写入路径正是 PI 在 piWorkflow 出现之前的样子：写入者分散、不原子，还有一处已经违反了 “every change is logged”。PI 一侧已经证明了这种形状可行（plan → 一个 batch），四个 int test 已经锁住 HTTP 行为，所以在 “功能不受影响” 的前提下，它是风险最低、回报最高的一项。做完之后，候选 3（Ticket request）的 confirm 就可以一次原子提交。</p>
+    <p class="text-sm text-slate-400">建议顺序：1 → 3 → 2 → 5 → 4 → 6 → 7（7 涉及数据可见性，也可以单独提前做）→ 8</p>
+  </section>
+
+</main>
+</body>
+</html>

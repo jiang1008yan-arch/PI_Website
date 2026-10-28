@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../../lib/auth";
-import { TicketError } from "../../lib/ticketService";
+import { TicketError } from "../../lib/ticketWorkflow";
 import type { Env, Variables } from "../../lib/types";
 
 export type AppEnv = { Bindings: Env; Variables: Variables };
