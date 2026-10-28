@@ -23,13 +23,15 @@ type PiLike = { language: string; linkedPiId?: string | null; revisionInProgress
 // differs from the live rows, i.e. while a revision is in progress: the row with
 // the frozen header over it, and the frozen items with product names like
 // piItems rows. null otherwise: the live rows are the effective version.
-export async function readEffective<R extends PiLike>(db: D1Database, row: R) {
+// For an EN PI, pass its ZH PI when it is already loaded.
+export async function readEffective<R extends PiLike>(db: D1Database, row: R, zh?: PiLike) {
   const zhRow =
     row.language === "ZH"
       ? row
-      : row.linkedPiId
-        ? await first<PiLike>(db, "SELECT language, revisionInProgress, effectiveSnapshot FROM pi WHERE id=?", row.linkedPiId)
-        : null;
+      : (zh ??
+        (row.linkedPiId
+          ? await first<PiLike>(db, "SELECT language, revisionInProgress, effectiveSnapshot FROM pi WHERE id=?", row.linkedPiId)
+          : null));
   if (!zhRow?.revisionInProgress) return null;
   const snapshot = parseEffectiveSnapshot(zhRow.effectiveSnapshot);
   const part = row.language === "ZH" ? snapshot?.zh : snapshot?.en;

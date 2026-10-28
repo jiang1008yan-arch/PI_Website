@@ -22,7 +22,7 @@ Vocabulary used across this codebase. Keep these terms exact — drift creates a
 - **Commerce approval** — the second and final approval step, done by the **commerce approver** the submitter picked (`pi.commerceId`; none picked = any COMMERCE user) or by any ADMIN, who may approve or reject but never edit. A PI is **approved** only after this step.
 - **Commerce** (`COMMERCE` role) — the business staff who give commerce approval and download the EN/ZH Excel files. Distinct from ADMIN; an ADMIN may never give commerce approval.
 - **Revision** — a change to an already-approved PI pair (ZH + linked EN), started with a mandatory reason and sent through presales confirmation and commerce approval again. Numbered Rev 1, Rev 2, … under the same PI No.
-- **Effective version** — the most recently approved content of a PI. While a revision is in progress the effective version stays the previous approved content; it is replaced only when the revision gets commerce approval.
+- **Effective version** — the most recently approved content of a PI. While a revision is in progress the effective version stays the previous approved content; it is replaced only when the revision gets commerce approval. Read only through [`functions/lib/effectivePi.ts`](functions/lib/effectivePi.ts) (`EFFECTIVE_ZH`, `effectiveHeader`, `readEffective`; header values are trimmed) and, for a single row, `hasEffectiveVersion` in `shared/piCapabilities`; `piWorkflow` alone writes the frozen snapshot ([ADR-0001](docs/adr/0001-revision-via-effective-snapshot.md)).
 
 ## After-sales
 

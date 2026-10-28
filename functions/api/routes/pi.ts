@@ -1,7 +1,7 @@
 import { all, first, id } from "../../lib/db";
 import { nextPiNumber } from "../../lib/piNumber";
 import { buildLinkedZhItems } from "../../lib/piLink";
-import { EFFECTIVE_ZH, effectiveHeader } from "../../lib/effectivePi";
+import { EFFECTIVE_ZH, effectiveHeader, readEffective } from "../../lib/effectivePi";
 import {
   canAbandonRevision,
   canApprovePi,
@@ -20,6 +20,7 @@ import {
   type Verdict
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
+import { hasEffectiveVersion } from "../../../shared/piCapabilities";
 import { parseSerials } from "../../lib/devices";
 import { canRegisterSn } from "../../lib/ticketAccess";
 import { purgeExpired } from "../../scheduled";
@@ -27,7 +28,6 @@ import { piItemInsertStatements, piItemReplaceStatements } from "../../lib/piIte
 import type { Language } from "../../lib/types";
 import {
   EDITABLE_HEADER_COLUMN_SET,
-  parseEffectiveSnapshot,
   planAbandonRevision,
   planApprove,
   planCommerceApprove,
@@ -39,7 +39,6 @@ import {
   planSubmitForReview,
   runTransition,
   WorkflowConflictError,
-  type EffectiveSnapshot,
   type TransitionPlan
 } from "../../lib/piWorkflow";
 import { notifyPiTransition, siteBase, type PiTransition } from "../../lib/feishu/piBot/notifyPi";
@@ -116,27 +115,6 @@ async function loadPi(c: Context): Promise<PiRowFull | null> {
 
 const ITEM_SELECT =
   "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder";
-
-// Items of a frozen snapshot, decorated with product names like ITEM_SELECT rows.
-async function snapshotItemsWithProducts(db: D1Database, items: EffectiveSnapshot["zh"]["items"]) {
-  const ids = Array.from(new Set(items.map((it) => it.productId)));
-  const products = ids.length
-    ? await all<{ id: string; code: string; nameEn: string; nameZh: string }>(
-        db,
-        `SELECT id, code, nameEn, nameZh FROM products WHERE id IN (${ids.map(() => "?").join(", ")})`,
-        ...ids
-      )
-    : [];
-  const byId = new Map(products.map((p) => [p.id, p]));
-  return items.map((it, i) => ({
-    ...it,
-    fieldValues: JSON.stringify(it.fieldValues ?? []),
-    sortOrder: i,
-    code: byId.get(it.productId)?.code ?? null,
-    nameEn: byId.get(it.productId)?.nameEn ?? null,
-    nameZh: byId.get(it.productId)?.nameZh ?? null
-  }));
-}
 
 async function loadPiItems(db: D1Database, piId: string) {
   return await all(db, "SELECT * FROM piItems WHERE piId=? ORDER BY sortOrder", piId);
@@ -544,7 +522,7 @@ piRoutes.get("/pi/:id/export-bundle", async (c) => {
   if (denied) return denied;
   // While a revision is in progress the effective version is the frozen
   // snapshot (on the ZH row, covering its linked EN PI too).
-  const effective = version === "effective" ? await effectiveContentFor(c.env.DB, row) : null;
+  const effective = version === "effective" ? await readEffective(c.env.DB, row) : null;
   const items = effective ? effective.items : await all<any>(c.env.DB, ITEM_SELECT, row.id);
   const exportRow = effective ? effective.pi : row;
   const sender = await first(c.env.DB, "SELECT * FROM senderProfile WHERE id=1");
@@ -600,23 +578,6 @@ async function loadEvents(db: D1Database, piId: string) {
     "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY piReviewEvents.createdAt, piReviewEvents.rowid",
     piId
   );
-}
-
-// The effective (approved) content of a PI: the frozen snapshot while a
-// revision of its ZH PI is in progress, otherwise null (the live row is it).
-async function effectiveContentFor(db: D1Database, row: PiRowFull) {
-  const zhRow =
-    row.language === "ZH"
-      ? row
-      : row.linkedPiId
-        ? await first<PiRowFull>(db, "SELECT * FROM pi WHERE id=?", row.linkedPiId)
-        : null;
-  if (!zhRow?.revisionInProgress) return null;
-  const snapshot = parseEffectiveSnapshot(zhRow.effectiveSnapshot);
-  if (!snapshot) return null;
-  const part = row.language === "ZH" ? snapshot.zh : snapshot.en;
-  if (!part) return null;
-  return { pi: { ...row, ...part.header }, items: await snapshotItemsWithProducts(db, part.items) };
 }
 
 // ── Commerce approval ─────────────────────────────────────────────────────
@@ -682,19 +643,16 @@ piRoutes.get("/pi/:id/view", async (c) => {
   const denied = deny(c, canViewPi(user, row));
   if (denied) return denied;
 
-  const snapshot = row.revisionInProgress ? parseEffectiveSnapshot(row.effectiveSnapshot) : null;
-  const decorate = async (part: { header: Record<string, unknown>; items: any[] } | null | undefined, base: PiRowFull) =>
-    part ? { pi: { ...base, ...part.header }, items: await snapshotItemsWithProducts(c.env.DB, part.items) } : null;
-
+  // The effective version is the frozen one during a revision, else the live rows once approved.
   const zhCurrent = { pi: row, items: await all(c.env.DB, ITEM_SELECT, row.id) };
-  const zhEffective = snapshot ? await decorate(snapshot.zh, row) : row.status === "APPROVED" ? zhCurrent : null;
+  const zhEffective = (await readEffective(c.env.DB, row)) ?? (row.status === "APPROVED" ? zhCurrent : null);
 
   let en: { current: any; effective: any } | null = null;
   if (row.linkedPiId) {
     const enRow = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId);
     if (enRow) {
       const enCurrent = { pi: enRow, items: await all(c.env.DB, ITEM_SELECT, enRow.id) };
-      const enEffective = snapshot?.en ? await decorate(snapshot.en, enRow) : row.status === "APPROVED" ? enCurrent : null;
+      const enEffective = (await readEffective(c.env.DB, enRow, row)) ?? (row.status === "APPROVED" ? enCurrent : null);
       en = { current: enCurrent, effective: enEffective };
     }
   }
@@ -734,7 +692,7 @@ piRoutes.post("/pi/:id/devices", async (c) => {
   if (!canRegisterSn(user)) return c.json({ error: "Forbidden" }, 403);
   const row = await loadPi(c);
   if (!row) return c.json({ error: "Not found" }, 404);
-  if (row.language !== "ZH" || !(row.status === "APPROVED" || row.revisionInProgress)) {
+  if (row.language !== "ZH" || !hasEffectiveVersion(row.status, { revisionInProgress: Boolean(row.revisionInProgress) })) {
     return c.json({ error: "Serial numbers can only be registered on approved Chinese PIs" }, 400);
   }
   const d = await body<any>(c).catch(() => ({}));
