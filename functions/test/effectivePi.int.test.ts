@@ -59,6 +59,12 @@ describe("which PIs have an effective version, and its header", () => {
     ]);
   });
 
+  it("the approved list shows the trimmed values, like the type-ahead does", async () => {
+    await pi("ZH-1", { customerCompany: "  Iberia Charge SL ", productionOrderNo: " PO-0901" });
+    const list = await h.request("ADMIN", "GET", "/pi/approved");
+    expect(list.body.items.map((p: any) => [p.customerCompany, p.productionOrderNo])).toEqual([["Iberia Charge SL", "PO-0901"]]);
+  });
+
   it("works under another table alias", async () => {
     await pi("ZH-1");
     const row = await h.db

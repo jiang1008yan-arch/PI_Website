@@ -1,6 +1,7 @@
 import { all, first, id } from "../../lib/db";
 import type { AppUser } from "../../lib/types";
 import { normalizeSerial } from "../../lib/devices";
+import { EFFECTIVE_ZH, effectiveHeader } from "../../lib/effectivePi";
 import { buildFaultRanking, loadRepeatSettings, repeatInfo, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
 import { canCreateTicket, canReadTicket, canUseTickets, seesOnlyOwnTickets, type TicketStatus } from "../../lib/ticketAccess";
 import {
@@ -88,11 +89,10 @@ async function approvedPisForOrder(db: D1Database, orderNo: string) {
   return await all(
     db,
     `SELECT pi.id, pi.piNo, pi.status, pi.revisionNo, pi.revisionInProgress, linked.piNo AS linkedPiNo, pi.linkedPiNoSnapshot,
-            COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany) AS customerCompany,
-            COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo) AS productionOrderNo
+            ${effectiveHeader("customerCompany")} AS customerCompany,
+            ${effectiveHeader("productionOrderNo")} AS productionOrderNo
      FROM pi LEFT JOIN pi linked ON linked.id = pi.linkedPiId
-     WHERE pi.language = 'ZH' AND (pi.status = 'APPROVED' OR pi.revisionInProgress = 1)
-       AND TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo)) = ?
+     WHERE ${EFFECTIVE_ZH()} AND ${effectiveHeader("productionOrderNo")} = ?
      ORDER BY pi.approvedAt DESC`,
     value
   );

@@ -1,4 +1,5 @@
 import { all } from "../../lib/db";
+import { EFFECTIVE_ZH } from "../../lib/effectivePi";
 import { lookup, type LookupKind } from "../../lib/lookup";
 import { canCreateTicket } from "../../lib/ticketAccess";
 import { createApp } from "./_shared";
@@ -17,7 +18,7 @@ lookupRoutes.get("/lookup/pi/:piId/devices", async (c) => {
   const rows = await all<{ serialNumber: string }>(
     c.env.DB,
     `SELECT d.serialNumber FROM devices d JOIN pi ON pi.id = d.piId
-     WHERE d.piId = ? AND pi.language = 'ZH' AND (pi.status = 'APPROVED' OR pi.revisionInProgress = 1)
+     WHERE d.piId = ? AND ${EFFECTIVE_ZH()}
      ORDER BY d.serialNumber`,
     c.req.param("piId")
   );

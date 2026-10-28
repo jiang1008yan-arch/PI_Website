@@ -1,6 +1,7 @@
 import { all, first, id } from "../../lib/db";
 import { nextPiNumber } from "../../lib/piNumber";
 import { buildLinkedZhItems } from "../../lib/piLink";
+import { EFFECTIVE_ZH, effectiveHeader } from "../../lib/effectivePi";
 import {
   canAbandonRevision,
   canApprovePi,
@@ -266,9 +267,9 @@ piRoutes.get("/pi/approved", async (c) => {
   // Sales only ever see their own (created or received); others may narrow to theirs.
   const mine = user.role === "SALES" || c.req.query("scope") === "mine";
 
-  const company = "COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany)";
-  const orderNo = "COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo)";
-  const where = ["pi.language = 'ZH'", "(pi.status = 'APPROVED' OR pi.revisionInProgress = 1)"];
+  const company = effectiveHeader("customerCompany");
+  const orderNo = effectiveHeader("productionOrderNo");
+  const where = [EFFECTIVE_ZH()];
   const params: unknown[] = [];
   if (mine) {
     where.push("(pi.createdById = ? OR pi.assignedToId = ?)");

@@ -1,4 +1,5 @@
 import { all } from "./db";
+import { EFFECTIVE_ZH, effectiveHeader } from "./effectivePi";
 
 // Type-ahead over data the system already has, so tickets reuse the exact
 // production order numbers, customer names and SNs instead of free text:
@@ -17,9 +18,9 @@ export const LOOKUP_MIN_CHARS = 2;
 const LIMIT = 10;
 
 // The effective (approved) version's header value, even during a revision.
-const PO = "TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo, ''))";
-const CUSTOMER = "TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany, ''))";
-const APPROVED_ZH = "pi.language = 'ZH' AND (pi.status = 'APPROVED' OR pi.revisionInProgress = 1)";
+const PO = effectiveHeader("productionOrderNo");
+const CUSTOMER = effectiveHeader("customerCompany");
+const APPROVED_ZH = EFFECTIVE_ZH();
 
 const likeEscape = (text: string) => text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 

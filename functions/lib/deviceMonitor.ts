@@ -1,4 +1,5 @@
 import { all, first, id } from "./db";
+import { effectiveHeader } from "./effectivePi";
 import { applyDeviceEvent, isOfflineAlertDue, type DeviceEvent, type DeviceRow } from "./deviceAlerts";
 import { deviceAlertCard, type DeviceAlertData } from "./feishu/cards";
 import { feishuEnabled, sendCard } from "./feishu/client";
@@ -17,8 +18,8 @@ async function deviceContext(db: D1Database, serialNumber: string) {
   return await first<{ piNo: string; productionOrderNo: string; customerCompany: string }>(
     db,
     `SELECT pi.piNo,
-            TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo, '')) AS productionOrderNo,
-            TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany, '')) AS customerCompany
+            ${effectiveHeader("productionOrderNo")} AS productionOrderNo,
+            ${effectiveHeader("customerCompany")} AS customerCompany
      FROM devices d JOIN pi ON pi.id = d.piId WHERE d.serialNumber = ?`,
     serialNumber
   );
@@ -105,8 +106,8 @@ export async function deviceMonitorView(db: D1Database) {
       db,
       `SELECT s.serialNumber, s.status, s.faultCode, s.faultText, s.alertKind, s.alertOpenedAt, s.offlineSince, s.lastEventAt, s.alertTicketId,
               t.ticketNo AS alertTicketNo,
-              TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.customerCompany'), pi.customerCompany, '')) AS customerCompany,
-              TRIM(COALESCE(json_extract(pi.effectiveSnapshot, '$.zh.header.productionOrderNo'), pi.productionOrderNo, '')) AS productionOrderNo
+              ${effectiveHeader("customerCompany")} AS customerCompany,
+              ${effectiveHeader("productionOrderNo")} AS productionOrderNo
        FROM deviceStatus s
        LEFT JOIN devices d ON d.serialNumber = s.serialNumber
        LEFT JOIN pi ON pi.id = d.piId
