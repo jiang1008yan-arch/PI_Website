@@ -2,6 +2,7 @@ import { all, first, id } from "./db";
 import { applyDeviceEvent, isOfflineAlertDue, type DeviceEvent, type DeviceRow } from "./deviceAlerts";
 import { deviceAlertCard, type DeviceAlertData } from "./feishu/cards";
 import { feishuEnabled, sendCard } from "./feishu/client";
+import { openDeviceAlert } from "./feishu/ticketRequest";
 import type { Env } from "./types";
 
 // Device status pushed by the charger backend: every event is logged, the
@@ -42,17 +43,12 @@ async function raiseAlert(env: Env, row: DeviceRow, kind: "FAULT" | "OFFLINE", n
     kind === "FAULT"
       ? `Device alert: SN ${row.serialNumber} reported a fault${row.faultCode ? ` ${row.faultCode}` : ""}${row.faultText ? ` (${row.faultText})` : ""}`
       : `Device alert: SN ${row.serialNumber} has been offline for over 2 hours (since ${row.offlineSince} UTC)`;
-  // Requested by nobody yet; no source chat, so no customer receipt is sent.
-  await env.DB.prepare(
-    "INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, kind, serialNumber) VALUES (?, '', '', '', ?, 'DEVICE_ALERT', ?)"
-  )
-    .bind(data.draftId, text, row.serialNumber)
-    .run();
-  const messageId = await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, deviceAlertCard(data));
-  await env.DB.batch([
-    env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(messageId || null, data.draftId),
-    env.DB.prepare("UPDATE deviceStatus SET alertDraftId = ?, updatedAt = ? WHERE serialNumber = ?").bind(data.draftId, sqlTime(now), row.serialNumber)
-  ]);
+  await openDeviceAlert(
+    env.DB,
+    { draftId: data.draftId, serialNumber: row.serialNumber, text },
+    () => sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, deviceAlertCard(data)),
+    now
+  );
 }
 
 async function saveState(db: D1Database, row: DeviceRow, now: Date, resetAlert: boolean) {

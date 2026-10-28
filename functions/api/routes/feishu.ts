@@ -13,21 +13,33 @@ import {
   type DraftPrefill
 } from "../../lib/feishu/cards";
 import { lookup, matchOptions, resolveMatch } from "../../lib/lookup";
-import { addMaterials, isDraftExpired, loadDraft, loadItems, openAddition, openDraftOf, removeItem, sqlTime, type DraftRow } from "../../lib/feishu/ticketRequest";
+import {
+  addMaterials,
+  claimAlert,
+  createTicketFromRequest,
+  dismissRequest,
+  loadItems,
+  openAddition,
+  openRequestFor,
+  removeItem,
+  requesterKey,
+  saveToTicket,
+  setRequestCard,
+  type DraftRow,
+  type FeishuPerson,
+  type RequestRefusal
+} from "../../lib/feishu/ticketRequest";
 import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, updateCard } from "../../lib/feishu/client";
 import { readIncoming } from "../../lib/feishu/crypto";
 import {
   attachmentsFromItems,
   handleIncomingMessage,
-  ownsDraft,
   personOf,
   privateTarget,
   refreshCollectCard,
   renderDraftForm,
-  requesterKey,
   sendBindLink,
-  toCardItems,
-  type FeishuPerson
+  toCardItems
 } from "../../lib/feishu/intake";
 import { checkPoolFields, parsePoolUrl, POOL_URL_OPTION_KEY } from "../../lib/feishu/requirementPool";
 import { loadTicketForCard, pushTicketChanges } from "../../lib/feishu/sync";
@@ -125,40 +137,16 @@ const FORM_KEYS = ["customerCompany", "orderNo", "contactName", "summary", "deta
 const typedValues = (form: Record<string, unknown>): DraftPrefill =>
   Object.fromEntries(FORM_KEYS.map((k) => [k, formText(form, k)]).filter(([, v]) => v));
 
-// A request left alone too long: say so, and grey out its card.
-async function refuseExpired(c: Context, env: Env, draftId: string, cardMessageId: string | null) {
-  await env.DB.prepare("UPDATE feishuDrafts SET expiredAt = COALESCE(expiredAt, CURRENT_TIMESTAMP) WHERE id = ?").bind(draftId).run();
-  if (cardMessageId) runLater(c, () => updateCard(env, cardMessageId, expiredDraftCard()));
-  return toast("warning", "This request has expired (nothing added for 6 hours). Send me the messages again to start a new one.");
-}
-
-// The request a button refers to, if it is still open and belongs to this
-// person; otherwise the toast to answer with. An unclaimed device alert (in
-// the after-sales group) may only be opened.
-async function openRequestFor(
-  c: Context,
-  env: Env,
-  draftId: string,
-  operator: FeishuPerson,
-  cardMessageId: string | null,
-  opts: { allowUnclaimedAlert?: boolean } = {}
-): Promise<{ draft: DraftRow } | { reply: ReturnType<typeof toast> }> {
-  const draft = await loadDraft(env.DB, draftId);
-  if (!draft) return { reply: toast("error", "This request no longer exists.") };
-  if (draft.ticketId) return { reply: toast("info", "A ticket was already created for this.") };
-  if (draft.dismissedAt) return { reply: toast("info", "This request was discarded.") };
-  if (!draft.requestedBy) {
-    if (draft.kind === "DEVICE_ALERT" && opts.allowUnclaimedAlert) return { draft };
-    return { reply: toast("info", "Press Create ticket on the alert first.") };
-  }
-  if (!ownsDraft(draft, operator)) return { reply: toast("warning", "This request belongs to someone else.") };
-  // The device alert card in the group, after it was taken: the work is in private.
-  if (draft.kind === "DEVICE_ALERT" && draft.cardMessageId && cardMessageId && cardMessageId !== draft.cardMessageId) {
-    return { reply: toast("info", "This request continues in our private chat.") };
-  }
-  if (isDraftExpired(draft, new Date())) return { reply: await refuseExpired(c, env, draft.id, cardMessageId) };
-  return { draft };
-}
+// What a refused button on a request says.
+const REFUSED: Record<RequestRefusal, ReturnType<typeof toast>> = {
+  gone: toast("error", "This request no longer exists."),
+  created: toast("info", "A ticket was already created for this."),
+  discarded: toast("info", "This request was discarded."),
+  unclaimed: toast("info", "Press Create ticket on the alert first."),
+  notYours: toast("warning", "This request belongs to someone else."),
+  inPrivate: toast("info", "This request continues in our private chat."),
+  expired: toast("warning", "This request has expired (nothing added for 6 hours). Send me the messages again to start a new one.")
+};
 
 feishuRoutes.post("/feishu/card", async (c) => {
   const incoming = await authenticate(c);
@@ -212,8 +200,12 @@ feishuRoutes.post("/feishu/card", async (c) => {
 
     // Everything below acts on a ticket request; only after-sales and admins make tickets.
     if (!canCreateTicket(user)) return c.json(toast("warning", "Your role cannot create tickets."));
-    const found = await openRequestFor(c, env, String(value.draftId ?? ""), operator, messageId, { allowUnclaimedAlert: value.action === "open_draft" });
-    if ("reply" in found) return c.json(found.reply);
+    const found = await openRequestFor(env.DB, String(value.draftId ?? ""), operator, messageId, new Date(), { allowUnclaimedAlert: value.action === "open_draft" });
+    if ("refused" in found) {
+      // A request left alone too long: its card is greyed out too.
+      if (found.refused === "expired" && messageId) runLater(c, () => updateCard(env, messageId, expiredDraftCard()));
+      return c.json(REFUSED[found.refused]);
+    }
     const draft = found.draft;
     // "Add to ticket" only saves, cancels or removes items.
     if (draft.targetTicketId && !["save_addition", "dismiss_draft", "remove_item"].includes(String(value.action))) {
@@ -229,7 +221,7 @@ feishuRoutes.post("/feishu/card", async (c) => {
         return c.json(toast("info", "Preparing the ticket form…"));
       }
       case "dismiss_draft": {
-        await env.DB.prepare("UPDATE feishuDrafts SET dismissedAt = ? WHERE id = ?").bind(sqlTime(new Date()), draft.id).run();
+        await dismissRequest(env.DB, draft.id, new Date());
         if (messageId) runLater(c, () => updateCard(env, messageId, draft.targetTicketId ? addCancelledCard() : dismissedCard()));
         return c.json(toast("info", draft.targetTicketId ? "Cancelled." : "Discarded."));
       }
@@ -278,24 +270,15 @@ feishuRoutes.post("/feishu/card", async (c) => {
 async function takeAlert(c: Context, env: Env, user: AppUser, operator: FeishuPerson, draft: DraftRow, groupCardId: string | null) {
   const target = privateTarget(operator);
   if (!target) return toast("warning", "Link your Feishu account first.");
-  const busy = "Finish or discard your open ticket request in our private chat first.";
-  if (await openDraftOf(env.DB, requesterKey(operator))) return toast("warning", busy);
   const now = new Date();
-  let changes = 0;
-  try {
-    const res = await env.DB.prepare("UPDATE feishuDrafts SET requestedBy = ?, updatedAt = ? WHERE id = ? AND requestedBy = ''")
-      .bind(requesterKey(operator), sqlTime(now), draft.id)
-      .run();
-    changes = res.meta?.changes ?? 0;
-  } catch {
-    return toast("warning", busy); // another request of theirs opened meanwhile
-  }
-  if (!changes) return toast("info", "Someone else already took this alert.");
+  const claim = await claimAlert(env.DB, draft.id, requesterKey(operator), now);
+  if (claim === "busy") return toast("warning", "Finish or discard your open ticket request in our private chat first.");
+  if (claim === "takenByOther") return toast("info", "Someone else already took this alert.");
   runLater(c, async () => {
     const position = String(now.getTime()).padStart(15, "0");
     await addMaterials(env, draft.id, [{ kind: "TEXT", text: draft.text, sourceMessageId: "", insideForward: false }], position, now);
     const cardMessageId = await sendCard(env, target.type, target.id, collectCard({ draftId: draft.id, items: toCardItems(await loadItems(env.DB, draft.id)) }));
-    await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draft.id).run();
+    await setRequestCard(env.DB, draft.id, cardMessageId);
     if (groupCardId) await updateCard(env, groupCardId, alertTakenCard(draft.serialNumber ?? "", user.displayName));
   });
   return toast("success", "Continued in your private chat with me: add any material there, then press Prepare ticket.");
@@ -312,47 +295,43 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
   const notifyChat = formText(form, "notifyChat");
   const chatId = notifyChat && notifyChat !== "none" && notifyChat !== env.FEISHU_SERVICE_CHAT_ID ? notifyChat : null;
   const items = await loadItems(env.DB, draft.id);
-  // Claim the request first, so two presses cannot both create a ticket.
-  const claim = await env.DB.prepare("UPDATE feishuDrafts SET ticketId = 'CREATING' WHERE id = ? AND ticketId IS NULL").bind(draft.id).run();
-  if (!claim.meta?.changes) return toast("info", "A ticket was already created for this.");
-  const release = () => env.DB.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ? AND ticketId = 'CREATING'").bind(draft.id).run();
-  const created = await createTicket(
-    env,
-    {
-      customerCompany: picked?.customerCompany ?? formText(form, "customerCompany"),
-      orderNo: picked?.orderNo ?? formText(form, "orderNo"),
-      serialNumber: picked?.serialNumber ?? draft.serialNumber ?? undefined,
-      contactName,
-      contactInfo: "Feishu",
-      // The customer group hears about it only when one was chosen.
-      feishuSourceChatId: chatId,
-      feishuSourceMessageId: null,
-      summary,
-      // The details (the AI's roll-up, as checked by staff) and the customer's own
-      // words go on the timeline, recorded as the confirming user.
-      initialNote: {
-        actorId: user.id,
-        text: details ? `${details}\n\nFrom Feishu:\n${draft.text || "(files only)"}` : `From Feishu: ${draft.text || "(files only)"}`
+  // Two presses cannot both create a ticket.
+  const created = await createTicketFromRequest(env.DB, draft.id, () =>
+    createTicket(
+      env,
+      {
+        customerCompany: picked?.customerCompany ?? formText(form, "customerCompany"),
+        orderNo: picked?.orderNo ?? formText(form, "orderNo"),
+        serialNumber: picked?.serialNumber ?? draft.serialNumber ?? undefined,
+        contactName,
+        contactInfo: "Feishu",
+        // The customer group hears about it only when one was chosen.
+        feishuSourceChatId: chatId,
+        feishuSourceMessageId: null,
+        summary,
+        // The details (the AI's roll-up, as checked by staff) and the customer's own
+        // words go on the timeline, recorded as the confirming user.
+        initialNote: {
+          actorId: user.id,
+          text: details ? `${details}\n\nFrom Feishu:\n${draft.text || "(files only)"}` : `From Feishu: ${draft.text || "(files only)"}`
+        }
+      },
+      {
+        requireProduct: false,
+        validateQuestionnaire: false,
+        creator: user,
+        initialFiles: attachmentsFromItems(items),
+        // Type and fault type are optional here, and only after-sales/admin may set them.
+        ticketType: form.ticketType,
+        faultType: formText(form, "faultType"),
+        // When the creator owns the new ticket, this card becomes its card: no second one is sent.
+        feishuCardMessageId: cardMessageId,
+        // A ticket from a device alert is linked to that alert.
+        alertDraftId: draft.kind === "DEVICE_ALERT" ? draft.id : null
       }
-    },
-    {
-      requireProduct: false,
-      validateQuestionnaire: false,
-      creator: user,
-      initialFiles: attachmentsFromItems(items),
-      // Type and fault type are optional here, and only after-sales/admin may set them.
-      ticketType: form.ticketType,
-      faultType: formText(form, "faultType"),
-      // When the creator owns the new ticket, this card becomes its card: no second one is sent.
-      feishuCardMessageId: cardMessageId,
-      // A ticket from a device alert is linked to that alert.
-      alertDraftId: draft.kind === "DEVICE_ALERT" ? draft.id : null
-    }
-  ).catch(async (error) => {
-    await release();
-    throw error;
-  });
-  await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ?").bind(created.id, draft.id).run();
+    )
+  );
+  if (!created) return toast("info", "A ticket was already created for this.");
 
   runLater(c, async () => {
     await pushTicketChanges(env, created.id, created.changes);
@@ -397,7 +376,7 @@ async function startAddition(c: Context, env: Env, user: AppUser, operator: Feis
   }
   runLater(c, async () => {
     const cardMessageId = await sendCard(env, target.type, target.id, addCard({ draftId: draft.id, ticketNo: ticket.ticketNo, items: [] }));
-    await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draft.id).run();
+    await setRequestCard(env.DB, draft.id, cardMessageId);
     // Something sent while the card was on its way is shown now.
     const items = await loadItems(env.DB, draft.id);
     if (cardMessageId && items.length) await updateCard(env, cardMessageId, addCard({ draftId: draft.id, ticketNo: ticket.ticketNo, items: toCardItems(items) }));
@@ -410,16 +389,11 @@ async function saveAddition(c: Context, env: Env, user: AppUser, draft: DraftRow
   const items = await loadItems(env.DB, draft.id);
   if (!items.length) return toast("info", "Send me something to add first.");
   const ticketId = draft.targetTicketId!;
-  // Claim it first, so two presses cannot add it twice.
-  const claim = await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ? AND ticketId IS NULL").bind(ticketId, draft.id).run();
-  if (!claim.meta?.changes) return toast("info", "Already added.");
-  let added: Awaited<ReturnType<typeof addTicketNote>>;
-  try {
-    added = await addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true, files: attachmentsFromItems(items) });
-  } catch (error) {
-    await env.DB.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ?").bind(draft.id).run();
-    throw error;
-  }
+  // Two presses cannot add it twice.
+  const added = await saveToTicket(env.DB, draft, () =>
+    addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true, files: attachmentsFromItems(items) })
+  );
+  if (!added) return toast("info", "Already added.");
   const ticketNo = (await first<{ ticketNo: string }>(env.DB, "SELECT ticketNo FROM tickets WHERE id = ?", ticketId))?.ticketNo ?? "the ticket";
   runLater(c, async () => {
     await pushTicketChanges(env, ticketId, added.changes);

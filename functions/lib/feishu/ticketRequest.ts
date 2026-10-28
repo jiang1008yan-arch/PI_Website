@@ -11,6 +11,8 @@ import type { Material, MaterialKind } from "./materials";
 // material was last added; after that the next message starts a new one.
 // "Add to ticket" works the same way for an existing ticket (targetTicketId),
 // with a shorter limit, since it is started from the ticket on purpose.
+// This module is the only writer of feishuDrafts and feishuDraftItems
+// (CONTEXT.md "Ticket request lifecycle").
 export const DRAFT_TTL_HOURS = 6;
 export const ADD_TTL_MINUTES = 30;
 
@@ -39,6 +41,12 @@ export type DraftRow = {
   expiredAt: string | null;
   dismissedAt: string | null;
 };
+
+// Who a request belongs to, as stored in feishuDrafts.requestedBy.
+export type FeishuPerson = { unionId: string; openId: string };
+export const requesterKey = (p: FeishuPerson) => p.unionId || p.openId;
+export const ownsDraft = (draft: Pick<DraftRow, "requestedBy">, p: FeishuPerson) =>
+  Boolean(draft.requestedBy) && (draft.requestedBy === p.unionId || draft.requestedBy === p.openId);
 
 // Why a file could not be kept.
 export type ItemProblem = "IN_FORWARD" | "TOO_LARGE" | "DOWNLOAD_FAILED";
@@ -116,12 +124,149 @@ export async function openAddition(env: Env, requestedBy: string, ticketId: stri
   return { draft, created: draft.id === newId };
 }
 
+const markExpired = (db: D1Database, draftId: string, now: Date) =>
+  db.prepare("UPDATE feishuDrafts SET expiredAt = ? WHERE id = ? AND expiredAt IS NULL").bind(sqlTime(now), draftId).run();
+
 export async function expireDraft(env: Env, draft: DraftRow, now: Date) {
-  await env.DB.prepare("UPDATE feishuDrafts SET expiredAt = ? WHERE id = ? AND expiredAt IS NULL").bind(sqlTime(now), draft.id).run();
+  await markExpired(env.DB, draft.id, now);
   if (draft.cardMessageId) {
     await updateCard(env, draft.cardMessageId, draft.targetTicketId ? addExpiredCard() : expiredDraftCard()).catch((error) =>
       console.error("Could not grey out an expired request", error)
     );
+  }
+}
+
+// Why a button on a request is refused; the caller says so in its own words.
+export type RequestRefusal = "gone" | "created" | "discarded" | "unclaimed" | "notYours" | "inPrivate" | "expired";
+
+// The request a button refers to, if it is still open and belongs to this
+// person; otherwise why not. An unclaimed device alert (in the after-sales
+// group) may only be opened. A request found past its time limit is recorded
+// as expired here.
+export async function openRequestFor(
+  db: D1Database,
+  draftId: string,
+  person: FeishuPerson,
+  cardMessageId: string | null,
+  now: Date,
+  opts: { allowUnclaimedAlert?: boolean } = {}
+): Promise<{ draft: DraftRow } | { refused: RequestRefusal }> {
+  const draft = await loadDraft(db, draftId);
+  if (!draft) return { refused: "gone" };
+  if (draft.ticketId) return { refused: "created" };
+  if (draft.dismissedAt) return { refused: "discarded" };
+  if (!draft.requestedBy) {
+    if (draft.kind === "DEVICE_ALERT" && opts.allowUnclaimedAlert) return { draft };
+    return { refused: "unclaimed" };
+  }
+  if (!ownsDraft(draft, person)) return { refused: "notYours" };
+  // The device alert card in the group, after it was taken: the work is in private.
+  if (draft.kind === "DEVICE_ALERT" && draft.cardMessageId && cardMessageId && cardMessageId !== draft.cardMessageId) return { refused: "inPrivate" };
+  if (isDraftExpired(draft, now)) {
+    await markExpired(db, draft.id, now);
+    return { refused: "expired" };
+  }
+  return { draft };
+}
+
+export async function dismissRequest(db: D1Database, draftId: string, now: Date) {
+  await db.prepare("UPDATE feishuDrafts SET dismissedAt = ? WHERE id = ?").bind(sqlTime(now), draftId).run();
+}
+
+// The card the request is shown on (none when sending it failed).
+export async function setRequestCard(db: D1Database, draftId: string, cardMessageId: string | null | undefined) {
+  await db.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draftId).run();
+}
+
+// Forwarded from a group the bot is in: offered as the group to notify (the first one found).
+export async function suggestChat(db: D1Database, draftId: string, chatId: string) {
+  await db.prepare("UPDATE feishuDrafts SET suggestedChatId = ? WHERE id = ? AND suggestedChatId IS NULL").bind(chatId, draftId).run();
+}
+
+export async function markFormOpened(db: D1Database, draftId: string, now: Date) {
+  await db.prepare("UPDATE feishuDrafts SET formOpenedAt = ? WHERE id = ?").bind(sqlTime(now), draftId).run();
+}
+
+// A known SN found in the material, kept on the request.
+export async function keepSerialNumber(db: D1Database, draftId: string, serialNumber: string) {
+  await db.prepare("UPDATE feishuDrafts SET serialNumber = ? WHERE id = ?").bind(serialNumber, draftId).run();
+}
+
+export async function saveTranscript(db: D1Database, itemId: string, text: string) {
+  await db.prepare("UPDATE feishuDraftItems SET text = ? WHERE id = ?").bind(text, itemId).run();
+}
+
+// The AI's suggestion, and which items it looked at (null fields when it made none).
+export async function saveAiSuggestion(
+  db: D1Database,
+  draftId: string,
+  suggestion: { summary?: string | null; digest?: string | null; ticketType?: string | null; faultType?: string | null } | null,
+  itemIds: string[]
+) {
+  await db
+    .prepare("UPDATE feishuDrafts SET aiSummary = ?, aiDigest = ?, aiTicketType = ?, aiFaultType = ?, aiItemIds = ? WHERE id = ?")
+    .bind(suggestion?.summary ?? null, suggestion?.digest ?? null, suggestion?.ticketType ?? null, suggestion?.faultType ?? null, JSON.stringify(itemIds), draftId)
+    .run();
+}
+
+// Turns the request into a ticket. It is claimed first, so two presses make
+// one ticket; released when `create` fails, and linked to the ticket after.
+// null when it was already claimed.
+export async function createTicketFromRequest<T extends { id: string }>(db: D1Database, draftId: string, create: () => Promise<T>): Promise<T | null> {
+  const claim = await db.prepare("UPDATE feishuDrafts SET ticketId = 'CREATING' WHERE id = ? AND ticketId IS NULL").bind(draftId).run();
+  if (!claim.meta?.changes) return null;
+  const created = await create().catch(async (error) => {
+    await db.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ? AND ticketId = 'CREATING'").bind(draftId).run();
+    throw error;
+  });
+  await db.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ?").bind(created.id, draftId).run();
+  return created;
+}
+
+// "Save to ticket" for Add to ticket: claimed the same way, so two presses
+// add it once; released when `save` fails. null when it was already claimed.
+export async function saveToTicket<T>(db: D1Database, draft: Pick<DraftRow, "id" | "targetTicketId">, save: () => Promise<T>): Promise<T | null> {
+  const claim = await db.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ? AND ticketId IS NULL").bind(draft.targetTicketId, draft.id).run();
+  if (!claim.meta?.changes) return null;
+  try {
+    return await save();
+  } catch (error) {
+    await db.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ?").bind(draft.id).run();
+    throw error;
+  }
+}
+
+// A device alert in the after-sales group: a request nobody has claimed yet,
+// with no source chat, so no customer receipt is sent. Its card (sent by
+// `send`) and the device's link to it are written together.
+export async function openDeviceAlert(
+  db: D1Database,
+  alert: { draftId: string; serialNumber: string; text: string },
+  send: () => Promise<string | null | undefined>,
+  now: Date
+) {
+  await db
+    .prepare("INSERT INTO feishuDrafts (id, requestedBy, sourceChatId, sourceMessageId, text, kind, serialNumber) VALUES (?, '', '', '', ?, 'DEVICE_ALERT', ?)")
+    .bind(alert.draftId, alert.text, alert.serialNumber)
+    .run();
+  const messageId = await send();
+  await db.batch([
+    db.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(messageId || null, alert.draftId),
+    db.prepare("UPDATE deviceStatus SET alertDraftId = ?, updatedAt = ? WHERE serialNumber = ?").bind(alert.draftId, sqlTime(now), alert.serialNumber)
+  ]);
+}
+
+// "Create ticket" on a device alert: it becomes the presser's open request,
+// unless they already have one or someone else took the alert first.
+export type AlertClaim = "taken" | "busy" | "takenByOther";
+
+export async function claimAlert(db: D1Database, draftId: string, requestedBy: string, now: Date): Promise<AlertClaim> {
+  if (await openDraftOf(db, requestedBy)) return "busy";
+  try {
+    const res = await db.prepare("UPDATE feishuDrafts SET requestedBy = ?, updatedAt = ? WHERE id = ? AND requestedBy = ''").bind(requestedBy, sqlTime(now), draftId).run();
+    return res.meta?.changes ? "taken" : "takenByOther";
+  } catch {
+    return "busy"; // another request of theirs opened meanwhile (one open request each)
   }
 }
 

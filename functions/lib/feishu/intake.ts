@@ -9,7 +9,24 @@ import { loadUserAiConfig } from "../userAi";
 import { addCard, bindCard, collectCard, collectedCounts, draftCard, type CardItem, type DraftPrefill } from "./cards";
 import { siteBase } from "./piBot/notifyPi";
 import { getMessageItems, listBotChats, messageContentToText, sendCard, sendText, updateCard } from "./client";
-import { addMaterials, compileDraftText, getOrOpenDraft, loadDraft, loadItems, refreshDraftText, sqlTime, type DraftItem, type DraftRow } from "./ticketRequest";
+import {
+  addMaterials,
+  compileDraftText,
+  getOrOpenDraft,
+  keepSerialNumber,
+  loadDraft,
+  loadItems,
+  markFormOpened,
+  refreshDraftText,
+  requesterKey,
+  saveAiSuggestion,
+  saveTranscript,
+  setRequestCard,
+  suggestChat,
+  type DraftItem,
+  type DraftRow,
+  type FeishuPerson
+} from "./ticketRequest";
 import { feishuTarget, userForFeishu } from "./identity";
 import { materialsFromContent, materialsFromForward, type Material } from "./materials";
 
@@ -20,13 +37,8 @@ import { materialsFromContent, materialsFromForward, type Material } from "./mat
 // create the ticket or discard it. "Prepare ticket" runs the AI once and turns
 // the card into the form, with earlier tickets like this one.
 
-export type FeishuPerson = { unionId: string; openId: string };
 export const personOf = (ids: any): FeishuPerson => ({ unionId: String(ids?.union_id ?? ""), openId: String(ids?.open_id ?? "") });
 export const privateTarget = (p: FeishuPerson) => feishuTarget({ feishuUnionId: p.unionId || null, feishuOpenId: p.openId || null });
-// Who a request belongs to, as stored in feishuDrafts.requestedBy.
-export const requesterKey = (p: FeishuPerson) => p.unionId || p.openId;
-export const ownsDraft = (draft: Pick<DraftRow, "requestedBy">, p: FeishuPerson) =>
-  Boolean(draft.requestedBy) && (draft.requestedBy === p.unionId || draft.requestedBy === p.openId);
 
 // The AI looks at a few pictures at most, each small enough to send inline.
 export const AI_MAX_PICTURES = 4;
@@ -104,7 +116,7 @@ export async function handleIncomingMessage(env: Env, event: any) {
   const added = await addMaterials(env, draft.id, materials, position, now);
   // Forwarded from a group the bot is in: offered as the group to notify.
   if (forwardChatId && forwardChatId !== env.FEISHU_SERVICE_CHAT_ID && !draft.suggestedChatId) {
-    await env.DB.prepare("UPDATE feishuDrafts SET suggestedChatId = ? WHERE id = ? AND suggestedChatId IS NULL").bind(forwardChatId, draft.id).run();
+    await suggestChat(env.DB, draft.id, forwardChatId);
   }
 
   if (draft.formOpenedAt) {
@@ -120,7 +132,7 @@ export async function handleIncomingMessage(env: Env, event: any) {
   if (created) {
     const shown = await loadItems(env.DB, draft.id);
     const cardMessageId = await sendCard(env, target.type, target.id, await collectingCard(env, draft, shown));
-    await env.DB.prepare("UPDATE feishuDrafts SET cardMessageId = ? WHERE id = ?").bind(cardMessageId || null, draft.id).run();
+    await setRequestCard(env.DB, draft.id, cardMessageId);
     // Messages forwarded together may have landed while the card was sent.
     const now2 = await loadItems(env.DB, draft.id);
     if (cardMessageId && now2.length !== shown.length) await updateCard(env, cardMessageId, await collectingCard(env, draft, now2));
@@ -142,7 +154,7 @@ async function recognize(env: Env, draft: DraftRow, items: DraftItem[], config: 
     voices.map(async (voice) => {
       const media = await mediaOf(env, voice, "audio/ogg");
       const text = media ? await transcribeAudio(config, media) : null;
-      if (text) await env.DB.prepare("UPDATE feishuDraftItems SET text = ? WHERE id = ?").bind(text, voice.id).run();
+      if (text) await saveTranscript(env.DB, voice.id, text);
       return text;
     })
   );
@@ -154,9 +166,7 @@ async function recognize(env: Env, draft: DraftRow, items: DraftItem[], config: 
   const images = (await Promise.all(pictures.map((p) => mediaOf(env, p, "image/jpeg")))).filter((m): m is AiMedia => m !== null);
   const text = compileDraftText(fresh) || draft.text;
   const triage = await triageMessages(config, { text, images }, types);
-  await env.DB.prepare("UPDATE feishuDrafts SET aiSummary = ?, aiDigest = ?, aiTicketType = ?, aiFaultType = ?, aiItemIds = ? WHERE id = ?")
-    .bind(triage?.summary ?? null, triage?.digest ?? null, triage?.ticketType ?? null, triage?.faultType ?? null, JSON.stringify(fresh.map((i) => i.id)), draft.id)
-    .run();
+  await saveAiSuggestion(env.DB, draft.id, triage, fresh.map((i) => i.id));
   return triage;
 }
 
@@ -205,14 +215,14 @@ export async function renderDraftForm(env: Env, draftId: string, cardMessageId: 
     items = await loadItems(env.DB, draft.id);
   }
   if (!draft.formOpenedAt) {
-    await env.DB.prepare("UPDATE feishuDrafts SET formOpenedAt = ? WHERE id = ?").bind(sqlTime(now), draft.id).run();
+    await markFormOpened(env.DB, draft.id, now);
   }
 
   // A production order number or SN written in the material fills the form;
   // a known SN is kept on the request (SNs are never typed in the form).
   const refs = await findKnownReferences(env.DB, draft.text);
   if (refs.device && !draft.serialNumber) {
-    await env.DB.prepare("UPDATE feishuDrafts SET serialNumber = ? WHERE id = ?").bind(refs.device.serialNumber, draft.id).run();
+    await keepSerialNumber(env.DB, draft.id, refs.device.serialNumber);
   }
   const typed = { ...(req.prefill ?? {}) };
   // After a new AI run, fields still holding the previous suggestion take the
