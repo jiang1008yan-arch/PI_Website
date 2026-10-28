@@ -31,7 +31,7 @@ import {
   type FeishuPerson
 } from "../../lib/feishu/intake";
 import { checkPoolFields, parsePoolUrl, POOL_URL_OPTION_KEY } from "../../lib/feishu/requirementPool";
-import { loadTicketForCard, pushTicketChange } from "../../lib/feishu/sync";
+import { loadTicketForCard, pushTicketChanges } from "../../lib/feishu/sync";
 import { userForFeishu } from "../../lib/feishu/identity";
 import { canCreateTicket } from "../../lib/ticketAccess";
 import {
@@ -189,8 +189,8 @@ feishuRoutes.post("/feishu/card", async (c) => {
   try {
     switch (value.action) {
       case "take": {
-        await takeTicket(env.DB, user, String(value.ticketId));
-        runLater(c, () => pushTicketChange(env, String(value.ticketId), { kind: "taken" }));
+        const taken = await takeTicket(env.DB, user, String(value.ticketId));
+        runLater(c, () => pushTicketChanges(env, String(value.ticketId), taken.changes));
         return c.json(toast("success", "You took this ticket."));
       }
       case "update": {
@@ -198,12 +198,11 @@ feishuRoutes.post("/feishu/card", async (c) => {
         const status = String(form.status ?? "").trim();
         const note = String(form.note ?? "").trim();
         if (!status && !note) return c.json(toast("info", "Choose a status or write a note."));
-        if (status) await changeTicketStatus(env.DB, user, ticketId, status as TicketStatus);
-        if (note) await addTicketNote(env.DB, user, ticketId, note);
-        runLater(c, async () => {
-          if (status) await pushTicketChange(env, ticketId, { kind: "status", to: status });
-          if (note) await pushTicketChange(env, ticketId, { kind: "note" });
-        });
+        const changes = [
+          ...(status ? (await changeTicketStatus(env.DB, user, ticketId, status as TicketStatus)).changes : []),
+          ...(note ? (await addTicketNote(env.DB, user, ticketId, note)).changes : [])
+        ];
+        runLater(c, () => pushTicketChanges(env, ticketId, changes));
         return c.json(toast("success", "Ticket updated."));
       }
       case "show_ticket": {
@@ -371,8 +370,8 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
   }
 
   runLater(c, async () => {
-    await pushTicketChange(env, created.id, { kind: "created" });
-    if (toPool) await pushTicketChange(env, created.id, { kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true });
+    await pushTicketChanges(env, created.id, created.changes);
+    if (toPool) await pushTicketChanges(env, created.id, [{ kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true }]);
     if (cardMessageId) {
       await updateCard(
         env,
@@ -430,16 +429,16 @@ async function saveAddition(c: Context, env: Env, user: AppUser, draft: DraftRow
   // Claim it first, so two presses cannot add it twice.
   const claim = await env.DB.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ? AND ticketId IS NULL").bind(ticketId, draft.id).run();
   if (!claim.meta?.changes) return toast("info", "Already added.");
+  let added: Awaited<ReturnType<typeof addTicketNote>>;
   try {
-    const updateId = await addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true });
-    await attachStoredFiles(env.DB, ticketId, updateId, user.id, attachmentsFromItems(items));
+    added = await addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true, files: attachmentsFromItems(items) });
   } catch (error) {
     await env.DB.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ?").bind(draft.id).run();
     throw error;
   }
   const ticketNo = (await first<{ ticketNo: string }>(env.DB, "SELECT ticketNo FROM tickets WHERE id = ?", ticketId))?.ticketNo ?? "the ticket";
   runLater(c, async () => {
-    await pushTicketChange(env, ticketId, { kind: "note" });
+    await pushTicketChanges(env, ticketId, added.changes);
     if (cardMessageId) await updateCard(env, cardMessageId, addedCard(ticketNo, toCardItems(items)));
   });
   return toast("success", `Added to ${ticketNo}.`);

@@ -1,8 +1,8 @@
 import { all, first, id } from "../../lib/db";
 import type { AppUser } from "../../lib/types";
-import { isKnownSerial, normalizeSerial } from "../../lib/devices";
-import { buildFaultRanking, isRepeatFault, loadRepeatSettings, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
-import { canConfirmFault, canCreateTicket, canReadTicket, canUseTickets, seesOnlyOwnTickets, type TicketStatus } from "../../lib/ticketAccess";
+import { normalizeSerial } from "../../lib/devices";
+import { buildFaultRanking, loadRepeatSettings, repeatInfo, repeatWindowStart, type FaultTicket, type ProductFaultCount } from "../../lib/faultStats";
+import { canCreateTicket, canReadTicket, canUseTickets, seesOnlyOwnTickets, type TicketStatus } from "../../lib/ticketAccess";
 import {
   addTicketAttachment,
   addTicketNote,
@@ -12,6 +12,7 @@ import {
   createTicket,
   MAX_ATTACHMENT_BYTES,
   setTicketCustomer,
+  setTicketProduct,
   setTicketType
 } from "../../lib/ticketWorkflow";
 import { afterTicketChange } from "../../lib/feishu/sync";
@@ -97,22 +98,6 @@ async function approvedPisForOrder(db: D1Database, orderNo: string) {
   );
 }
 
-// How often this product has had this confirmed fault within the window.
-async function repeatInfo(db: D1Database, productId: string | null, faultType: string | null, now: Date) {
-  if (!productId || !faultType) return null;
-  const settings = await loadRepeatSettings(db);
-  const since = repeatWindowStart(now, settings.windowDays);
-  const tickets = await all<{ id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null; assignedSalesId: string | null }>(
-    db,
-    `SELECT id, ticketNo, createdAt, customerCompany, productModel, assignedSalesId FROM tickets
-     WHERE productId = ? AND faultType = ? AND createdAt >= ? ORDER BY createdAt DESC`,
-    productId,
-    faultType,
-    since
-  );
-  return { count: tickets.length, windowDays: settings.windowDays, threshold: settings.threshold, isRepeat: isRepeatFault(tickets.length, settings), tickets };
-}
-
 // Staff-created ticket (no customer link). ADMIN and SERVICE create tickets
 // directly and name the responsible people (SALES cannot create). Product is
 // required and the questionnaire is validated exactly like the public submission.
@@ -133,7 +118,7 @@ ticketRoutes.post("/tickets", async (c) => {
     { ...d, feishuSourceChatId: chatId, feishuSourceMessageId: null },
     { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") }
   );
-  afterTicketChange(c, created.id, { kind: "created" });
+  afterTicketChange(c, created.id, created.changes);
   return c.json({ id: created.id, ticketNo: created.ticketNo });
 });
 
@@ -252,25 +237,9 @@ ticketRoutes.get("/tickets/:id", async (c) => {
 // The SN must be known to the system (registered on a PI or reported by the
 // charger backend). Fields left out keep their value.
 ticketRoutes.patch("/tickets/:id/product", async (c) => {
-  if (!canConfirmFault(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
   const d = await body<{ productId?: string; productModel?: string | null; serialNumber?: string | null }>(c);
-  const ticket = await first<any>(c.env.DB, "SELECT id, productId, productModel, serialNumber FROM tickets WHERE id=?", c.req.param("id"));
-  if (!ticket) return c.json({ error: "Not found" }, 404);
-  let productId = ticket.productId;
-  if (d.productId !== undefined) {
-    const product = await first<{ id: string }>(c.env.DB, "SELECT id FROM products WHERE id=?", String(d.productId));
-    if (!product) return c.json({ error: "A valid product is required." }, 400);
-    productId = product.id;
-  }
-  const productModel = d.productModel === undefined ? ticket.productModel : String(d.productModel ?? "").trim().slice(0, 300) || null;
-  const serialNumber = d.serialNumber === undefined ? ticket.serialNumber : normalizeSerial(d.serialNumber).slice(0, 64) || null;
-  if (serialNumber && serialNumber !== ticket.serialNumber && !(await isKnownSerial(c.env.DB, serialNumber))) {
-    return c.json({ error: "That SN is not known to the system." }, 400);
-  }
-  await c.env.DB.prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
-    .bind(productId, productModel, serialNumber, ticket.id)
-    .run();
-  afterTicketChange(c, ticket.id, { kind: "product" });
+  const result = await setTicketProduct(c.env.DB, c.get("user"), c.req.param("id"), d);
+  afterTicketChange(c, c.req.param("id"), result.changes);
   return c.json({ ok: true });
 });
 
@@ -279,15 +248,14 @@ ticketRoutes.patch("/tickets/:id/product", async (c) => {
 ticketRoutes.patch("/tickets/:id/fault", async (c) => {
   const d = await body<{ faultType?: string }>(c);
   const confirmed = await confirmTicketFault(c.env.DB, c.get("user"), c.req.param("id"), String(d.faultType ?? ""));
-  const repeat = await repeatInfo(c.env.DB, confirmed.productId, confirmed.faultType, new Date());
-  afterTicketChange(c, c.req.param("id"), { kind: "fault", repeat: repeat?.isRepeat ? repeat : null });
-  return c.json({ ok: true, repeat });
+  afterTicketChange(c, c.req.param("id"), confirmed.changes);
+  return c.json({ ok: true, repeat: confirmed.repeat });
 });
 
 ticketRoutes.patch("/tickets/:id/status", async (c) => {
   const d = await body<{ status?: string }>(c);
   const change = await changeTicketStatus(c.env.DB, c.get("user"), c.req.param("id"), d.status as TicketStatus);
-  afterTicketChange(c, c.req.param("id"), { kind: "status", to: change.to });
+  afterTicketChange(c, c.req.param("id"), change.changes);
   return c.json({ ok: true });
 });
 
@@ -295,12 +263,12 @@ ticketRoutes.patch("/tickets/:id/status", async (c) => {
 // withAttachments the text may be empty; the files are uploaded next.
 ticketRoutes.post("/tickets/:id/notes", async (c) => {
   const d = await body<{ note?: string; parentId?: string; withAttachments?: boolean }>(c);
-  const updateId = await addTicketNote(c.env.DB, c.get("user"), c.req.param("id"), String(d.note ?? ""), {
+  const added = await addTicketNote(c.env.DB, c.get("user"), c.req.param("id"), String(d.note ?? ""), {
     parentId: d.parentId || null,
     withAttachments: Boolean(d.withAttachments)
   });
-  afterTicketChange(c, c.req.param("id"), { kind: "note" });
-  return c.json({ ok: true, id: updateId });
+  afterTicketChange(c, c.req.param("id"), added.changes);
+  return c.json({ ok: true, id: added.id });
 });
 
 // One file per request: the raw body, its content type, and the file name
@@ -350,15 +318,15 @@ ticketRoutes.get("/tickets/:id/attachments/:attachmentId", async (c) => {
 ticketRoutes.patch("/tickets/:id/assign", async (c) => {
   const d = await body<{ assignedSalesId?: string | null; assignedServiceId?: string | null }>(c);
   const result = await assignTicket(c.env.DB, c.get("user"), c.req.param("id"), d);
-  const newOwnerIds = [result.newServiceOwnerId, result.newSalesOwnerId].filter((v): v is string => Boolean(v) && v !== c.get("user").id);
-  if (result.changed) afterTicketChange(c, c.req.param("id"), { kind: "assigned", newOwnerIds });
+  afterTicketChange(c, c.req.param("id"), result.changes);
   return c.json({ ok: true });
 });
 
 // After-sales correct the customer, production order number and contact.
 ticketRoutes.patch("/tickets/:id/customer", async (c) => {
   const d = await body<{ customerCompany?: string; orderNo?: string; contactName?: string; contactInfo?: string }>(c);
-  if (await setTicketCustomer(c.env.DB, c.get("user"), c.req.param("id"), d)) afterTicketChange(c, c.req.param("id"), { kind: "product" });
+  const result = await setTicketCustomer(c.env.DB, c.get("user"), c.req.param("id"), d);
+  afterTicketChange(c, c.req.param("id"), result.changes);
   return c.json({ ok: true });
 });
 
@@ -367,6 +335,6 @@ ticketRoutes.patch("/tickets/:id/customer", async (c) => {
 ticketRoutes.patch("/tickets/:id/type", async (c) => {
   const d = await body<{ ticketType?: string; summary?: string }>(c);
   const result = await setTicketType(c.env.DB, c.get("user"), c.req.param("id"), d);
-  afterTicketChange(c, c.req.param("id"), { kind: "type", ticketType: result.ticketType, toPool: result.becameProductRequest });
+  afterTicketChange(c, c.req.param("id"), result.changes);
   return c.json({ ok: true });
 });

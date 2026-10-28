@@ -101,3 +101,21 @@ export function repeatWindowStart(now: Date, windowDays: number): string {
 export function isRepeatFault(count: number, settings: RepeatSettings): boolean {
   return count >= settings.threshold;
 }
+
+// How often this product has had this confirmed fault within the window.
+export async function repeatInfo(db: D1Database, productId: string | null, faultType: string | null, now: Date) {
+  if (!productId || !faultType) return null;
+  const settings = await loadRepeatSettings(db);
+  const since = repeatWindowStart(now, settings.windowDays);
+  const tickets =
+    (
+      await db
+        .prepare(
+          `SELECT id, ticketNo, createdAt, customerCompany, productModel, assignedSalesId FROM tickets
+           WHERE productId = ? AND faultType = ? AND createdAt >= ? ORDER BY createdAt DESC`
+        )
+        .bind(productId, faultType, since)
+        .all<{ id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null; assignedSalesId: string | null }>()
+    ).results ?? [];
+  return { count: tickets.length, windowDays: settings.windowDays, threshold: settings.threshold, isRepeat: isRepeatFault(tickets.length, settings), tickets };
+}

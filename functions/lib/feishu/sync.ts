@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { all, first } from "../db";
 import { enqueueOutbox, markOutbox, OUTBOX_MAX_ATTEMPTS } from "../outbox";
+import type { TicketChange } from "../ticketWorkflow";
 import type { Env } from "../types";
 import { handedOverCard, STATUS_TEXT, ticketCard, type TicketCardData } from "./cards";
 import { feishuTarget, linkedAdminTargets, type FeishuIds } from "./identity";
@@ -21,29 +22,25 @@ import { parsePoolUrl, poolRecordFields, POOL_URL_OPTION_KEY } from "./requireme
 //   managers' Bitable requirement pool.
 // Every push goes through the outbox, so a failed delivery is retried.
 
-export type TicketChange =
-  | { kind: "created" }
-  | { kind: "status"; to: string }
-  | { kind: "note" }
-  | { kind: "taken" }
-  | { kind: "product" }
-  | { kind: "fault"; repeat: { count: number; windowDays: number } | null }
-  | { kind: "type"; ticketType: string; toPool: boolean }
-  | { kind: "assigned"; newOwnerIds: string[] };
-
 type Payload = { channel: "feishu"; ticketId: string; change: TicketChange };
 
-// Called by routes after a ticket changed: queue the push and try it after the
-// response is sent. No-op unless the Feishu bot is configured.
-export function afterTicketChange(c: Context, ticketId: string, change: TicketChange) {
+// Called by routes after a ticket changed, with the changes the Ticket workflow
+// returned: queue the pushes and try them after the response is sent. No-op
+// unless the Feishu bot is configured.
+export function afterTicketChange(c: Context, ticketId: string, changes: TicketChange[]) {
   const env = c.env as Env;
-  if (!feishuEnabled(env)) return;
-  const task = pushTicketChange(env, ticketId, change).catch((error) => console.error("Feishu push failed", error));
+  if (!feishuEnabled(env) || !changes.length) return;
+  const task = pushTicketChanges(env, ticketId, changes).catch((error) => console.error("Feishu push failed", error));
   try {
     c.executionCtx.waitUntil(task);
   } catch {
     void task;
   }
+}
+
+// One push per change, in order.
+export async function pushTicketChanges(env: Env, ticketId: string, changes: TicketChange[]) {
+  for (const change of changes) await pushTicketChange(env, ticketId, change);
 }
 
 export async function pushTicketChange(env: Env, ticketId: string, change: TicketChange) {
