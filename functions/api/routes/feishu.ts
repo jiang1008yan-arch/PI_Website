@@ -452,7 +452,7 @@ feishuRoutes.post("/feishu/service-chat/test", async (c) => {
   const groupId = feishuEnabled(env) ? await serviceChatId(env) : null;
   if (!groupId) return c.json({ error: "No after-sales group is set." }, 400);
   try {
-    await sendText(env, "chat_id", groupId, `Test from the Sales Portal (sent by ${user.displayName}): this is the after-sales group for the weekly summary and alerts.`);
+    await sendText(env, "chat_id", groupId, `Test from the Business Portal (sent by ${user.displayName}): this is the after-sales group for the weekly summary and alerts.`);
     return c.json({ ok: true });
   } catch (error) {
     return c.json({ error: `Feishu refused: ${error instanceof Error ? error.message : String(error)}` }, 502);

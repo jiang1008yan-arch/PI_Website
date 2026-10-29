@@ -1,4 +1,4 @@
-# Sales Portal
+# Business Portal
 
 Internal Proforma Invoice web app for English and Chinese PI creation, admin approval, template management, and browser-side Excel export.
 

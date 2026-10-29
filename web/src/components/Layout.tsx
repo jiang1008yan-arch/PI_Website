@@ -26,7 +26,7 @@ export function Layout() {
               <Home size={20} />
             </NavLink>
             <div className="hidden sm:block">
-              <div className="font-semibold tracking-wide text-[#07183f]">Sales Portal</div>
+              <div className="font-semibold tracking-wide text-[#07183f]">Business Portal</div>
             </div>
           </div>
 

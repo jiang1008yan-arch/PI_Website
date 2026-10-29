@@ -75,7 +75,7 @@ export function LoginPage() {
         {finishing && <p className="text-sm text-[#63749b]">Signing you in with Feishu…</p>}
         {feishu.bind && (
           <div className="rounded-lg bg-[#eef4ff] p-3 text-sm text-[#294477]">
-            Link your Feishu account{feishu.name ? ` (${feishu.name})` : ""}: sign in once with your Sales Portal
+            Link your Feishu account{feishu.name ? ` (${feishu.name})` : ""}: sign in once with your Business Portal
             username and password. After that, Feishu signs you in automatically.
           </div>
         )}
