@@ -18,7 +18,7 @@ import {
   type NewTicket
 } from "../../lib/ticketWorkflow";
 import { afterTicketChange } from "../../lib/feishu/sync";
-import { feishuEnabled, listBotChats } from "../../lib/feishu/client";
+import { feishuEnabled, listBotChats, serviceChatId } from "../../lib/feishu/client";
 import { findSimilarTickets } from "../../lib/similarTickets";
 import { body, createApp } from "./_shared";
 
@@ -110,7 +110,7 @@ ticketRoutes.post("/tickets", async (c) => {
   const chatId = String(d.feishuSourceChatId ?? "").trim() || null;
   if (chatId) {
     const chats = feishuEnabled(c.env) ? await listBotChats(c.env).catch(() => []) : [];
-    if (chatId === c.env.FEISHU_SERVICE_CHAT_ID || !chats.some((ch) => ch.chatId === chatId)) {
+    if (chatId === (await serviceChatId(c.env)) || !chats.some((ch) => ch.chatId === chatId)) {
       return c.json({ error: "Choose a customer group the Feishu bot is in." }, 400);
     }
   }

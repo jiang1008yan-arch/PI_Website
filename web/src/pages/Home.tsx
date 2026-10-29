@@ -1,4 +1,4 @@
-import { Activity, Archive, BadgeCheck, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { Activity, Archive, BadgeCheck, BellRing, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -17,15 +17,17 @@ import type { Role } from "../types";
 
 type Tone = "blue" | "green" | "cyan" | "violet" | "orange" | "indigo" | "teal" | "emerald";
 
+// Solid gradient tiles with a white icon, the same style as the page headers
+// (PageHero in components/Form.tsx), so an entry looks like the page it opens.
 const toneClass: Record<Tone, string> = {
-  blue: "bg-[#e8f0ff] text-[#1d5fd0]",
-  green: "bg-[#e5f6ee] text-[#0b8a56]",
-  cyan: "bg-[#e3f5f9] text-[#147b91]",
-  violet: "bg-[#efe9ff] text-[#6330c8]",
-  orange: "bg-[#fff0e3] text-[#d2580a]",
-  indigo: "bg-[#eaedff] text-[#3044b6]",
-  teal: "bg-[#e3f6f5] text-[#0f7f80]",
-  emerald: "bg-[#e5f6eb] text-[#158044]"
+  blue: "bg-gradient-to-br from-[#3b7be8] to-[#0b4aa5] text-white shadow-md shadow-blue-900/15",
+  green: "bg-gradient-to-br from-[#25b577] to-[#078754] text-white shadow-md shadow-emerald-900/15",
+  cyan: "bg-gradient-to-br from-[#20a6c5] to-[#147b91] text-white shadow-md shadow-cyan-900/15",
+  violet: "bg-gradient-to-br from-[#8b5cf6] to-[#6330c8] text-white shadow-md shadow-violet-900/15",
+  orange: "bg-gradient-to-br from-[#fb923c] to-[#d95b0b] text-white shadow-md shadow-orange-900/15",
+  indigo: "bg-gradient-to-br from-[#6276ea] to-[#3044b6] text-white shadow-md shadow-indigo-900/15",
+  teal: "bg-gradient-to-br from-[#21b2b0] to-[#0f7f80] text-white shadow-md shadow-teal-900/15",
+  emerald: "bg-gradient-to-br from-[#2fb36c] to-[#158044] text-white shadow-md shadow-green-900/15"
 };
 
 type Attention = {
@@ -156,7 +158,7 @@ export function HomePage() {
             {attention.length === 0 ? "Pick where to continue." : waiting > 0 ? "Here is what is waiting for you." : "Nothing is waiting for you right now."}
           </p>
         </div>
-        <div className="text-sm text-[#8193b8]">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</div>
+        <div className="text-sm text-[#8193b8]">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</div>
       </div>
 
       {attention.length > 0 && (
@@ -227,7 +229,14 @@ function areasFor(role: Role | undefined): Area[] {
     entries: [
       { to: "/tickets", title: "Tickets", desc: "Service requests from Feishu and the team", Icon: LifeBuoy, tone: "teal" },
       { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange" },
-      lookup
+      lookup,
+      // After-sales settings live with after-sales, but the pages are admin-only.
+      ...(role === "ADMIN"
+        ? [
+            { to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Questions on the New ticket form", Icon: ClipboardList, tone: "blue" } as Entry,
+            { to: "/ticket-notifications", title: "Ticket Notifications", desc: "After-sales group and update reminders", Icon: BellRing, tone: "violet" } as Entry
+          ]
+        : [])
     ]
   };
   const admin: Area = {
@@ -237,7 +246,6 @@ function areasFor(role: Role | undefined): Area[] {
       { to: "/products", title: "Products", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo" },
       { to: "/permissions", title: "Users & Permissions", desc: "Accounts, roles and Feishu links", Icon: UsersRound, tone: "teal" },
       { to: "/excel-templates", title: "Excel Templates", desc: "PI header templates by language", Icon: LayoutGrid, tone: "emerald" },
-      { to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Questions on the New ticket form", Icon: ClipboardList, tone: "blue" },
       { to: "/requirement-pool", title: "Requirement Pool", desc: "Product requests to the Feishu table", Icon: Lightbulb, tone: "orange" }
     ]
   };

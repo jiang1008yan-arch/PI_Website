@@ -2,7 +2,7 @@ import { all, first, id, sqlTime } from "./db";
 import { effectiveHeader } from "./effectivePi";
 import { applyDeviceEvent, isOfflineAlertDue, type DeviceEvent, type DeviceRow } from "./deviceAlerts";
 import { deviceAlertCard, type DeviceAlertData } from "./feishu/cards";
-import { feishuEnabled, sendCard } from "./feishu/client";
+import { feishuEnabled, sendCard, serviceChatId } from "./feishu/client";
 import { openDeviceAlert } from "./feishu/ticketRequest";
 import type { Env } from "./types";
 
@@ -25,6 +25,9 @@ async function deviceContext(db: D1Database, serialNumber: string) {
 
 async function raiseAlert(env: Env, row: DeviceRow, kind: "FAULT" | "OFFLINE", now: Date) {
   if (!feishuEnabled(env)) return;
+  // Device alerts go to the after-sales group; without one there is nowhere to raise them.
+  const groupId = await serviceChatId(env);
+  if (!groupId) return;
   const ctx = await deviceContext(env.DB, row.serialNumber);
   const data: DeviceAlertData = {
     draftId: id("fdr"),
@@ -45,7 +48,7 @@ async function raiseAlert(env: Env, row: DeviceRow, kind: "FAULT" | "OFFLINE", n
   await openDeviceAlert(
     env.DB,
     { draftId: data.draftId, serialNumber: row.serialNumber, text },
-    () => sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, deviceAlertCard(data)),
+    () => sendCard(env, "chat_id", groupId, deviceAlertCard(data)),
     now
   );
 }

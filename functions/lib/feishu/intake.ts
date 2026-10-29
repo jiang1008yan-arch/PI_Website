@@ -8,7 +8,7 @@ import type { AppUser, Env } from "../types";
 import { loadUserAiConfig } from "../personalAiKey";
 import { addCard, bindCard, collectCard, collectedCounts, draftCard, type CardItem, type DraftPrefill } from "./cards";
 import { siteBase } from "./piBot/notifyPi";
-import { getMessageItems, listBotChats, messageContentToText, sendCard, sendText, updateCard } from "./client";
+import { getMessageItems, listBotChats, messageContentToText, sendCard, sendText, serviceChatId, updateCard } from "./client";
 import {
   addMaterials,
   compileDraftText,
@@ -115,7 +115,7 @@ export async function handleIncomingMessage(env: Env, event: any) {
   const position = String(Number(message.create_time) || now.getTime()).padStart(15, "0");
   const added = await addMaterials(env, draft.id, materials, position, now);
   // Forwarded from a group the bot is in: offered as the group to notify.
-  if (forwardChatId && forwardChatId !== env.FEISHU_SERVICE_CHAT_ID && !draft.suggestedChatId) {
+  if (forwardChatId && !draft.suggestedChatId && forwardChatId !== (await serviceChatId(env))) {
     await suggestChat(env.DB, draft.id, forwardChatId);
   }
 
@@ -241,10 +241,11 @@ export async function renderDraftForm(env: Env, draftId: string, cardMessageId: 
     customerCompany: typed.customerCompany || refs.device?.customerCompany || refs.order?.customerCompany || undefined
   };
 
+  const groupId = await serviceChatId(env);
   const chats = (await listBotChats(env).catch((error) => {
     console.error("Could not list the bot's groups", error);
     return [];
-  })).filter((ch) => ch.chatId !== env.FEISHU_SERVICE_CHAT_ID);
+  })).filter((ch) => ch.chatId !== groupId);
   if (!prefill.notifyChat) prefill.notifyChat = draft.suggestedChatId && chats.some((ch) => ch.chatId === draft!.suggestedChatId) ? draft.suggestedChatId : "none";
 
   const similar = await findSimilarTickets(

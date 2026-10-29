@@ -32,7 +32,10 @@ Set the same way: `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCR
 people save for themselves (see section 3). Keep it stable: if it changes, everyone has to enter their AI key again.
 Set `APP_BASE_URL` (e.g. `https://portal.example.com`) as a plain variable — links in bot messages use it.
 
-The bot only acts when `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_SERVICE_CHAT_ID` are all set.
+The bot acts once `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are set. The internal after-sales group is picked by an admin
+on **Home → After-Sales → Ticket Notifications** (from the groups the bot is in, with a **Send test message** button);
+`FEISHU_SERVICE_CHAT_ID` is only the fallback when nothing is picked there. Without a group the bot still works in private
+chats; the weekly summary, repeat-fault alerts and device alerts are skipped.
 
 Two more shared secrets (long random strings):
 - `CRON_SECRET` — lets the cron Worker run the scheduled jobs (next section).
@@ -88,7 +91,8 @@ tickets not updated for 24 hours, the Monday summary, and device offline alerts.
 - **The after-sales group gets:** a summary every Monday from 9:00 Beijing time (last week's new / resolved tickets, every open ticket
   by owner, overdue ones in red, repeat faults), repeat-fault alerts and device alerts. **Create ticket** on a device alert moves it
   into the presser's private chat with the bot as their open request (the group card says who took it).
-- **Reminders:** an owner whose open ticket has not been updated for 24 hours gets one private reminder a day listing such tickets.
+- **Reminders:** an owner whose open ticket has not been updated for the reminder interval (24 hours unless an admin changes it
+  under **Ticket Notifications → Update reminders**; 0 turns them off) gets one private reminder per interval listing such tickets.
 - **Requests expire:** a request nothing was added to for 6 hours turns grey; the next message starts a new one.
 - **Status on the ticket card:** New → In progress or straight to Resolved (fixed on the spot), In progress → Resolved,
   Resolved → Closed or back to In progress — the same rules as the portal. Resolving needs the type (and, for a fault, the

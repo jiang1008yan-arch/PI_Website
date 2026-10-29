@@ -16,6 +16,8 @@ export type Env = {
   FEISHU_APP_SECRET?: string;
   FEISHU_VERIFICATION_TOKEN?: string;
   FEISHU_ENCRYPT_KEY?: string;
+  // Fallback for the after-sales group an admin picks in the portal
+  // (appOptions feishuServiceChatId, functions/lib/feishu/client.ts serviceChatId).
   FEISHU_SERVICE_CHAT_ID?: string;
   // PI Assistant bot — a second self-built app for ZH PI approval cards
   // (functions/lib/feishu/piBot). Unset = that bot is off.

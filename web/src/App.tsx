@@ -20,6 +20,7 @@ import { ReviewPage } from "./pages/ReviewPage";
 import { TemplatesPage } from "./pages/Templates";
 import { TicketDetailPage } from "./pages/TicketDetail";
 import { TicketFieldsConfigPage } from "./pages/TicketFieldsConfig";
+import { TicketNotificationsPage } from "./pages/TicketNotificationsPage";
 import { TicketsPage } from "./pages/Tickets";
 
 export default function App() {
@@ -69,6 +70,7 @@ export default function App() {
             <Route path="/permissions" element={<PermissionsPage />} />
             <Route path="/excel-templates" element={<TemplatesPage />} />
             <Route path="/requirement-pool" element={<RequirementPoolPage />} />
+            <Route path="/ticket-notifications" element={<TicketNotificationsPage />} />
           </Route>
         </Route>
       </Route>
