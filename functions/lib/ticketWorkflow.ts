@@ -205,10 +205,11 @@ export async function createTicket(
   return { id: ticketId, ticketNo, initialNoteId, ownCard, changes };
 }
 
-// The type / fault type picked when a Feishu request becomes a ticket: a
-// non-fault type, else a fault type from the list (which makes it a fault),
-// else just the fault type. Written like setTicketType / confirmTicketFault.
-async function classifyNewTicket(db: D1Database, user: AppUser, ticketId: string, opts: FeishuCreateOptions) {
+// The type / fault type picked when a ticket is created (Feishu request or the
+// portal form): a non-fault type, else a fault type from the list (which makes
+// it a fault), else just "fault". A fault type not on the list skips the whole
+// pick, as if nothing was picked. Written like setTicketType / confirmTicketFault.
+async function classifyNewTicket(db: D1Database, user: AppUser, ticketId: string, opts: NewTicketClassification) {
   const none = { statements: [] as D1PreparedStatement[], toPool: false, faultType: null as string | null };
   if (!canConfirmFault(user)) return none;
   const ticketType = TICKET_TYPES.find((t) => t === opts.ticketType);

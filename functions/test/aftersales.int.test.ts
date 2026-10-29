@@ -111,9 +111,9 @@ describe("tickets and PIs", () => {
     const first = detail.updates.find((u: any) => u.kind === "NOTE" && !u.isSystem);
     expect(first).toMatchObject({ note: "Drops off Wi-Fi every night.", actorId: h.users.SERVICE.id });
 
-    // A fault type that is not on the list is skipped, as if not picked.
+    // A fault type that is not on the list skips the pick, as if nothing was picked (as on Feishu).
     const unknown = (await h.request("SERVICE", "GET", `/tickets/${(await create({ ticketType: "FAULT", faultType: "Made up" })).body.id}`)).body.ticket;
-    expect(unknown).toMatchObject({ ticketType: "FAULT", faultType: null });
+    expect(unknown).toMatchObject({ ticketType: null, faultType: null });
     // Nothing picked: not classified yet.
     const plain = (await h.request("SERVICE", "GET", `/tickets/${(await create({})).body.id}`)).body.ticket;
     expect(plain).toMatchObject({ ticketType: null, faultType: null });
