@@ -1,4 +1,4 @@
-import { all, first, id } from "../db";
+import { all, first, id, parseSqlTime, sqlTime } from "../db";
 import type { Env } from "../types";
 import { addExpiredCard, expiredDraftCard } from "./cards";
 import { downloadResource, updateCard } from "./client";
@@ -66,9 +66,6 @@ export type DraftItem = {
   position: string;
 };
 
-// SQLite's CURRENT_TIMESTAMP format, in UTC.
-const parseSqlTime = (value: string) => new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
-export const sqlTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
 
 // Device alerts stay open until someone acts on them.
 export function isDraftExpired(

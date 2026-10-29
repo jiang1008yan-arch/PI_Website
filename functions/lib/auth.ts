@@ -62,3 +62,11 @@ export async function verifyPurposeToken<T>(env: Env, purpose: string, token: st
   const { payload } = await jwtVerify(token, purposeKey(env, purpose));
   return payload as T;
 }
+
+// Compares a shared secret (a machine-to-machine token) in constant time.
+export function sameSecret(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}

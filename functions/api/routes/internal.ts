@@ -1,17 +1,11 @@
 import { runScheduledJobs } from "../../scheduled";
+import { sameSecret } from "../../lib/auth";
 import { createApp } from "./_shared";
 
 // Called by the cron Worker (workers/cron) every 30 minutes with the shared
 // CRON_SECRET; there is no portal login on this route.
 
 export const internalRoutes = createApp();
-
-function sameSecret(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
 
 internalRoutes.post("/internal/cron", async (c) => {
   const secret = c.env.CRON_SECRET;

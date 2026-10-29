@@ -1,3 +1,4 @@
+import { sqlTime } from "./lib/db";
 import { checkOfflineDevices } from "./lib/deviceMonitor";
 import { feishuEnabled } from "./lib/feishu/client";
 import { remindStaleOwners, sendWeeklySummaryIfDue } from "./lib/feishu/digest";
@@ -11,11 +12,6 @@ import type { Env } from "./lib/types";
 // and EN drafts paired with a ZH PI that has moved past its own draft.
 export const APPROVED_RETENTION_YEARS = 3;
 export const DRAFT_IDLE_DAYS = 3;
-
-// SQLite's datetime text format ("YYYY-MM-DD HH:MM:SS"), comparable as a string.
-function sqlTime(date: Date): string {
-  return date.toISOString().slice(0, 19).replace("T", " ");
-}
 
 export async function purgeExpired(db: D1Database, now: Date): Promise<void> {
   const draftCutoff = sqlTime(new Date(now.getTime() - DRAFT_IDLE_DAYS * 24 * 60 * 60 * 1000));

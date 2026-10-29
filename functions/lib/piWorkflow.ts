@@ -1,5 +1,5 @@
 import { parseFieldValues } from "../../shared/piItemCodec";
-import { id } from "./db";
+import { id, sqlTime } from "./db";
 import type { PiRow, PiStatus } from "./piAccess";
 import { piItemReplaceStatements, type PiItemInput } from "./piItems";
 
@@ -156,7 +156,7 @@ export function planReject(row: WidePiRow, payload: { note?: string } = {}): Tra
 // content the new effective version.
 export function planCommerceApprove(row: WidePiRow, now: Date): TransitionPlan {
   const revisionNo = workingRevision(row);
-  const piUpdate: PiUpdate = { status: "APPROVED", approvedAt: sqlTimestamp(now), rejectionNote: null };
+  const piUpdate: PiUpdate = { status: "APPROVED", approvedAt: sqlTime(now), rejectionNote: null };
   if (row.revisionInProgress) {
     Object.assign(piUpdate, { revisionNo, revisionInProgress: 0, revisionReason: null, effectiveSnapshot: null });
   }
@@ -243,9 +243,6 @@ function toItemInput(item: Record<string, unknown>): PiItemInput {
   };
 }
 
-function sqlTimestamp(now: Date): string {
-  return now.toISOString().slice(0, 19).replace("T", " ");
-}
 
 function sanitizeHeaderOverride(input: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

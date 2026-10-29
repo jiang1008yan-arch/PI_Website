@@ -1,4 +1,4 @@
-import { all, first } from "../db";
+import { all, first, parseSqlTime, sqlTime } from "../db";
 import { repeatSettings } from "../faultStats";
 import type { Env } from "../types";
 import { weeklySummaryCard, type WeeklySummary } from "./cards";
@@ -17,8 +17,6 @@ export const WEEKLY_SUMMARY_HOUR_BEIJING = 9; // Monday
 const WEEKLY_SENT_KEY = "weeklySummarySentFor";
 const HOUR = 60 * 60 * 1000;
 
-const sqlTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
-const parseSqlTime = (value: string) => new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
 
 export type StaleTicket = {
   id: string;

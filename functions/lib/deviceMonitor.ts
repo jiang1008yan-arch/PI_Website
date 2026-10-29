@@ -1,4 +1,4 @@
-import { all, first, id } from "./db";
+import { all, first, id, sqlTime } from "./db";
 import { effectiveHeader } from "./effectivePi";
 import { applyDeviceEvent, isOfflineAlertDue, type DeviceEvent, type DeviceRow } from "./deviceAlerts";
 import { deviceAlertCard, type DeviceAlertData } from "./feishu/cards";
@@ -10,8 +10,6 @@ import type { Env } from "./types";
 // latest state per SN kept, and alerts raised in the after-sales group as a
 // card with "创建工单" — whoever presses it creates (and owns) the ticket,
 // through the same request/form flow as a chat message.
-
-const sqlTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
 
 // What the system knows about an SN: the approved PI it is registered on.
 async function deviceContext(db: D1Database, serialNumber: string) {

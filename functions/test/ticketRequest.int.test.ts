@@ -9,9 +9,9 @@ import {
   openRequestFor,
   saveToTicket,
   setRequestCard,
-  sqlTime,
   type FeishuPerson
 } from "../lib/feishu/ticketRequest";
+import { sqlTime } from "../lib/db";
 import { createTicket } from "../lib/ticketWorkflow";
 import { createHarness, type Harness } from "./harness";
 

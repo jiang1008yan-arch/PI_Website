@@ -1,6 +1,7 @@
 import { MAX_EVENTS_PER_REQUEST, parseDeviceEvent, type DeviceEvent } from "../../lib/deviceAlerts";
 import { deviceMonitorView, ingestDeviceEvents } from "../../lib/deviceMonitor";
 import { canConfirmFault } from "../../lib/ticketAccess";
+import { sameSecret } from "../../lib/auth";
 import { createApp } from "./_shared";
 
 // Device status from the charger backend (machine to machine, shared token),
@@ -13,13 +14,6 @@ import { createApp } from "./_shared";
 // reply: { accepted, rejected: [{ index, error }], alerts }
 
 export const deviceRoutes = createApp();
-
-function sameSecret(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
 
 deviceRoutes.post("/devices/status", async (c) => {
   const secret = c.env.DEVICE_INGEST_SECRET;

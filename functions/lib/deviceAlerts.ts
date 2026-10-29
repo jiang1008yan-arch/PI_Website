@@ -6,6 +6,8 @@
 // - while an alert is open for an SN no second one is raised;
 // - back ONLINE closes the alert.
 
+import { parseSqlTime, sqlTime } from "./db";
+
 export const DEVICE_STATUSES = ["ONLINE", "OFFLINE", "FAULT"] as const;
 export type DeviceState = (typeof DEVICE_STATUSES)[number];
 export const OFFLINE_ALERT_HOURS = 2;
@@ -24,8 +26,6 @@ export type DeviceRow = {
   alertOpenedAt: string | null;
 };
 
-const sqlTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
-const parseSqlTime = (value: string) => new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
 const text = (v: unknown, max: number) => (typeof v === "string" || typeof v === "number" ? String(v).trim().slice(0, max) : "") || null;
 
 // Validates one pushed event; occurredAt accepts ISO 8601 (defaults to now).
