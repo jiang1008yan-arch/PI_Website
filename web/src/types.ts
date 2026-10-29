@@ -1,6 +1,6 @@
-export type Role = "ADMIN" | "SALES" | "SERVICE";
+export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE" | "PRESALES";
 export type Language = "EN" | "ZH";
-export type PiStatus = "DRAFT" | "PENDING_REVIEW" | "REJECTED" | "APPROVED" | "SUBMITTED";
+export type PiStatus = "DRAFT" | "PENDING_REVIEW" | "PENDING_COMMERCE" | "REJECTED" | "APPROVED" | "SUBMITTED";
 export type ProductStatus = "ACTIVE" | "DISCONTINUED";
 
 export type User = {
@@ -9,6 +9,9 @@ export type User = {
   displayName: string;
   role: Role;
   createdAt?: string;
+  // Admin list only: the Feishu mobile number and whether a Feishu account is linked.
+  mobile?: string | null;
+  feishuLinked?: number | boolean;
 };
 
 export type Category = {
@@ -39,21 +42,9 @@ export type ProductField = {
   mapKey?: string | null;
 };
 
-export type FieldValue = {
-  label: string;
-  value: string;
-  fieldType: string;
-  options?: string[];
-  sortOrder: number;
-};
-
-export type PiItem = {
-  productId: string;
-  quantity: number;
-  unitPrice: number;
-  discountPct: number;
-  fieldValues: FieldValue[];
-};
+// A line item's shape is shared with the server (shared/lineItem.ts).
+import type { FieldValue, PiItem } from "../../shared/lineItem";
+export type { FieldValue, PiItem };
 
 export type Pi = {
   id: string;
@@ -84,6 +75,8 @@ export type Pi = {
   otherRequirements?: string;
   rejectionNote?: string;
   assignedToId?: string | null;
+  // ZH: the commerce approver picked at submit (null = any commerce user).
+  commerceId?: string | null;
   submittedSnapshot?: string | null;
   createdById?: string;
   createdAt?: string;
@@ -93,6 +86,23 @@ export type Pi = {
   linkedPiNo?: string | null;
   linkedPiNoSnapshot?: string | null;
   linkedPiStatus?: string | null;
+  linkedPiRevisionInProgress?: number | null;
+  revisionNo?: number;
+  revisionInProgress?: number | boolean;
+  revisionReason?: string | null;
+  effectiveSnapshot?: string | null;
+  approvedAt?: string | null;
+  createdByName?: string | null;
+};
+
+export type PiReviewEvent = {
+  id: string;
+  action: "SUBMITTED" | "APPROVED" | "REJECTED" | "REVISION_STARTED" | "REVISION_ABANDONED";
+  step?: "PRESALES" | "COMMERCE" | null;
+  revisionNo?: number;
+  note?: string | null;
+  actorName?: string | null;
+  createdAt: string;
 };
 
 export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
@@ -125,8 +135,65 @@ export type Ticket = {
   assignedSalesName?: string | null;
   assignedServiceName?: string | null;
   linkId?: string | null;
+  productModel?: string | null;
+  serialNumber?: string | null;
+  faultType?: string | null;
+  faultConfirmedAt?: string | null;
+  ticketType?: TicketType | null;
+  summary?: string | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type TicketType = "FAULT" | "PRODUCT_REQUEST" | "OTHER";
+
+// An approved Chinese PI a ticket's production order number points at.
+export type MatchedPi = {
+  id: string;
+  piNo: string;
+  linkedPiNo?: string | null;
+  linkedPiNoSnapshot?: string | null;
+  customerCompany: string;
+  productionOrderNo?: string | null;
+  revisionNo?: number;
+  revisionInProgress?: number;
+};
+
+export type RepeatInfo = {
+  count: number;
+  windowDays: number;
+  threshold: number;
+  isRepeat: boolean;
+  tickets: { id: string; ticketNo: string; createdAt: string; customerCompany: string; productModel: string | null }[];
+};
+
+// Earlier tickets like one being created (functions/lib/similarTickets.ts).
+export type SimilarTickets = {
+  windowDays: number;
+  layers: {
+    key: "SN" | "ORDER" | "CUSTOMER" | "FAULT";
+    value: string;
+    total: number;
+    openDuplicate: boolean;
+    tickets: { id: string; ticketNo: string; createdAt: string; customerCompany: string; status: TicketStatus; summary: string | null }[];
+  }[];
+};
+
+export type FaultRanking = {
+  rows: {
+    productId: string | null;
+    productName: string;
+    productModel: string | null;
+    faultType: string;
+    n: number;
+    lastAt: string;
+    productTotal: number;
+    isRepeat: boolean;
+    tickets: { id: string; ticketNo: string; customerCompany: string; createdAt: string }[];
+  }[];
+  days: number | "all";
+  windowDays: number;
+  threshold: number;
 };
 
 export type TicketUpdate = {
@@ -138,28 +205,25 @@ export type TicketUpdate = {
   statusFrom?: string | null;
   statusTo?: string | null;
   note?: string | null;
+  // 1 for lines the system writes (type, owner, fault, customer changes).
+  isSystem?: number;
+  // A follow-up note belongs to the update it adds to.
+  parentId?: string | null;
   createdAt: string;
 };
 
-export type TicketLink = {
+export type TicketAttachment = {
   id: string;
-  token: string;
-  customerCompany: string;
-  orderNo: string;
-  createdById: string;
-  createdByRole: Role;
-  assignedSalesId?: string | null;
-  assignedServiceId?: string | null;
-  expiresAt: string;
-  revokedAt?: string | null;
+  updateId: string;
+  fileName: string;
+  contentType: string;
+  size: number;
   createdAt: string;
-  useCount?: number;
 };
 
 export type TicketStats = {
   byStatus: { status: string; n: number }[];
   byProduct: { productId: string; name: string; n: number }[];
-  problemType: { label: string; counts: Record<string, number> } | null;
 };
 
 export type PublicProduct = { id: string; code: string; nameEn: string; nameZh: string };

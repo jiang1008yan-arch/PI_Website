@@ -1,4 +1,5 @@
 import axios from "axios";
+import { clearSessionCache } from "../session/sessionCache";
 
 export const api = axios.create({ baseURL: "/api" });
 export const AUTH_LOGOUT_EVENT = "sales-portal:auth-logout";
@@ -29,6 +30,8 @@ export function clearStoredSession() {
   sessionStorage.removeItem("token");
   sessionStorage.removeItem("user");
   clearLegacySession();
+  // The lists this user saw are not left for whoever signs in next.
+  clearSessionCache();
   window.dispatchEvent(new Event(AUTH_LOGOUT_EVENT));
 }
 

@@ -4,7 +4,9 @@ import type { User } from "../types";
 
 type AuthContextValue = {
   user: User | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, feishuBindToken?: string) => Promise<void>;
+  // Adopt a session token issued by "Sign in with Feishu".
+  loginWithToken: (token: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -21,9 +23,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AuthContextValue>(() => ({
     user,
-    async login(username, password) {
-      const res = await api.post("/auth/login", { username, password });
+    async login(username, password, feishuBindToken) {
+      const res = await api.post("/auth/login", { username, password, feishuBindToken });
       storeSession(res.data.token, res.data.user);
+      setUser(res.data.user);
+    },
+    async loginWithToken(token) {
+      const res = await api.get("/auth/me", { headers: { authorization: `Bearer ${token}` } });
+      storeSession(token, res.data.user);
       setUser(res.data.user);
     },
     logout() {

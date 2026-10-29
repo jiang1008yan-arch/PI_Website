@@ -1,23 +1,36 @@
-import { FormEvent, useEffect, useState } from "react";
+import { KeyboardEvent, useEffect, useState } from "react";
 import { ChevronLeft, LifeBuoy } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
-import type { Ticket, TicketField, TicketStatus, TicketUpdate, User } from "../types";
-import { STATUS_BADGE, STATUS_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
+import { ErrorText, Field, PageHero, Section } from "../components/Form";
+import { LookupInput } from "../components/LookupInput";
+import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
+import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, formatDateTime } from "../tickets/ticketShared";
+import { nextStatuses, resolveBlocker, ticketCapabilities } from "../../../shared/ticketCapabilities";
+import { markSeen } from "../pi/notifications";
+import { TicketActivity } from "../tickets/TicketActivity";
+import { TicketEquipment } from "../tickets/TicketEquipment";
+import { TicketFault } from "../tickets/TicketFault";
 
-type Detail = { ticket: Ticket; updates: TicketUpdate[]; fields: TicketField[] };
+type Detail = {
+  ticket: Ticket;
+  updates: TicketUpdate[];
+  fields: TicketField[];
+  matchedPis: MatchedPi[];
+  device: { serialNumber: string; piId: string; piNo: string; linkedPiNo?: string | null; linkedPiNoSnapshot?: string | null } | null;
+  repeat: RepeatInfo | null;
+  attachments: TicketAttachment[];
+};
 
 export function TicketDetailPage() {
   const { id = "" } = useParams();
   const { user } = useAuth();
-  const canManage = user?.role === "ADMIN" || user?.role === "SERVICE";
-  const isAdmin = user?.role === "ADMIN";
+  // What this user may change, by section; the server enforces the same table.
+  const caps = ticketCapabilities(user?.role);
 
   const [data, setData] = useState<Detail | null>(null);
   const [users, setUsers] = useState<User[]>([]);
-  const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -25,6 +38,10 @@ export function TicketDetailPage() {
     const res = await api.get(`/tickets/${id}`);
     setData(res.data);
   }
+
+  useEffect(() => {
+    markSeen(["newTickets"], user?.id, [id]);
+  }, [id, user?.id]);
 
   useEffect(() => {
     load();
@@ -45,19 +62,16 @@ export function TicketDetailPage() {
     }
   }
 
-  async function addNote(e: FormEvent) {
-    e.preventDefault();
-    if (!note.trim()) return;
+  // Saves one customer/contact field edited in place.
+  async function saveCustomerField(field: "customerCompany" | "orderNo" | "contactName" | "contactInfo", value: string) {
     setError("");
-    setBusy(true);
     try {
-      await api.post(`/tickets/${id}/notes`, { note: note.trim() });
-      setNote("");
+      await api.patch(`/tickets/${id}/customer`, { [field]: value });
       await load();
+      return true;
     } catch (err: any) {
-      setError(err.response?.data?.error ?? "Could not add note.");
-    } finally {
-      setBusy(false);
+      setError(err.response?.data?.error ?? "Could not save.");
+      return false;
     }
   }
 
@@ -83,7 +97,10 @@ export function TicketDetailPage() {
   } catch {
     parsedAnswers = {};
   }
-  const transitions = TRANSITIONS[ticket.status] ?? [];
+  const transitions = nextStatuses(ticket.status);
+  // A ticket is classified (and a fault confirmed) before it can be resolved.
+  const blocker = resolveBlocker(ticket);
+  const resolveHint = blocker === "type" ? "Choose the ticket type before resolving." : blocker === "fault" ? "Confirm the fault type before resolving." : "";
   const salesUsers = users.filter((u) => u.role === "SALES" || u.role === "ADMIN");
   const serviceUsers = users.filter((u) => u.role === "SERVICE" || u.role === "ADMIN");
 
@@ -92,7 +109,7 @@ export function TicketDetailPage() {
       <PageHero
         eyebrow="After-sales"
         title={ticket.ticketNo}
-        description={`${ticket.customerCompany || "—"} · Order ${ticket.orderNo || "—"}`}
+        description={`${ticket.customerCompany || "—"} · Production Order No. ${ticket.orderNo || "—"}`}
         Icon={LifeBuoy}
         action={
           <Link
@@ -110,16 +127,18 @@ export function TicketDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <Section title="Customer & request">
+            {caps.confirmFault && <p className="-mt-2 mb-3 text-xs text-[#8595b6]">Double-click a value to change it. Enter saves, Esc cancels.</p>}
             <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Info label="Company" value={ticket.customerCompany} />
-              <Info label="Order number" value={ticket.orderNo} />
-              <Info label="Contact name" value={ticket.contactName} />
-              <Info label="Contact details" value={ticket.contactInfo} />
+              <EditableInfo label="Company" value={ticket.customerCompany} lookup="customer" canEdit={caps.confirmFault} maxLength={200} onSave={(v) => saveCustomerField("customerCompany", v)} />
+              <EditableInfo label="Production order no." value={ticket.orderNo} lookup="order" canEdit={caps.confirmFault} maxLength={100} onSave={(v) => saveCustomerField("orderNo", v)} />
+              <EditableInfo label="Contact name" value={ticket.contactName} canEdit={caps.confirmFault} maxLength={200} required onSave={(v) => saveCustomerField("contactName", v)} />
+              <EditableInfo label="Contact details" value={ticket.contactInfo} canEdit={caps.confirmFault} maxLength={200} required onSave={(v) => saveCustomerField("contactInfo", v)} />
             </dl>
+            <TicketEquipment ticket={ticket} matchedPis={data.matchedPis ?? []} device={data.device ?? null} canManage={caps.confirmFault} onChanged={load} />
             <div className="border-t pt-4">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Questionnaire</h3>
               <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Info label="Product" value={ticket.productNameEn ?? "—"} />
+                <Info label="Product (as reported)" value={ticket.productNameEn ?? "—"} />
                 {fields.map((f) => (
                   <Info key={f.id} label={f.label} value={parsedAnswers[f.id!] || "—"} />
                 ))}
@@ -127,49 +146,18 @@ export function TicketDetailPage() {
             </div>
           </Section>
 
-          <Section title="Activity">
-            {updates.length === 0 ? (
-              <EmptyState title="No activity yet" description="Status changes and notes will appear here." />
-            ) : (
-              <ol className="space-y-4">
-                {updates.map((u) => (
-                  <li key={u.id} className="border-l-2 border-[#e1e9f8] pl-4">
-                    <div className="text-xs text-[#8595b6]">
-                      {formatDateTime(u.createdAt)} · {u.actorName ?? "System"}
-                    </div>
-                    {u.kind === "STATUS" ? (
-                      <div className="text-sm text-[#294477]">
-                        Status changed{" "}
-                        <span className="font-medium">{STATUS_LABEL[(u.statusFrom as TicketStatus) ?? "NEW"]}</span> →{" "}
-                        <span className="font-medium">{STATUS_LABEL[(u.statusTo as TicketStatus) ?? "NEW"]}</span>
-                      </div>
-                    ) : (
-                      <div className="whitespace-pre-wrap text-sm text-[#07183f]">{u.note}</div>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            )}
+          <TicketActivity ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={caps.writeNote} onChanged={load} />
 
-            {canManage && (
-              <form onSubmit={addNote} className="border-t pt-4">
-                <Field label="Add a note">
-                  <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} maxLength={4000} />
-                </Field>
-                <button className="btn-primary mt-3" disabled={busy || !note.trim()}>
-                  Add note
-                </button>
-              </form>
-            )}
-          </Section>
         </div>
 
         <div className="space-y-6">
+          <TicketTypeSection ticket={ticket} repeat={data.repeat ?? null} canManage={caps.confirmFault} onChanged={load} />
+
           <Section title="Status">
             <div className={`inline-block rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE[ticket.status]}`}>
               {STATUS_LABEL[ticket.status]}
             </div>
-            {canManage ? (
+            {caps.changeStatus ? (
               transitions.length > 0 ? (
                 <div className="mt-4 space-y-2">
                   {transitions.map((to) => (
@@ -177,12 +165,14 @@ export function TicketDetailPage() {
                       key={to}
                       type="button"
                       className="btn-secondary w-full"
-                      disabled={busy}
+                      disabled={busy || (to === "RESOLVED" && Boolean(resolveHint))}
+                      title={to === "RESOLVED" ? resolveHint : undefined}
                       onClick={() => changeStatus(to)}
                     >
                       Move to {STATUS_LABEL[to]}
                     </button>
                   ))}
+                  {transitions.includes("RESOLVED") && resolveHint && <p className="text-xs text-amber-700">{resolveHint}</p>}
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-[#8595b6]">No further transitions.</p>
@@ -197,7 +187,7 @@ export function TicketDetailPage() {
               <AssigneeControl
                 label="Sales"
                 currentName={ticket.assignedSalesName}
-                canEdit={isAdmin || user?.role === "SALES"}
+                canEdit={caps.assignSales}
                 users={salesUsers}
                 currentId={ticket.assignedSalesId}
                 busy={busy}
@@ -206,7 +196,7 @@ export function TicketDetailPage() {
               <AssigneeControl
                 label="Service"
                 currentName={ticket.assignedServiceName}
-                canEdit={isAdmin || user?.role === "SERVICE"}
+                canEdit={caps.assignService}
                 users={serviceUsers}
                 currentId={ticket.assignedServiceId}
                 busy={busy}
@@ -226,6 +216,169 @@ export function TicketDetailPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// A value that turns into an input on double-click (with type-ahead for
+// company and production order); Enter or leaving the field saves, Esc cancels.
+function EditableInfo({
+  label,
+  value,
+  canEdit,
+  lookup,
+  maxLength,
+  required,
+  onSave
+}: {
+  label: string;
+  value?: string | null;
+  canEdit: boolean;
+  lookup?: "customer" | "order";
+  maxLength: number;
+  required?: boolean;
+  onSave: (value: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
+
+  function start() {
+    if (!canEdit) return;
+    setDraft(value ?? "");
+    setEditing(true);
+  }
+  async function commit() {
+    if (saving) return;
+    const next = draft.trim();
+    if (next === (value ?? "") || (required && !next)) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    const ok = await onSave(next);
+    setSaving(false);
+    if (ok) setEditing(false);
+  }
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // A suggestion list handles its own Enter (picking an item).
+    if (e.key === "Enter" && !e.defaultPrevented) {
+      e.preventDefault();
+      void commit();
+    } else if (e.key === "Escape") {
+      setEditing(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div>
+        <dt className="text-xs uppercase tracking-wide text-[#8595b6]">{label}</dt>
+        <dd
+          className={`-mx-1 mt-0.5 rounded px-1 text-sm text-[#07183f] ${canEdit ? "cursor-text hover:bg-[#f1f5ff]" : ""}`}
+          title={canEdit ? "Double-click to edit" : undefined}
+          onDoubleClick={start}
+        >
+          {value || "—"}
+        </dd>
+      </div>
+    );
+  }
+  return (
+    <div onKeyDown={onKeyDown} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && void commit()}>
+      <dt className="text-xs uppercase tracking-wide text-[#8595b6]">{label}</dt>
+      <dd className="mt-0.5">
+        {lookup ? (
+          <LookupInput
+            kind={lookup}
+            value={draft}
+            onChange={setDraft}
+            maxLength={maxLength}
+            disabled={saving}
+            autoFocus
+            placeholder={lookup === "order" ? "Type part of the order, PI no. or customer" : undefined}
+          />
+        ) : (
+          <input autoFocus className="w-full" value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={maxLength} disabled={saving} />
+        )}
+      </dd>
+    </div>
+  );
+}
+
+// What the ticket is about. Only faults count in fault statistics; product
+// requests also go to the product managers' requirement pool.
+function TicketTypeSection({
+  ticket,
+  repeat,
+  canManage,
+  onChanged
+}: {
+  ticket: Ticket;
+  repeat: RepeatInfo | null;
+  canManage: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  // Faults (and tickets not classified yet) carry the confirmed fault type.
+  const showFault = ticket.ticketType !== "PRODUCT_REQUEST" && ticket.ticketType !== "OTHER";
+  const [type, setType] = useState<TicketType | "">(ticket.ticketType ?? "");
+  const [summary, setSummary] = useState(ticket.summary ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setType(ticket.ticketType ?? "");
+    setSummary(ticket.summary ?? "");
+  }, [ticket.id, ticket.ticketType, ticket.summary]);
+
+  async function save() {
+    setError("");
+    setBusy(true);
+    try {
+      await api.patch(`/tickets/${ticket.id}/type`, { ticketType: type, summary });
+      await onChanged();
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? "Could not save the ticket type.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!canManage) {
+    return (
+      <Section title="Type">
+        <dl className="space-y-2 text-sm">
+          <Info label="Ticket type" value={ticket.ticketType ? TICKET_TYPE_LABEL[ticket.ticketType] : "Not classified yet"} />
+          <Info label="Summary" value={ticket.summary} />
+        </dl>
+        {showFault && <TicketFault ticket={ticket} repeat={repeat} canManage={false} onChanged={onChanged} />}
+      </Section>
+    );
+  }
+  const changed = type !== (ticket.ticketType ?? "") || summary.trim() !== (ticket.summary ?? "");
+  return (
+    <Section title="Type">
+      <div className="space-y-3">
+        <Field label="Ticket type">
+          <select value={type} onChange={(e) => setType(e.target.value as TicketType | "")}>
+            <option value="">Not classified yet</option>
+            {(Object.keys(TICKET_TYPE_LABEL) as TicketType[]).map((t) => (
+              <option key={t} value={t}>{TICKET_TYPE_LABEL[t]}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="One-line summary">
+          <input value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={300} placeholder="What the customer reports or asks for" />
+        </Field>
+        {type === "PRODUCT_REQUEST" && ticket.ticketType !== "PRODUCT_REQUEST" && (
+          <p className="text-xs text-[#63749b]">Saving sends this request to the product managers' requirement pool in Feishu.</p>
+        )}
+        {type && type !== "FAULT" && ticket.faultType && <p className="text-xs text-amber-700">The confirmed fault type will be cleared.</p>}
+        <button type="button" className="btn-secondary" disabled={busy || !type || !changed} onClick={save}>
+          Save type
+        </button>
+        {error && <div className="text-sm text-red-700">{error}</div>}
+        {showFault && <TicketFault ticket={ticket} repeat={repeat} canManage onChanged={onChanged} />}
+      </div>
+    </Section>
   );
 }
 

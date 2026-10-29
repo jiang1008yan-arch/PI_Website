@@ -1,5 +1,6 @@
 import { first } from "../../lib/db";
-import { hashPassword, signJwt, verifyPassword } from "../../lib/auth";
+import { hashPassword, signJwt, verifyPassword, verifyPurposeToken } from "../../lib/auth";
+import { FEISHU_BIND } from "./feishuAuth";
 import { body, createApp } from "./_shared";
 
 export const authRoutes = createApp();
@@ -11,10 +12,24 @@ export function passwordError(password: unknown): string | null {
 }
 
 authRoutes.post("/auth/login", async (c) => {
-  const data = await body<{ username: string; password: string }>(c);
+  const data = await body<{ username: string; password: string; feishuBindToken?: string }>(c);
   const row = await first<any>(c.env.DB, "SELECT * FROM users WHERE username = ?", data.username);
   if (!row || !(await verifyPassword(data.password, row.passwordHash))) {
     return c.json({ error: "Invalid username or password" }, 401);
+  }
+  // First "Sign in with Feishu": the password proves who this Feishu user is,
+  // so link the account; later Feishu sign-ins and PI Assistant card actions
+  // resolve to it.
+  if (data.feishuBindToken) {
+    let unionId: string;
+    try {
+      ({ unionId } = await verifyPurposeToken<{ unionId: string }>(c.env, FEISHU_BIND, data.feishuBindToken));
+    } catch {
+      return c.json({ error: "The Feishu link expired. Use Sign in with Feishu again." }, 400);
+    }
+    const taken = await first<{ id: string }>(c.env.DB, "SELECT id FROM users WHERE feishuUnionId = ? AND id <> ?", unionId, row.id);
+    if (taken) return c.json({ error: "This Feishu account is already linked to another user." }, 400);
+    await c.env.DB.prepare("UPDATE users SET feishuUnionId = ? WHERE id = ?").bind(unionId, row.id).run();
   }
   const user = { id: row.id, username: row.username, displayName: row.displayName, role: row.role };
   return c.json({ token: await signJwt(c.env, user), user });

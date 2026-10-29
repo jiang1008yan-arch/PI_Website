@@ -1,4 +1,4 @@
-import type { TicketStatus } from "../types";
+import type { TicketStatus, TicketType } from "../types";
 
 export const STATUS_ORDER: TicketStatus[] = ["NEW", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 
@@ -16,13 +16,8 @@ export const STATUS_BADGE: Record<TicketStatus, string> = {
   CLOSED: "bg-slate-100 text-slate-600"
 };
 
-// Mirrors functions/lib/ticketAccess.ts TRANSITIONS.
-export const TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
-  NEW: ["IN_PROGRESS"],
-  IN_PROGRESS: ["RESOLVED"],
-  RESOLVED: ["CLOSED", "IN_PROGRESS"],
-  CLOSED: []
-};
+// The same names the server and Feishu cards use.
+export { TICKET_TYPE_LABEL } from "../../../shared/ticketCapabilities";
 
 export function formatDateTime(value?: string | null): string {
   if (!value) return "—";

@@ -1,26 +1,23 @@
+import { ticketCapabilities } from "../../shared/ticketCapabilities";
 import type { AppUser } from "./types";
 
-export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+// Who may do what with tickets is the role table in shared/ticketCapabilities
+// (ADMIN and SERVICE work the tickets; SALES read the ones in their name;
+// COMMERCE and PRESALES have none). The server adds ownership here.
+export type { TicketStatus } from "../../shared/ticketCapabilities";
+export { isValidTransition } from "../../shared/ticketCapabilities";
 
-// 需求2 permission model:
-//   ADMIN    — full (view + status + notes + assign + generate links + config).
-//   SERVICE  — view all, change status, write notes, self-assign service side, generate links.
-//   SALES    — view all (read-only), generate links, self-assign sales side. No status/notes.
-export const canChangeStatus = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
-export const canWriteNote = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
-export const canGenerateLink = (user: AppUser) =>
-  user.role === "ADMIN" || user.role === "SERVICE" || user.role === "SALES";
-// Who may set each side of a ticket's assignment: ADMIN both, SALES the sales
-// side, SERVICE the service side.
-export const canAssignSalesSide = (user: AppUser) => user.role === "ADMIN" || user.role === "SALES";
-export const canAssignServiceSide = (user: AppUser) => user.role === "ADMIN" || user.role === "SERVICE";
+const may = (user: AppUser) => ticketCapabilities(user.role);
 
-const TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
-  NEW: ["IN_PROGRESS"],
-  IN_PROGRESS: ["RESOLVED"],
-  RESOLVED: ["CLOSED", "IN_PROGRESS"], // reopen allowed
-  CLOSED: []
-};
-
-export const isValidTransition = (from: TicketStatus, to: TicketStatus) =>
-  TRANSITIONS[from]?.includes(to) ?? false;
+export const canUseTickets = (user: AppUser) => may(user).use;
+export const canCreateTicket = (user: AppUser) => may(user).create;
+export const seesOnlyOwnTickets = (user: AppUser) => may(user).ownTicketsOnly;
+export const canReadTicket = (user: AppUser, ticket: { assignedSalesId: string | null }) =>
+  canUseTickets(user) && (!seesOnlyOwnTickets(user) || ticket.assignedSalesId === user.id);
+export const canConfirmFault = (user: AppUser) => may(user).confirmFault;
+export const canRegisterSn = (user: AppUser) => may(user).registerSn;
+export const canManageFaultTypes = (user: AppUser) => may(user).manageFaultTypes;
+export const canChangeStatus = (user: AppUser) => may(user).changeStatus;
+export const canWriteNote = (user: AppUser) => may(user).writeNote;
+export const canAssignSalesSide = (user: AppUser) => may(user).assignSales;
+export const canAssignServiceSide = (user: AppUser) => may(user).assignService;

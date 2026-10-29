@@ -76,3 +76,42 @@ export function isPiDirty(canonical: PiSnapshot | null, edits: PiSnapshot): bool
   }
   return computePiDiff(canonical, edits) !== null;
 }
+
+// What a revision changed relative to the effective (approved) version, for
+// highlighting. Frozen snapshot items carry no row ids (rows are rewritten on
+// every save), so items are compared by position: an index is "changed" when
+// the item there differs in product, numbers or field values, or did not exist
+// before. Header keys reuse the computePiDiff comparison.
+export type RevisionChanges = { header: Set<string>; items: Set<number> };
+
+export function revisionChanges(effective: PiSnapshot | null, current: PiSnapshot): RevisionChanges {
+  const changes: RevisionChanges = { header: new Set(), items: new Set() };
+  if (!effective) return changes;
+  const headerDiff = computePiDiff({ header: effective.header, items: [] }, { header: current.header, items: [] });
+  for (const key of Object.keys(headerDiff?.header ?? {})) changes.header.add(key);
+  current.items.forEach((item: any, i) => {
+    const before = effective.items[i] as any;
+    if (!before || !sameItem(before, item)) changes.items.add(i);
+  });
+  return changes;
+}
+
+function sameItem(a: any, b: any): boolean {
+  if (a.productId !== b.productId) return false;
+  for (const key of ITEM_NUMERIC_KEYS) if (Number(a[key]) !== Number(b[key])) return false;
+  return JSON.stringify(fieldValuePairs(a.fieldValues)) === JSON.stringify(fieldValuePairs(b.fieldValues));
+}
+
+// Field values are compared by label/value only — the editor hydrates option
+// lists and types onto them, which must not count as a change.
+function fieldValuePairs(raw: unknown): [string, string][] {
+  let list: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      list = [];
+    }
+  }
+  return Array.isArray(list) ? list.map((f: any) => [String(f?.label ?? ""), String(f?.value ?? "")]) : [];
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Home, KeyRound, LogOut } from "lucide-react";
+import { ChevronDown, Home, KeyRound, LogOut, Sparkles } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
@@ -49,6 +49,14 @@ export function Layout() {
                 >
                   <KeyRound size={16} />Change Password
                 </button>
+                {user?.role !== "COMMERCE" && (
+                  <button
+                    className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-[#294477] hover:bg-[#f1f5ff]"
+                    onClick={() => { setMenuOpen(false); navigate("/account/ai"); }}
+                  >
+                    <Sparkles size={16} />AI Assistant
+                  </button>
+                )}
                 <button
                   className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-[#294477] hover:bg-[#f1f5ff]"
                   onClick={() => { setMenuOpen(false); logout(); }}

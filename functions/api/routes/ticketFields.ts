@@ -7,7 +7,8 @@ export const ticketFieldRoutes = createApp();
 // ADMIN owns global config; SERVICE owns the after-sales workflow, so both may
 // edit the ticket questionnaire. SALES is read-only here.
 const canEditFields = (c: { get: (key: "user") => Parameters<typeof requireRole>[0] }) =>
-  requireRole(c.get("user"), ["ADMIN", "SERVICE"]);
+  // The questionnaire is admin configuration (moved out of the after-sales module).
+  requireRole(c.get("user"), ["ADMIN"]);
 
 // Any authenticated user can read the questionnaire config (the editor needs it;
 // the public form reads it through the whitelisted public route instead).

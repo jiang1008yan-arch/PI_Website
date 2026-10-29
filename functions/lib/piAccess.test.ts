@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  canAbandonRevision,
   canApprovePi,
+  canCommerceDecide,
   canDeletePi,
   canExportPi,
   canPatchPi,
   canReadPi,
   canRejectPi,
   canSubmitForReview,
+  canStartRevision,
   canSubmitPi,
+  canViewPi,
   isReviewerEditMode,
   type PiRow,
   type PiStatus,
@@ -18,6 +22,8 @@ import type { AppUser, Language } from "./types";
 const ADMIN: AppUser = { id: "admin-1", username: "admin", displayName: "Admin", role: "ADMIN" };
 const OWNER: AppUser = { id: "user-1", username: "alice", displayName: "Alice", role: "SALES" };
 const STRANGER: AppUser = { id: "user-2", username: "bob", displayName: "Bob", role: "SALES" };
+const COMMERCE: AppUser = { id: "biz-1", username: "biz", displayName: "Biz", role: "COMMERCE" };
+const SERVICE: AppUser = { id: "svc-1", username: "svc", displayName: "Svc", role: "SERVICE" };
 
 const pi = (overrides: Partial<PiRow> = {}): PiRow => ({
   id: "pi-1",
@@ -27,7 +33,7 @@ const pi = (overrides: Partial<PiRow> = {}): PiRow => ({
   ...overrides
 });
 
-const STATUSES: PiStatus[] = ["DRAFT", "SUBMITTED", "PENDING_REVIEW", "APPROVED", "REJECTED"];
+const STATUSES: PiStatus[] = ["DRAFT", "SUBMITTED", "PENDING_REVIEW", "PENDING_COMMERCE", "APPROVED", "REJECTED"];
 const LANGUAGES: Language[] = ["EN", "ZH"];
 
 const expectAllowed = (v: Verdict) => expect(v).toEqual({ allowed: true });
@@ -94,8 +100,8 @@ describe("canPatchPi", () => {
     expectDenied(canPatchPi(ADMIN, pi({ language: "ZH", status: "PENDING_REVIEW" })), 400);
     expectDenied(canPatchPi(OWNER, pi({ language: "ZH", status: "PENDING_REVIEW" })), 400);
   });
-  it("ZH SUBMITTED/APPROVED is locked", () => {
-    for (const status of ["SUBMITTED", "APPROVED"] as PiStatus[]) {
+  it("ZH SUBMITTED/PENDING_COMMERCE/APPROVED is locked", () => {
+    for (const status of ["SUBMITTED", "PENDING_COMMERCE", "APPROVED"] as PiStatus[]) {
       expectDenied(canPatchPi(OWNER, pi({ language: "ZH", status })), 400);
       expectDenied(canPatchPi(ADMIN, pi({ language: "ZH", status })), 400);
     }
@@ -154,6 +160,28 @@ describe("canExportPi", () => {
       expectDenied(canExportPi(ADMIN, pi({ language: "ZH", status })), 403);
     }
   });
+  it("ZH: commerce can export while deciding and once approved", () => {
+    expectAllowed(canExportPi(COMMERCE, pi({ language: "ZH", status: "PENDING_COMMERCE" })));
+    expectAllowed(canExportPi(COMMERCE, pi({ language: "ZH", status: "APPROVED" })));
+    expectDenied(canExportPi(COMMERCE, pi({ language: "ZH", status: "PENDING_REVIEW" })), 403);
+  });
+  it("ZH effective version: exportable while a revision is in progress", () => {
+    const revising = pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 });
+    expectAllowed(canExportPi(ADMIN, revising, "effective"));
+    expectAllowed(canExportPi(COMMERCE, revising, "effective"));
+    expectDenied(canExportPi(ADMIN, revising, "current"), 403);
+    expectDenied(canExportPi(ADMIN, pi({ language: "ZH", status: "DRAFT" }), "effective"), 403);
+  });
+  it("after-sales can never export", () => {
+    expectDenied(canExportPi(SERVICE, pi({ language: "ZH", status: "APPROVED" })), 403);
+    expectDenied(canExportPi(SERVICE, pi({ language: "EN", createdById: SERVICE.id })), 403);
+  });
+  it("EN: commerce can export only when the linked ZH PI is visible to commerce", () => {
+    expectAllowed(canExportPi(COMMERCE, pi({ language: "EN", linkedZh: { status: "PENDING_COMMERCE" } })));
+    expectAllowed(canExportPi(COMMERCE, pi({ language: "EN", linkedZh: { status: "APPROVED" } })));
+    expectDenied(canExportPi(COMMERCE, pi({ language: "EN", linkedZh: { status: "DRAFT" } })), 403);
+    expectDenied(canExportPi(COMMERCE, pi({ language: "EN" })), 403);
+  });
   it("EN: owner and admin can export, stranger forbidden", () => {
     for (const status of STATUSES) {
       expectAllowed(canExportPi(OWNER, pi({ language: "EN", status })));
@@ -177,5 +205,81 @@ describe("isReviewerEditMode", () => {
     for (const status of STATUSES.filter((s) => s !== "PENDING_REVIEW")) {
       expect(isReviewerEditMode(ADMIN, pi({ language: "ZH", status }))).toBe(false);
     }
+  });
+});
+
+describe("EN follows its approved ZH PI's lock", () => {
+  const lockedEn = pi({ language: "EN", status: "SUBMITTED", linkedZh: { status: "APPROVED" } });
+  it("cannot be patched or deleted, even by its owner or an admin", () => {
+    expectDenied(canPatchPi(OWNER, lockedEn), 400);
+    expectDenied(canPatchPi(ADMIN, lockedEn), 400);
+    expectDenied(canDeletePi(OWNER, lockedEn), 400);
+  });
+  it("is writable again while its ZH PI is being revised or reviewed", () => {
+    for (const status of ["DRAFT", "PENDING_REVIEW", "PENDING_COMMERCE", "REJECTED"] as PiStatus[]) {
+      expectAllowed(canPatchPi(OWNER, pi({ language: "EN", linkedZh: { status, revisionInProgress: 1 } })));
+    }
+  });
+});
+
+describe("canViewPi (read-only detail page)", () => {
+  it("is ZH-only", () => {
+    expectDenied(canViewPi(ADMIN, pi({ language: "EN" })), 404);
+  });
+  it("admin sees any ZH PI; sales sees own or received ones", () => {
+    for (const status of STATUSES) expectAllowed(canViewPi(ADMIN, pi({ language: "ZH", status })));
+    expectAllowed(canViewPi(OWNER, pi({ language: "ZH" })));
+    expectAllowed(canViewPi(STRANGER, pi({ language: "ZH", assignedToId: STRANGER.id })));
+    expectDenied(canViewPi(STRANGER, pi({ language: "ZH" })), 403);
+  });
+  it("commerce sees PIs awaiting them and approved ones", () => {
+    expectAllowed(canViewPi(COMMERCE, pi({ language: "ZH", status: "PENDING_COMMERCE" })));
+    expectAllowed(canViewPi(COMMERCE, pi({ language: "ZH", status: "APPROVED" })));
+    expectAllowed(canViewPi(COMMERCE, pi({ language: "ZH", status: "PENDING_REVIEW", revisionInProgress: 1 })));
+    for (const status of ["DRAFT", "PENDING_REVIEW", "REJECTED"] as PiStatus[]) {
+      expectDenied(canViewPi(COMMERCE, pi({ language: "ZH", status })), 403);
+    }
+  });
+  it("after-sales open PIs that have an effective version (in full, read-only)", () => {
+    expectAllowed(canViewPi(SERVICE, pi({ language: "ZH", status: "APPROVED" })));
+    expectAllowed(canViewPi(SERVICE, pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 })));
+    expectDenied(canViewPi(SERVICE, pi({ language: "ZH", status: "PENDING_COMMERCE" })), 403);
+  });
+});
+
+describe("canCommerceDecide", () => {
+  it("only commerce, only on PENDING_COMMERCE; an admin can never give commerce approval", () => {
+    expectAllowed(canCommerceDecide(COMMERCE, pi({ language: "ZH", status: "PENDING_COMMERCE" })));
+    expectAllowed(canCommerceDecide(ADMIN, pi({ language: "ZH", status: "PENDING_COMMERCE" })));
+    expectAllowed(canCommerceDecide(ADMIN, pi({ language: "ZH", status: "PENDING_COMMERCE", commerceId: "someone-else" })));
+    expectDenied(canCommerceDecide(OWNER, pi({ language: "ZH", status: "PENDING_COMMERCE" })), 403);
+    for (const status of STATUSES.filter((s) => s !== "PENDING_COMMERCE")) {
+      expectDenied(canCommerceDecide(COMMERCE, pi({ language: "ZH", status })), 400);
+    }
+  });
+  it("commerce cannot do presales confirmation", () => {
+    expectDenied(canApprovePi(COMMERCE, pi({ language: "ZH", status: "PENDING_REVIEW" })), 403);
+  });
+});
+
+describe("revisions", () => {
+  it("owner or admin may start one on an approved ZH PI without a revision in progress", () => {
+    expectAllowed(canStartRevision(OWNER, pi({ language: "ZH", status: "APPROVED" })));
+    expectAllowed(canStartRevision(ADMIN, pi({ language: "ZH", status: "APPROVED" })));
+    expectDenied(canStartRevision(STRANGER, pi({ language: "ZH", status: "APPROVED" })), 403);
+    expectDenied(canStartRevision(COMMERCE, pi({ language: "ZH", status: "APPROVED" })), 403);
+    expectDenied(canStartRevision(OWNER, pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 })), 400);
+    expectDenied(canStartRevision(OWNER, pi({ language: "ZH", status: "PENDING_COMMERCE" })), 400);
+    expectDenied(canStartRevision(OWNER, pi({ language: "EN", status: "SUBMITTED" })), 404);
+  });
+  it("can be abandoned only while editable", () => {
+    expectAllowed(canAbandonRevision(OWNER, pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 })));
+    expectAllowed(canAbandonRevision(OWNER, pi({ language: "ZH", status: "REJECTED", revisionInProgress: 1 })));
+    expectDenied(canAbandonRevision(OWNER, pi({ language: "ZH", status: "PENDING_REVIEW", revisionInProgress: 1 })), 400);
+    expectDenied(canAbandonRevision(OWNER, pi({ language: "ZH", status: "DRAFT" })), 400);
+    expectDenied(canAbandonRevision(STRANGER, pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 })), 403);
+  });
+  it("a revision draft cannot be deleted", () => {
+    expectDenied(canDeletePi(OWNER, pi({ language: "ZH", status: "DRAFT", revisionInProgress: 1 })), 400);
   });
 });

@@ -94,6 +94,28 @@ describe("buildLinkedZhItems", () => {
     expect(field(items[0].fieldValues, "\u578b\u53f7")).toBe("ABC");
     expect(field(items[0].fieldValues, "Color")).toBe("Blue-ZH");
   });
+
+  // Pinned field by field (labels, values, sortOrder): the order of the Model
+  // rows in the Excel export depends on it.
+  it("seeds exactly these fields, in this order", async () => {
+    const items = await buildLinkedZhItems(fakeDb(), [{ productId: "prod-1", fieldValues: [] }]);
+    const rule = {
+      enabled: true,
+      prefix: "",
+      prefixOptions: [{ code: "ABC", description: "Alpha" }],
+      separator: "-",
+      segments: [{ id: "size", label: "Size", options: [{ code: "S", description: "Small" }] }]
+    };
+    expect(items[0].fieldValues).toEqual([
+      { label: "__modelRule", value: JSON.stringify(rule), fieldType: "TEXT", sortOrder: -10 },
+      { label: "__modelPrefix", value: "ABC", fieldType: "TEXT", sortOrder: -10 },
+      { label: "__modelSegment:size", value: "", fieldType: "TEXT", sortOrder: -9 },
+      { label: "型号", value: "ABC", fieldType: "TEXT", sortOrder: -5 },
+      { label: "Model Lines", value: "ABC", fieldType: "TEXT", sortOrder: -4 },
+      { label: "订货号释义", value: "", fieldType: "TEXT", sortOrder: -3 },
+      { label: "Color", value: "", fieldType: "DROPDOWN", options: ["Red-ZH", "Blue-ZH"], sortOrder: 1 }
+    ]);
+  });
 });
 
 function field(fields: Array<{ label: string; value: string }>, label: string) {

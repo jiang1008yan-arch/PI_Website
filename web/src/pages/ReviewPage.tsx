@@ -20,7 +20,7 @@ export function ReviewPage() {
   return (
     <div className="space-y-6">
       <PageHero eyebrow="Review queue" title="Pending Reviews" Icon={Clock3} />
-      <Section title="Pending Chinese PI Reviews">
+      <Section title="Waiting for presales confirmation">
         {queue.length === 0 ? (
           <EmptyState title="No pending reviews" description="When a Chinese PI is sent to you, it will appear here for approval or rejection." />
         ) : (
@@ -30,6 +30,9 @@ export function ReviewPage() {
               // can edit the order and then Confirm or Reject it (需求3).
               <Link key={p.id} to={`/pi/zh?piId=${p.id}`} className="choice-card">
                 {p.productionOrderNo || p.piNo}
+                {Boolean(p.revisionInProgress) && (
+                  <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">Revision</span>
+                )}
                 <br />
                 <span className="text-xs text-slate-500">{p.customerCompany} - from {p.createdByName}</span>
               </Link>

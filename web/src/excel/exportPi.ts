@@ -1,8 +1,8 @@
 import ExcelJS from "exceljs";
 import { api, getStoredToken } from "../api/client";
-import { parsePiItems } from "../pi/piItemCodec";
-import { getMetaValue } from "../pi/lineItemFields";
-import { generatedModelFor } from "../pi/modelRule";
+import { parsePiItems } from "../../../shared/piItemCodec";
+import { getMetaValue } from "../../../shared/lineItemFields";
+import { generatedModelFor } from "../../../shared/modelRule";
 import {
   currencyFormat,
   ExportBundle,
@@ -16,8 +16,10 @@ import {
 
 const TEMPLATE_FETCH_TIMEOUT_MS = 30000;
 
-export async function exportPi(id: string) {
-  const { data: raw } = await api.get<ExportBundle>(`/pi/${id}/export-bundle`);
+// `effective` exports the approved version (the frozen snapshot while a
+// revision is in progress); `current` exports the live PI row.
+export async function exportPi(id: string, version: "current" | "effective" = "current") {
+  const { data: raw } = await api.get<ExportBundle>(`/pi/${id}/export-bundle?version=${version}`);
   const data: ExportBundle = { ...raw, items: parsePiItems(raw.items) };
   const workbook = data.excelTemplateUrl
     ? await loadWorkbook(data.excelTemplateUrl, "PI header template")
