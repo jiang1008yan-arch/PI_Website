@@ -170,12 +170,12 @@ site shares the production database), run the portal locally and expose it with 
 the local database is touched — but anyone with the tunnel address can reach the local portal while it runs.
 
 1. Install the tunnel tool once: `winget install --id Cloudflare.cloudflared`.
-2. Local portal with test data: `npm run db:migrate:local`, `node scripts/seed-local-dev.mjs`, `npm run build`, `npm run dev:api` (port 8788).
+2. Local portal with test data: `npm run db:migrate:local`, `node scripts/seed-local-dev.mjs`, `npm run build`, `npm run dev` (port 8788).
 3. In another terminal: `cloudflared tunnel --url http://localhost:8788` — it prints an `https://….trycloudflare.com` address.
    The address changes every time you restart it; update `APP_BASE_URL` and both Feishu URLs when it does.
 4. Create the Feishu app (section 1, steps 1–2; the external-sharing step can wait — test with internal groups).
    Under **Events & callbacks → Encryption**, generate an Encrypt Key and note the Verification Token.
-5. Put the values into `.dev.vars` (never committed) and restart `npm run dev:api`:
+5. Put the values into `.dev.vars` (never committed) and restart `npm run dev`:
    ```
    FEISHU_APP_ID=cli_...
    FEISHU_APP_SECRET=...
@@ -204,7 +204,7 @@ the local database is touched — but anyone with the tunnel address can reach t
      should get only the "resolved" message. Changing the status in the portal should update the card too.
 9. If a card button shows an error code, see the code table in Feishu's
    [card callback docs](https://open.feishu.cn/document/feishu-cards/card-callback-communication) (e.g. 200671 = server error,
-   200673 = bad card JSON) and check the `npm run dev:api` terminal output.
+   200673 = bad card JSON) and check the `npm run dev` terminal output.
 
 ## 4a. The PI Assistant bot (ZH PI approvals)
 
