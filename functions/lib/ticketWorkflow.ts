@@ -1,5 +1,6 @@
 import { all, first, id } from "./db";
 import { TICKET_TYPES, type TicketType } from "./aiTriage";
+import { resolveBlocker } from "../../shared/ticketCapabilities";
 import { canAssignSalesSide, canAssignServiceSide, canChangeStatus, canConfirmFault, canWriteNote, isValidTransition, type TicketStatus } from "./ticketAccess";
 import { validateAnswers, type TicketFieldRow } from "./ticketAnswers";
 import { nextTicketNumber } from "./ticketNumber";
@@ -244,9 +245,9 @@ async function statusStatements(db: D1Database, user: AppUser, ticketId: string,
   );
   if (!ticket) throw new TicketError("Not found", 404);
   if (!isValidTransition(ticket.status, to)) throw new TicketError(`Cannot move from ${ticket.status} to ${to}`, 400);
-  // Statistics depend on every resolved ticket being classified.
-  if (to === "RESOLVED" && !ticket.ticketType) throw new TicketError("Choose the ticket type before resolving it.", 400);
-  if (to === "RESOLVED" && ticket.ticketType === "FAULT" && !ticket.faultType) throw new TicketError("Confirm the fault type before resolving it.", 400);
+  const blocker = to === "RESOLVED" ? resolveBlocker(ticket) : null;
+  if (blocker === "type") throw new TicketError("Choose the ticket type before resolving it.", 400);
+  if (blocker === "fault") throw new TicketError("Confirm the fault type before resolving it.", 400);
   const statements = [
     db.prepare("UPDATE tickets SET status=?, updatedAt=CURRENT_TIMESTAMP WHERE id=? AND status=?").bind(to, ticket.id, ticket.status),
     // workflowGuard has CHECK (ok = 1): no row matched → the batch rolls back.

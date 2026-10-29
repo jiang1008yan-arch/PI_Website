@@ -22,14 +22,6 @@ export const TICKET_TYPE_LABEL: Record<TicketType, string> = {
   OTHER: "Question / other"
 };
 
-// Mirrors functions/lib/ticketAccess.ts TRANSITIONS.
-export const TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
-  NEW: ["IN_PROGRESS", "RESOLVED"],
-  IN_PROGRESS: ["RESOLVED"],
-  RESOLVED: ["CLOSED", "IN_PROGRESS"],
-  CLOSED: []
-};
-
 export function formatDateTime(value?: string | null): string {
   if (!value) return "—";
   const d = new Date(value.includes("T") ? value : value.replace(" ", "T") + "Z");

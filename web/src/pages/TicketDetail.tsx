@@ -6,7 +6,8 @@ import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
 import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
-import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, TRANSITIONS, formatDateTime } from "../tickets/ticketShared";
+import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, formatDateTime } from "../tickets/ticketShared";
+import { nextStatuses } from "../../../shared/ticketCapabilities";
 import { markSeen } from "../pi/notifications";
 import { TicketActivity } from "../tickets/TicketActivity";
 import { TicketEquipment } from "../tickets/TicketEquipment";
@@ -96,7 +97,7 @@ export function TicketDetailPage() {
   } catch {
     parsedAnswers = {};
   }
-  const transitions = TRANSITIONS[ticket.status] ?? [];
+  const transitions = nextStatuses(ticket.status);
   // A ticket is classified (and a fault confirmed) before it can be resolved.
   const resolveBlocker = !ticket.ticketType
     ? "Choose the ticket type before resolving."

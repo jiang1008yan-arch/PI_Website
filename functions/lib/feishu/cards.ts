@@ -1,3 +1,5 @@
+import { nextStatuses } from "../../../shared/ticketCapabilities";
+
 // Feishu card JSON 2.0 builders (pure). Cards are sent with update_multi so a
 // ticket's single card can be refreshed in place for everyone in the group.
 
@@ -24,14 +26,6 @@ export const STATUS_TEXT: Record<TicketCardData["status"], string> = {
   IN_PROGRESS: "In progress",
   RESOLVED: "Resolved",
   CLOSED: "Closed"
-};
-
-// Next statuses offered on the card — the same transitions as the portal.
-const NEXT: Record<TicketCardData["status"], TicketCardData["status"][]> = {
-  NEW: ["IN_PROGRESS", "RESOLVED"],
-  IN_PROGRESS: ["RESOLVED"],
-  RESOLVED: ["CLOSED", "IN_PROGRESS"],
-  CLOSED: []
 };
 
 export const TYPE_TEXT: Record<string, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
@@ -67,7 +61,8 @@ export function ticketCard(t: TicketCardData, portalUrl: string | null) {
   if (t.repeat) elements.push(md(`**Repeat fault:** ${t.repeat.count} times on this product in ${t.repeat.windowDays} days`));
   // Whoever created the ticket usually owns it already; Take is for unowned ones.
   if (!t.serviceName && t.status !== "CLOSED") elements.push(callbackButton("Take", { action: "take", ticketId: t.id }, { type: "primary" }));
-  const next = NEXT[t.status];
+  // The statuses offered are the same transitions as the portal.
+  const next = nextStatuses(t.status);
   if (t.status !== "CLOSED") {
     elements.push({
       tag: "form",
