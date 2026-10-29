@@ -12,7 +12,7 @@ Sales 首页直接出现 After-Sales 模块，和销售的工作不对应。另�
    数量为 0 时显示灰色 "All clear"。
    - ADMIN：Pending Reviews、Commerce Queue、New Tickets、Newly Approved PIs
    - SALES：Newly Approved PIs；**只有当名下有未完结工单时**才出现 "Customer Tickets（N open）"
-   - PRESALES：Pending Reviews；COMMERCE：Pending Commerce Approval；SERVICE：New Tickets
+   - PRESALES：Pending Reviews（只算指派给自己的）；COMMERCE：Commerce Approval；SERVICE：New Tickets
 2. **Workspaces（入口）**：按业务区分成紧凑的列表面板（Sales / After-Sales / Administration / Commerce / Presales），
    每行一个图标 + 标题 + 一句说明；Administration 面板补上 Ticket Questionnaire 入口。
 3. **SALES 不再有 After-Sales 模块和 Fault Analytics 入口**。路由权限不变：飞书私信里的工单链接照常能打开；

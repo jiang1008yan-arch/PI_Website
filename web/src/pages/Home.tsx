@@ -184,7 +184,7 @@ export function HomePage() {
 
 function attentionFor(role: Role | undefined, totals: Totals, fresh: Record<BadgeCategory, number>): Attention[] {
   const reviews: Attention = { to: "/reviews", title: "Pending Reviews", Icon: Clock3, tone: "orange", total: totals.reviews, fresh: fresh.pendingReviews, unit: "waiting" };
-  const commerce: Attention = { to: "/commerce", title: role === "COMMERCE" ? "Pending Commerce Approval" : "Commerce Queue", Icon: BadgeCheck, tone: "violet", total: totals.commerce, fresh: fresh.pendingCommerce, unit: "waiting" };
+  const commerce: Attention = { to: "/commerce", title: role === "COMMERCE" ? "Commerce Approval" : "Commerce Queue", Icon: BadgeCheck, tone: "violet", total: totals.commerce, fresh: fresh.pendingCommerce, unit: "waiting" };
   const tickets: Attention = { to: "/tickets", title: "New Tickets", Icon: LifeBuoy, tone: "teal", total: totals.newTickets, fresh: fresh.newTickets, unit: "not started" };
   const approved: Attention = { to: "/pi/confirmed-received", title: "Newly Approved PIs", Icon: ShieldCheck, tone: "cyan", fresh: fresh.confirmedReceived, unit: "new" };
   switch (role) {
