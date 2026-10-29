@@ -524,10 +524,18 @@ export async function setTicketProduct(
   if (serialNumber && serialNumber !== ticket.serialNumber && !(await isKnownSerial(db, serialNumber))) {
     throw new TicketError("That SN is not known to the system.", 400);
   }
+  // Each change goes on the timeline, like the customer fields.
+  const productName = async (pid: string | null) =>
+    pid ? ((await first<{ name: string }>(db, "SELECT COALESCE(NULLIF(nameEn, ''), code) AS name FROM products WHERE id=?", pid))?.name ?? pid) : "";
+  const notes: string[] = [];
+  if (productId !== ticket.productId) notes.push(`Product: ${(await productName(ticket.productId)) || "(none)"} → ${(await productName(productId)) || "(none)"}`);
+  if (productModel !== ticket.productModel) notes.push(`Model: ${ticket.productModel || "(none)"} → ${productModel || "(none)"}`);
+  if (serialNumber !== ticket.serialNumber) notes.push(`SN: ${ticket.serialNumber || "(none)"} → ${serialNumber || "(none)"}`);
   await commit(db, [
     db
       .prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
-      .bind(productId, productModel, serialNumber, ticket.id)
+      .bind(productId, productModel, serialNumber, ticket.id),
+    ...notes.map((note) => db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)").bind(id("tup"), ticket.id, user.id, note))
   ]);
   const changes: TicketChange[] = [{ kind: "product" }];
   // A product given to a ticket whose fault is already known may make a repeat fault.

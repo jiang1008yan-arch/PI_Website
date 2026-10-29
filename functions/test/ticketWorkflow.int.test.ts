@@ -175,11 +175,18 @@ describe("reported changes", () => {
     expect(fault.repeat).toMatchObject({ count: 1, isRepeat: false });
   });
 
-  it("product, model and SN changes are reported but, as before, not written to the timeline", async () => {
+  // Separate decision B: these used to leave no trace on the timeline.
+  it("product, model and SN changes are reported and written to the timeline, each that changed", async () => {
     const { id } = await feishuCreate();
     expect((await setTicketProduct(h.db, h.users.SERVICE, id, { productId, productModel: "M-1" })).changes).toEqual([{ kind: "product" }]);
     expect(await row(id)).toMatchObject({ productId, productModel: "M-1" });
-    expect(await timeline(id)).toHaveLength(1);
+    const name = (await h.db.prepare("SELECT COALESCE(NULLIF(nameEn, ''), code) AS name FROM products WHERE id = ?").bind(productId).first<{ name: string }>())!.name;
+    expect((await timeline(id)).slice(1)).toMatchObject([
+      { kind: "NOTE", note: `Product: (none) → ${name}` },
+      { kind: "NOTE", note: "Model: (none) → M-1" }
+    ]);
+    await setTicketProduct(h.db, h.users.SERVICE, id, { productId, productModel: "M-1" });
+    expect(await timeline(id)).toHaveLength(3);
   });
 });
 
