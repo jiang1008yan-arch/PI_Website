@@ -86,7 +86,18 @@ Commit locally only. No push and no PR until reviewed.
 
 - **A.** Creating a ticket with a fault type does not send the `fault` event, so it raises no
   repeat-fault alert. Web confirmation of a fault does.
+  **Resolved 2026-10-29** (`e662da4`). The gap was wider than creation: a repeat needs both a
+  product and a fault type, and Feishu tickets usually get their product later. A new `repeat`
+  change is now reported whenever product and fault type come together in some way other than
+  confirming the fault:
+  - a ticket created with both;
+  - a product set, or changed, on a ticket whose fault was already confirmed.
+
+  The `repeat` change refreshes the card's banner and alerts the after-sales group. Unlike a
+  confirmation, it sends no DM to sales.
 - **B.** `setProduct` writes no timeline entry, unlike every other ticket change.
+  **Resolved 2026-10-29** (`a1b27e1`): each changed field writes a system note, such as
+  "Product: (none) → X", "Model: …" or "SN: A → B".
 - **C.** Found while doing this: `POST /tickets` passes the whole request body into `createTicket`.
   A staff user can therefore send an `initialNote` whose `actorId` is someone else, giving a first
   note in another person's name. The Feishu-only inputs added here (stored files, picked type,

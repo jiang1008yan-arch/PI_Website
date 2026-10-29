@@ -100,3 +100,5 @@ Continues the list in [the Ticket workflow plan](2026-10-28-ticket-workflow.md) 
   new-request expired card (`expiredDraftCard`). Its toast also says "nothing added for 6 hours",
   but Add to ticket expires after 30 minutes. The scheduled expiry correctly uses
   `addExpiredCard()`.
+  **Resolved 2026-10-29** (`148fc90`): the guard answers `additionExpired`, and the route shows
+  `addExpiredCard()` with a matching toast.
