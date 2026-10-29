@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { first } from "../../lib/db";
-import { readIncoming } from "../../lib/feishu/crypto";
+import { userForFeishu } from "../../lib/feishu/identity";
+import { firstSeen, readFeishuRequest, runLater, toast } from "../../lib/feishu/inbound";
 import { sendText } from "../../lib/feishu/piBot/client";
 import { piBotApp, type PiBotApp } from "../../lib/feishu/piBot/config";
 import { loadCardPi, notifyPiTransition, outcomeText, piCardUrl, siteBase, type PiTransition } from "../../lib/feishu/piBot/notifyPi";
@@ -15,7 +16,7 @@ import {
   WorkflowConflictError,
   type TransitionPlan
 } from "../../lib/piWorkflow";
-import type { AppUser, Env } from "../../lib/types";
+import type { Env } from "../../lib/types";
 import { createApp } from "./_shared";
 
 // PI Assistant bot endpoint: Feishu events and card callbacks for the ZH PI
@@ -28,31 +29,14 @@ export const feishuPiRoutes = createApp();
 
 type PiRowFull = PiRow & Record<string, any>;
 
-const toast = (type: "success" | "error" | "info", content: string) => ({ toast: { type, content } });
-
-function later(c: Context, task: () => Promise<unknown>) {
-  const promise = task().catch((error) => console.error("PI Assistant background task failed", error));
-  try {
-    c.executionCtx.waitUntil(promise);
-  } catch {
-    void promise;
-  }
-}
+const later = (c: Context, task: () => Promise<unknown>) => runLater(c, task, "PI Assistant background task failed");
 
 feishuPiRoutes.post("/feishu/pi/events", async (c) => {
   const env = c.env as Env;
   const app = piBotApp(env);
   if (!app) return c.json({ error: "PI Assistant is not configured" }, 503);
 
-  const incoming = await readIncoming(
-    await c.req.text(),
-    {
-      timestamp: c.req.header("x-lark-request-timestamp") ?? null,
-      nonce: c.req.header("x-lark-request-nonce") ?? null,
-      signature: c.req.header("x-lark-signature") ?? null
-    },
-    { verificationToken: app.verificationToken, encryptKey: app.encryptKey }
-  );
+  const incoming = await readFeishuRequest(c, { verificationToken: app.verificationToken, encryptKey: app.encryptKey });
   if (!incoming.ok) return c.json({ error: incoming.reason }, 401);
   const body = incoming.payload;
 
@@ -60,10 +44,7 @@ feishuPiRoutes.post("/feishu/pi/events", async (c) => {
 
   // Feishu may push the same event twice.
   const eventId = body.header?.event_id;
-  if (eventId) {
-    const seen = await env.DB.prepare("INSERT OR IGNORE INTO feishuSeenEvents (eventKey) VALUES (?)").bind(`pi:${eventId}`).run();
-    if (!(seen.meta?.changes ?? 0)) return c.json({});
-  }
+  if (eventId && !(await firstSeen(env.DB, `pi:${eventId}`))) return c.json({});
 
   const type = body.header?.event_type;
   const event = body.event ?? {};
@@ -72,10 +53,9 @@ feishuPiRoutes.post("/feishu/pi/events", async (c) => {
   return c.json({});
 });
 
-async function userByUnionId(db: D1Database, unionId: string | undefined): Promise<AppUser | null> {
-  if (!unionId) return null;
-  return await first<AppUser>(db, "SELECT id, username, displayName, role FROM users WHERE feishuUnionId = ?", unionId);
-}
+// Union ids only: an open_id belongs to one app, and this bot's never match the
+// after-sales bot's stored in users.feishuOpenId.
+const userByUnionId = (db: D1Database, unionId: string | undefined) => userForFeishu(db, { unionId });
 
 async function onMessage(c: Context, app: PiBotApp, event: any) {
   const unionId = event.sender?.sender_id?.union_id;

@@ -30,7 +30,7 @@ import {
   type RequestRefusal
 } from "../../lib/feishu/ticketRequest";
 import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, updateCard } from "../../lib/feishu/client";
-import { readIncoming } from "../../lib/feishu/crypto";
+import { firstSeen, readFeishuRequest, runLater, toast } from "../../lib/feishu/inbound";
 import {
   attachmentsFromItems,
   handleIncomingMessage,
@@ -66,15 +66,6 @@ import { createApp } from "./_shared";
 export const feishuRoutes = createApp();
 
 
-function runLater(c: Context, task: () => Promise<unknown>) {
-  const promise = task().catch((error) => console.error("Feishu background task failed", error));
-  try {
-    c.executionCtx.waitUntil(promise);
-  } catch {
-    void promise;
-  }
-}
-
 // Redraws a request card after the button answered. If that fails the button
 // would look dead, so the person is told privately.
 function redrawLater(c: Context, env: Env, operator: FeishuPerson, task: () => Promise<unknown>) {
@@ -87,25 +78,8 @@ function redrawLater(c: Context, env: Env, operator: FeishuPerson, task: () => P
   );
 }
 
-async function authenticate(c: Context) {
-  const env = c.env as Env;
-  const rawBody = await c.req.text();
-  return readIncoming(
-    rawBody,
-    {
-      timestamp: c.req.header("x-lark-request-timestamp") ?? null,
-      nonce: c.req.header("x-lark-request-nonce") ?? null,
-      signature: c.req.header("x-lark-signature") ?? null
-    },
-    { verificationToken: env.FEISHU_VERIFICATION_TOKEN, encryptKey: env.FEISHU_ENCRYPT_KEY }
-  );
-}
-
-// Returns true the first time a key is seen; Feishu may push an event twice.
-async function firstSeen(db: D1Database, key: string): Promise<boolean> {
-  const res = await db.prepare("INSERT OR IGNORE INTO feishuSeenEvents (eventKey) VALUES (?)").bind(key).run();
-  return (res.meta?.changes ?? 0) > 0;
-}
+const authenticate = (c: Context) =>
+  readFeishuRequest(c, { verificationToken: (c.env as Env).FEISHU_VERIFICATION_TOKEN, encryptKey: (c.env as Env).FEISHU_ENCRYPT_KEY });
 
 // ── Events: messages to the bot (direct messages, @bot in a group) ────────
 
@@ -129,7 +103,6 @@ feishuRoutes.post("/feishu/events", async (c) => {
 
 // ── Card callbacks: buttons and forms on our cards ────────────────────────
 
-const toast = (type: "success" | "info" | "warning" | "error", content: string) => ({ toast: { type, content } });
 const formText = (form: Record<string, unknown>, key: string) => String(form[key] ?? "").trim();
 
 // What has been typed into the request form, kept when it is redrawn.
