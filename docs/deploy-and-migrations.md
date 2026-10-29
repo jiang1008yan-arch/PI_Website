@@ -102,6 +102,12 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
 完成后，CI 首次 `migrations apply` 应显示 "No migrations to apply"（已对齐），此后新增迁移自动生效。
 
 ## 排查
+- 打开飞书链接后提示 **"Feishu sign-in is not configured"**（新版本会跳回登录页并显示"Feishu sign-in is not set up…"）：
+  当前提供这个域名的 Worker 上没有 `FEISHU_PI_APP_ID` / `FEISHU_PI_APP_SECRET`。Pages 的密钥不会自动带到 Worker，
+  要在 Worker 上重新设置（`npx wrangler secret put FEISHU_PI_APP_ID` 等，或 Worker → Settings → Variables and Secrets，类型选 **Secret**）。
+  用 `npx wrangler secret list` 核对；`wrangler tail` 会打出缺的是哪个。
+- 在 dashboard 里加的**普通变量**（Text 类型，如 `APP_BASE_URL`）以前会在每次 `wrangler deploy` 时被删掉；
+  `wrangler.toml` 里已加 `keep_vars = true` 防止这种情况。密钥（Secret 类型）一直不受影响。
 - 线上 PI 列表空白 / 接口 500：多半是某个迁移没同步。打开 DevTools → Network 看 `GET /api/pi` 的响应，
   常见 `no such column: ...` 即指向缺失的列；对照 `migrations/` 找到对应迁移补跑。
 </content>

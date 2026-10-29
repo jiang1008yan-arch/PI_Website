@@ -28,8 +28,13 @@ function safeNext(next: unknown): string {
 
 feishuAuthRoutes.get("/auth/feishu/start", async (c) => {
   const app = piBotApp(c.env);
-  if (!app) return c.text("Feishu sign-in is not configured", 503);
   const base = siteBase(c.env, c.req.url);
+  if (!app) {
+    // Back to the login page, where a password still works, rather than a bare error page.
+    console.error("Feishu sign-in: FEISHU_PI_APP_ID / FEISHU_PI_APP_SECRET are not set on this Worker");
+    const message = "Feishu sign-in is not set up on this site yet. Sign in with your username and password, and ask an admin to finish the Feishu setup.";
+    return c.redirect(`${base}/login#feishuError=${encodeURIComponent(message)}`);
+  }
   const state = await signPurposeToken(c.env, FEISHU_STATE, { next: safeNext(c.req.query("next")) }, "10m");
   return c.redirect(authorizeUrl(app, `${base}/api/auth/feishu/callback`, state));
 });

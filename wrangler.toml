@@ -1,6 +1,10 @@
 name = "sales-portal"
 main = "src/worker.ts"
 compatibility_date = "2025-04-01"
+# Keep variables added in the dashboard (e.g. APP_BASE_URL) across deploys;
+# without this every `wrangler deploy` (and Workers Builds on push) deletes
+# them. Secrets are kept either way.
+keep_vars = true
 
 # SPA build output, served by the Worker. run_worker_first sends every request
 # through src/worker.ts so /api/* (including navigations to /api/files/...
