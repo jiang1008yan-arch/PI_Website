@@ -1,3 +1,4 @@
+import { first } from "../db";
 import type { Env } from "../types";
 import { call as transportCall, download, setBotFetch, type FeishuApp } from "./transport";
 
@@ -8,8 +9,20 @@ import { call as transportCall, download, setBotFetch, type FeishuApp } from "./
 // Tests replace this bot's Feishu with a fake.
 export const setFeishuFetch = (impl: typeof fetch | null) => setBotFetch("afterSales", impl);
 
+// The bot works with just its app credentials; the after-sales group is
+// optional (see serviceChatId) and only its group messages wait for it.
 export function feishuEnabled(env: Env): boolean {
-  return Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.FEISHU_SERVICE_CHAT_ID);
+  return Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET);
+}
+
+export const SERVICE_CHAT_OPTION_KEY = "feishuServiceChatId";
+
+// The internal after-sales group: the one an admin picked under
+// After-Sales → Ticket Notifications, else the FEISHU_SERVICE_CHAT_ID setting.
+// Null when neither is set; the weekly summary and group alerts are then skipped.
+export async function serviceChatId(env: Env): Promise<string | null> {
+  const row = await first<{ value: string }>(env.DB, "SELECT value FROM appOptions WHERE optionKey = ? LIMIT 1", SERVICE_CHAT_OPTION_KEY);
+  return row?.value.trim() || env.FEISHU_SERVICE_CHAT_ID?.trim() || null;
 }
 
 const app = (env: Env): FeishuApp => ({ bot: "afterSales", appId: env.FEISHU_APP_ID ?? "", appSecret: env.FEISHU_APP_SECRET ?? "" });

@@ -34,6 +34,9 @@ beforeEach(async () => {
     calls.push({ method: init?.method ?? "GET", path, body: init?.body ? JSON.parse(String(init.body)) : null });
     const json = (data: unknown) => new Response(JSON.stringify(data));
     if (path.startsWith("/auth/")) return json({ code: 0, tenant_access_token: "t", expire: 7200 });
+    if (path.startsWith("/im/v1/chats")) {
+      return json({ code: 0, data: { items: [{ chat_id: "oc_picked", name: "After-sales team" }, { chat_id: SERVICE_CHAT, name: "Old group" }], has_more: false } });
+    }
     return json({ code: 0, data: { message_id: `om_${++nextId}` } });
   }) as typeof fetch);
   await h.db.prepare("UPDATE users SET feishuOpenId = 'ou_service' WHERE id = ?").bind(h.users.SERVICE.id).run();
@@ -83,6 +86,31 @@ describe("owner reminders", () => {
     expect(JSON.parse(sent((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "text")[0].body.content).text).toContain("these 3 tickets");
   });
 
+  it("follows the interval an admin sets, and stays quiet at 0", async () => {
+    const productId = await seedProduct(h.db);
+    const ticketId = (await h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", contactName: "Li", contactInfo: "x", productId, answers: {} })).body.id;
+    await h.settle();
+    const now = new Date("2026-10-21T02:00:00Z");
+    await h.db.prepare("UPDATE tickets SET updatedAt = ? WHERE id = ?").bind(hoursAgo(now, 10), ticketId).run();
+    const reminders = () => sent((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "text");
+
+    calls = [];
+    await runScheduledJobs(h.env, now);
+    expect(reminders()).toHaveLength(0); // 10 hours < the default 24
+
+    expect((await h.request("ADMIN", "PUT", "/options/ticketReminderHours", { values: ["8"] })).status).toBe(200);
+    expect((await h.request("SERVICE", "PUT", "/options/ticketReminderHours", { values: ["1"] })).status).toBe(403);
+    calls = [];
+    await runScheduledJobs(h.env, now);
+    expect(reminders()).toHaveLength(1);
+    expect(JSON.parse(reminders()[0].body.content).text).toContain("not been updated for over 8 hours");
+
+    await h.request("ADMIN", "PUT", "/options/ticketReminderHours", { values: ["0"] });
+    calls = [];
+    await runScheduledJobs(h.env, new Date(now.getTime() + 48 * 3600_000));
+    expect(reminders()).toHaveLength(0);
+  });
+
   it("groups and words the reminder", () => {
     const now = new Date("2026-10-21T00:00:00Z");
     const rows = [
@@ -120,6 +148,53 @@ describe("weekly summary", () => {
     expect(JSON.stringify(card)).toContain("Test SERVICE");
     await runScheduledJobs(h.env, new Date("2026-10-26T02:30:00Z"));
     expect(sent((c) => c.body?.receive_id === SERVICE_CHAT)).toHaveLength(1);
+  });
+
+  it("goes to the group an admin picked, over the FEISHU_SERVICE_CHAT_ID setting", async () => {
+    const picked = await h.request("ADMIN", "PUT", "/feishu/service-chat", { chatId: "oc_picked" });
+    expect(picked.status).toBe(200);
+    calls = [];
+    await runScheduledJobs(h.env, new Date("2026-10-26T01:30:00Z"));
+    expect(sent((c) => c.body?.receive_id === "oc_picked")).toHaveLength(1);
+    expect(sent((c) => c.body?.receive_id === SERVICE_CHAT)).toHaveLength(0);
+  });
+
+  it("is skipped without a group, while private reminders still go out", async () => {
+    h.env.FEISHU_SERVICE_CHAT_ID = undefined;
+    const productId = await seedProduct(h.db);
+    const ticketId = (await h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", contactName: "Li", contactInfo: "x", productId, answers: {} })).body.id;
+    await h.settle();
+    const now = new Date("2026-10-26T01:30:00Z");
+    await h.db.prepare("UPDATE tickets SET updatedAt = ? WHERE id = ?").bind(hoursAgo(now, 30), ticketId).run();
+    calls = [];
+    await runScheduledJobs(h.env, now);
+    expect(sent((c) => c.body?.msg_type === "interactive")).toHaveLength(0);
+    expect(sent((c) => c.body?.receive_id === "ou_service" && c.body.msg_type === "text")).toHaveLength(1);
+  });
+});
+
+describe("after-sales group settings", () => {
+  it("lists the bot's groups and shows where the current group comes from", async () => {
+    const before = (await h.request("ADMIN", "GET", "/feishu/service-chat")).body;
+    expect(before).toMatchObject({ configured: true, chatId: SERVICE_CHAT, source: "env" });
+    expect(before.chats.map((ch: { chatId: string }) => ch.chatId)).toEqual(["oc_picked", SERVICE_CHAT]);
+    await h.request("ADMIN", "PUT", "/feishu/service-chat", { chatId: "oc_picked" });
+    expect((await h.request("ADMIN", "GET", "/feishu/service-chat")).body).toMatchObject({ chatId: "oc_picked", source: "setting" });
+    await h.request("ADMIN", "PUT", "/feishu/service-chat", { chatId: "" });
+    expect((await h.request("ADMIN", "GET", "/feishu/service-chat")).body).toMatchObject({ chatId: SERVICE_CHAT, source: "env" });
+  });
+
+  it("only takes a group the bot is in, and only from an admin", async () => {
+    expect((await h.request("ADMIN", "PUT", "/feishu/service-chat", { chatId: "oc_elsewhere" })).status).toBe(400);
+    expect((await h.request("SERVICE", "PUT", "/feishu/service-chat", { chatId: "oc_picked" })).status).toBe(403);
+    expect((await h.request("SERVICE", "GET", "/feishu/service-chat")).status).toBe(403);
+  });
+
+  it("sends a test message to the group", async () => {
+    await h.request("ADMIN", "PUT", "/feishu/service-chat", { chatId: "oc_picked" });
+    calls = [];
+    expect((await h.request("ADMIN", "POST", "/feishu/service-chat/test", {})).status).toBe(200);
+    expect(sent((c) => c.body?.receive_id === "oc_picked" && c.body.msg_type === "text")).toHaveLength(1);
   });
 });
 

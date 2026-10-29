@@ -30,7 +30,7 @@ import {
   type FeishuPerson,
   type RequestRefusal
 } from "../../lib/feishu/ticketRequest";
-import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, updateCard } from "../../lib/feishu/client";
+import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, SERVICE_CHAT_OPTION_KEY, serviceChatId, updateCard } from "../../lib/feishu/client";
 import { firstSeen, readFeishuRequest, runLater, toast } from "../../lib/feishu/inbound";
 import { requestNote } from "../../lib/feishu/requestNote";
 import {
@@ -56,7 +56,7 @@ import {
 } from "../../lib/ticketWorkflow";
 import type { TicketStatus } from "../../lib/ticketAccess";
 import type { AppUser, Env } from "../../lib/types";
-import { createApp } from "./_shared";
+import { body, createApp } from "./_shared";
 
 // Feishu bot endpoints (docs/adr/0002-feishu-as-after-sales-work-surface.md).
 // /feishu/events and /feishu/card are called by Feishu (authenticated by its
@@ -270,7 +270,7 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
   // A picked match fills the customer, production order and SN it stands for.
   const picked = formText(form, "match") ? await resolveMatch(env.DB, formText(form, "match")) : null;
   const notifyChat = formText(form, "notifyChat");
-  const chatId = notifyChat && notifyChat !== "none" && notifyChat !== env.FEISHU_SERVICE_CHAT_ID ? notifyChat : null;
+  const chatId = notifyChat && notifyChat !== "none" && notifyChat !== (await serviceChatId(env)) ? notifyChat : null;
   const items = await loadItems(env.DB, draft.id);
   // Two presses cannot both create a ticket.
   const created = await createTicketFromRequest(env.DB, draft.id, (claim) =>
@@ -388,10 +388,62 @@ feishuRoutes.get("/feishu/chats", async (c) => {
   const env = c.env as Env;
   if (!feishuEnabled(env)) return c.json([]);
   try {
-    return c.json((await listBotChats(env)).filter((ch) => ch.chatId !== env.FEISHU_SERVICE_CHAT_ID));
+    const groupId = await serviceChatId(env);
+    return c.json((await listBotChats(env)).filter((ch) => ch.chatId !== groupId));
   } catch (error) {
     console.error("Could not list the bot's groups", error);
     return c.json([]);
+  }
+});
+
+// ── After-sales group settings (admin) ───────────────────────────────────────
+// The internal group for the weekly summary, repeat-fault and device alerts,
+// picked from the groups the bot is in. Saved in appOptions; the
+// FEISHU_SERVICE_CHAT_ID setting is the fallback when nothing is picked.
+
+feishuRoutes.get("/feishu/service-chat", async (c) => {
+  if (c.get("user").role !== "ADMIN") return c.json({ error: "Admin access required" }, 403);
+  const env = c.env as Env;
+  const saved = await first<{ value: string }>(env.DB, "SELECT value FROM appOptions WHERE optionKey = ? LIMIT 1", SERVICE_CHAT_OPTION_KEY);
+  const fallback = env.FEISHU_SERVICE_CHAT_ID?.trim() || null;
+  const state = { configured: feishuEnabled(env), chatId: saved?.value || fallback, source: saved?.value ? "setting" : fallback ? "env" : null };
+  if (!state.configured) return c.json({ ...state, chats: [] });
+  try {
+    return c.json({ ...state, chats: await listBotChats(env) });
+  } catch (error) {
+    return c.json({ ...state, chats: [], error: `Could not list the bot's groups: ${error instanceof Error ? error.message : String(error)}` });
+  }
+});
+
+feishuRoutes.put("/feishu/service-chat", async (c) => {
+  if (c.get("user").role !== "ADMIN") return c.json({ error: "Admin access required" }, 403);
+  const env = c.env as Env;
+  const chatId = String((await body<{ chatId?: string }>(c)).chatId ?? "").trim();
+  if (chatId) {
+    if (!feishuEnabled(env)) return c.json({ error: "The Feishu bot is not configured on this server." }, 400);
+    const chats = await listBotChats(env).catch(() => []);
+    if (!chats.some((ch) => ch.chatId === chatId)) return c.json({ error: "Choose a group the bot is in." }, 400);
+  }
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM appOptions WHERE optionKey = ?").bind(SERVICE_CHAT_OPTION_KEY),
+    ...(chatId
+      ? [env.DB.prepare("INSERT INTO appOptions (id, optionKey, value, sortOrder) VALUES (?, ?, ?, 0)").bind(`opt_${SERVICE_CHAT_OPTION_KEY}`, SERVICE_CHAT_OPTION_KEY, chatId)]
+      : [])
+  ]);
+  return c.json({ ok: true });
+});
+
+feishuRoutes.post("/feishu/service-chat/test", async (c) => {
+  const user = c.get("user");
+  if (user.role !== "ADMIN") return c.json({ error: "Admin access required" }, 403);
+  const env = c.env as Env;
+  const groupId = feishuEnabled(env) ? await serviceChatId(env) : null;
+  if (!groupId) return c.json({ error: "No after-sales group is set." }, 400);
+  try {
+    await sendText(env, "chat_id", groupId, `Test from the Sales Portal (sent by ${user.displayName}): this is the after-sales group for the weekly summary and alerts.`);
+    return c.json({ ok: true });
+  } catch (error) {
+    return c.json({ error: `Feishu refused: ${error instanceof Error ? error.message : String(error)}` }, 502);
   }
 });
 

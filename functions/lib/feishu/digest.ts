@@ -2,17 +2,20 @@ import { all, first, parseSqlTime, sqlTime } from "../db";
 import { repeatSettings } from "../faultStats";
 import type { Env } from "../types";
 import { weeklySummaryCard, type WeeklySummary } from "./cards";
-import { sendCard, sendText } from "./client";
+import { sendCard, sendText, serviceChatId } from "./client";
 import { feishuTarget } from "./identity";
 import { setFeishuBookkeeping } from "./sync";
 
 // Scheduled nudges (run by the cron trigger, see functions/scheduled.ts):
 // - each after-sales owner is reminded, in one private message, about open
-//   tickets nobody has updated for a day — at most once a day per ticket;
+//   tickets nobody has updated for the reminder interval (an admin setting,
+//   24 hours unless changed; 0 turns reminders off) — at most once per
+//   interval per ticket;
 // - the after-sales group gets one summary a week, on Monday from 9:00
 //   Beijing time.
 
-export const REMINDER_AFTER_HOURS = 24;
+export const REMINDER_HOURS_OPTION_KEY = "ticketReminderHours";
+export const DEFAULT_REMINDER_HOURS = 24;
 export const WEEKLY_SUMMARY_HOUR_BEIJING = 9; // Monday
 const WEEKLY_SENT_KEY = "weeklySummarySentFor";
 const HOUR = 60 * 60 * 1000;
@@ -28,8 +31,16 @@ export type StaleTicket = {
   ownerOpenId: string | null;
 };
 
+// The reminder interval in hours; 0 means off. A missing or unreadable setting
+// falls back to the default.
+export async function reminderHours(db: D1Database): Promise<number> {
+  const row = await first<{ value: string }>(db, "SELECT value FROM appOptions WHERE optionKey = ? LIMIT 1", REMINDER_HOURS_OPTION_KEY);
+  const hours = Number(row?.value);
+  return row && Number.isInteger(hours) && hours >= 0 ? hours : DEFAULT_REMINDER_HOURS;
+}
+
 // One message per owner listing their stale tickets, oldest first.
-export function groupReminders(rows: StaleTicket[], now: Date, portalUrl: string | null) {
+export function groupReminders(rows: StaleTicket[], now: Date, portalUrl: string | null, afterHours = DEFAULT_REMINDER_HOURS) {
   const byOwner = new Map<string, StaleTicket[]>();
   for (const row of rows) byOwner.set(row.ownerId, [...(byOwner.get(row.ownerId) ?? []), row]);
   return [...byOwner.entries()].map(([ownerId, tickets]) => {
@@ -43,13 +54,15 @@ export function groupReminders(rows: StaleTicket[], now: Date, portalUrl: string
       ownerId,
       target: feishuTarget({ feishuUnionId: tickets[0].ownerUnionId, feishuOpenId: tickets[0].ownerOpenId }),
       ticketIds: tickets.map((t) => t.id),
-      text: `Reminder: ${tickets.length === 1 ? "this ticket has" : `these ${tickets.length} tickets have`} not been updated for over ${REMINDER_AFTER_HOURS} hours. Please add progress or change the status.\n${lines.join("\n")}`
+      text: `Reminder: ${tickets.length === 1 ? "this ticket has" : `these ${tickets.length} tickets have`} not been updated for over ${afterHours} hours. Please add progress or change the status.\n${lines.join("\n")}`
     };
   });
 }
 
 export async function remindStaleOwners(env: Env, now: Date): Promise<number> {
-  const cutoff = sqlTime(new Date(now.getTime() - REMINDER_AFTER_HOURS * HOUR));
+  const hours = await reminderHours(env.DB);
+  if (hours === 0) return 0;
+  const cutoff = sqlTime(new Date(now.getTime() - hours * HOUR));
   const rows = await all<StaleTicket>(
     env.DB,
     `SELECT t.id, t.ticketNo, t.customerCompany, t.updatedAt, t.assignedServiceId AS ownerId,
@@ -60,7 +73,7 @@ export async function remindStaleOwners(env: Env, now: Date): Promise<number> {
     cutoff,
     cutoff
   );
-  const messages = groupReminders(rows, now, env.APP_BASE_URL ?? null);
+  const messages = groupReminders(rows, now, env.APP_BASE_URL ?? null, hours);
   for (const m of messages) {
     if (!m.target) continue;
     await sendText(env, m.target.type, m.target.id, m.text);
@@ -129,8 +142,10 @@ export async function sendWeeklySummaryIfDue(env: Env, now: Date): Promise<boole
   if (!key) return false;
   const sent = await first<{ value: string }>(env.DB, "SELECT value FROM appOptions WHERE optionKey = ? LIMIT 1", WEEKLY_SENT_KEY);
   if (sent?.value === key) return false;
+  const groupId = await serviceChatId(env);
+  if (!groupId) return false;
   const summary = await buildWeeklySummary(env, now);
-  await sendCard(env, "chat_id", env.FEISHU_SERVICE_CHAT_ID!, weeklySummaryCard(summary, env.APP_BASE_URL ?? null));
+  await sendCard(env, "chat_id", groupId, weeklySummaryCard(summary, env.APP_BASE_URL ?? null));
   await env.DB.batch([
     env.DB.prepare("DELETE FROM appOptions WHERE optionKey = ?").bind(WEEKLY_SENT_KEY),
     env.DB.prepare("INSERT INTO appOptions (id, optionKey, value, sortOrder) VALUES (?, ?, ?, 0)").bind(`opt_${WEEKLY_SENT_KEY}`, WEEKLY_SENT_KEY, key)

@@ -6,7 +6,7 @@ import type { TicketChange } from "../ticketWorkflow";
 import type { Env } from "../types";
 import { handedOverCard, STATUS_TEXT, ticketCard, type TicketCardData } from "./cards";
 import { feishuTarget, linkedAdminTargets, type FeishuIds } from "./identity";
-import { addBitableRecord, feishuEnabled, replyText, sendCard, sendText, updateCard } from "./client";
+import { addBitableRecord, feishuEnabled, replyText, sendCard, sendText, serviceChatId, updateCard } from "./client";
 import { parsePoolUrl, poolRecordFields, POOL_URL_OPTION_KEY } from "./requirementPool";
 
 // Keeps Feishu in step with tickets (docs/adr/0002-feishu-as-after-sales-work-surface.md):
@@ -205,12 +205,13 @@ async function deliver(env: Env, payload: Payload) {
     }
   }
 
-  // 6. Repeat faults alert the whole after-sales group.
-  if (repeat) {
+  // 6. Repeat faults alert the whole after-sales group, when one is set.
+  const groupId = repeat ? await serviceChatId(env) : null;
+  if (repeat && groupId) {
     await sendText(
       env,
       "chat_id",
-      env.FEISHU_SERVICE_CHAT_ID!,
+      groupId,
       `Repeat fault: ${t.productName ?? "a product"} has had "${t.faultType}" ${repeat.count} times in ${repeat.windowDays} days (latest ${t.ticketNo}).`
     );
   }
