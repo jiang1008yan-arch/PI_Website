@@ -1,4 +1,4 @@
-import type { FieldValue, PiItem } from "../types";
+import type { FieldValue, PiItem } from "./lineItem";
 
 // Owner of the line-item field-set semantics: the `__`-prefixed meta-field
 // convention, reading/writing fields by label, and splitting visible fields

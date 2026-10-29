@@ -5,7 +5,7 @@ import { useCachedList } from "../hooks/useCachedList";
 import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
 import type { Language, Product, ProductField } from "../types";
-import { blankRule, ModelRule, modelRuleKey, optionPath } from "../pi/modelRule";
+import { blankRule, ModelRule, modelRuleKey, optionPath } from "../../../shared/modelRule";
 import { FieldRow } from "../products/FieldRow";
 import { FilePicker } from "../products/FilePicker";
 import { ModelRuleEditor } from "../products/ModelRuleEditor";

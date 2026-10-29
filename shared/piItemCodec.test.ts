@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePiItem, parsePiItems } from "./piItemCodec";
+import { parseFieldValues, parsePiItem, parsePiItems } from "./piItemCodec";
 
 describe("parsePiItem", () => {
   it("parses a valid JSON string into a typed FieldValue array", () => {
@@ -28,8 +28,16 @@ describe("parsePiItem", () => {
     expect(parsePiItem({ fieldValues: JSON.stringify({ not: "array" }) }).fieldValues).toEqual([]);
   });
 
-  it("throws on malformed JSON", () => {
-    expect(() => parsePiItem({ fieldValues: "{not json" })).toThrow();
+  // Changed on purpose (docs/plans/2026-10-29-line-item-kernel.md): like the
+  // server's readers, unreadable data is no fields rather than a crashed page.
+  it("returns [] on malformed JSON", () => {
+    expect(parsePiItem({ fieldValues: "{not json" }).fieldValues).toEqual([]);
+  });
+
+  it("reads a frozen snapshot's array the same as the stored string", () => {
+    const fields = [{ label: "Color", value: "Red", fieldType: "TEXT", sortOrder: 0 }];
+    expect(parsePiItem({ fieldValues: fields }).fieldValues).toEqual(parsePiItem({ fieldValues: JSON.stringify(fields) }).fieldValues);
+    expect(parseFieldValues(42)).toEqual([]);
   });
 
   it("preserves array order", () => {

@@ -1,6 +1,6 @@
 import type ExcelJS from "exceljs";
-import { getMetaValue, visibleFieldValues } from "../pi/lineItemFields";
-import { generatedModelFor } from "../pi/modelRule";
+import { getMetaValue, visibleFieldValues } from "../../../shared/lineItemFields";
+import { generatedModelFor } from "../../../shared/modelRule";
 
 export type FieldRecord = { label: string; value: string };
 

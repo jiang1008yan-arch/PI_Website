@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PiItem } from "../types";
+import type { PiItem } from "./lineItem";
 import {
   applyModelRule,
   blankRule,

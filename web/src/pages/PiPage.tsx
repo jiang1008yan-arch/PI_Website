@@ -29,11 +29,11 @@ import {
   modelRuleKey,
   normalizeRule,
   optionPath
-} from "../pi/modelRule";
+} from "../../../shared/modelRule";
 import { parseField } from "../products/productFields";
 import { DISCARD_PROMPT, usePiEditor } from "../pi/usePiEditor";
-import { parsePiItems } from "../pi/piItemCodec";
-import { setMetaValue } from "../pi/lineItemFields";
+import { parsePiItems } from "../../../shared/piItemCodec";
+import { setMetaValue } from "../../../shared/lineItemFields";
 import { shouldShowLinkedZhSyncButton } from "../pi/linkedZhSync";
 
 const today = new Date().toISOString().slice(0, 10);

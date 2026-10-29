@@ -1,6 +1,6 @@
 import { Field } from "../components/Form";
 import type { Language } from "../types";
-import { ModelOption, ModelRule, ModelSegment } from "../pi/modelRule";
+import { ModelOption, ModelRule, ModelSegment } from "../../../shared/modelRule";
 import { formatModelOptions, parseModelOptions } from "./modelRuleAdmin";
 
 export function ModelRuleEditor({

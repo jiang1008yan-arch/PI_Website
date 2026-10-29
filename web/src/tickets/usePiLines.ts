@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import { generatedModelFor } from "../pi/modelRule";
-import { parsePiItems, type ParsedPiItem } from "../pi/piItemCodec";
+import { generatedModelFor } from "../../../shared/modelRule";
+import { parsePiItems, type ParsedPiItem } from "../../../shared/piItemCodec";
 
 export type PiLineOption = { key: string; productId: string; model: string; label: string };
 

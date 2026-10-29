@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FieldValue, PiItem } from "../types";
+import type { FieldValue, PiItem } from "./lineItem";
 import {
   findFieldValue,
   getMeta,

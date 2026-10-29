@@ -42,21 +42,9 @@ export type ProductField = {
   mapKey?: string | null;
 };
 
-export type FieldValue = {
-  label: string;
-  value: string;
-  fieldType: string;
-  options?: string[];
-  sortOrder: number;
-};
-
-export type PiItem = {
-  productId: string;
-  quantity: number;
-  unitPrice: number;
-  discountPct: number;
-  fieldValues: FieldValue[];
-};
+// A line item's shape is shared with the server (shared/lineItem.ts).
+import type { FieldValue, PiItem } from "../../shared/lineItem";
+export type { FieldValue, PiItem };
 
 export type Pi = {
   id: string;

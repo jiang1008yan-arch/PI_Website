@@ -1,8 +1,8 @@
 import ExcelJS from "exceljs";
 import { api, getStoredToken } from "../api/client";
-import { parsePiItems } from "../pi/piItemCodec";
-import { getMetaValue } from "../pi/lineItemFields";
-import { generatedModelFor } from "../pi/modelRule";
+import { parsePiItems } from "../../../shared/piItemCodec";
+import { getMetaValue } from "../../../shared/lineItemFields";
+import { generatedModelFor } from "../../../shared/modelRule";
 import {
   currencyFormat,
   ExportBundle,

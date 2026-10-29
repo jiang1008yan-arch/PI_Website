@@ -1,4 +1,4 @@
-import type { Language, PiItem } from "../types";
+import type { Language, PiItem } from "./lineItem";
 import { upsertField } from "./lineItemFields";
 
 // upsertField now lives in lineItemFields (it is the generic field-set

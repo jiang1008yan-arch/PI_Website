@@ -1,6 +1,6 @@
 import { Field } from "../components/Form";
 import type { Language, PiItem, Product } from "../types";
-import { getMeta, setMeta, visibleItemFields } from "./lineItemFields";
+import { getMeta, setMeta, visibleItemFields } from "../../../shared/lineItemFields";
 import {
   applyModelRule,
   buildGeneratedModel,
@@ -8,7 +8,7 @@ import {
   isGeneratedModelField,
   isModelField,
   isOrderMeaningField
-} from "./modelRule";
+} from "../../../shared/modelRule";
 import { currencies, formatCurrency, numericInputValue, parseNumericInput } from "./format";
 import { productName } from "./labels";
 import { ModelBuilder } from "./ModelBuilder";
