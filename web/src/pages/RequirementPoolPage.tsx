@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Lightbulb } from "lucide-react";
 import { api } from "../api/client";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
+import { useBotName } from "../hooks/useBotName";
 
 const FIELDS = ["工单号", "提交日期", "客户", "产品", "型号", "SN", "摘要", "客户原话", "售后负责人", "工单链接"];
 
@@ -11,6 +12,7 @@ type Check = { ok: boolean; error?: string; missing?: string[]; notText?: string
 // (the requirement pool); each ticket classified as a product request is
 // written there once, and they filter, export and get notified in Bitable.
 export function RequirementPoolPage() {
+  const bot = useBotName();
   const [url, setUrl] = useState("");
   const [savedUrl, setSavedUrl] = useState("");
   const [check, setCheck] = useState<Check | null>(null);
@@ -58,7 +60,7 @@ export function RequirementPoolPage() {
             <p>When after-sales mark a ticket as a <strong>Product request</strong>, it is added once as a row to this table.</p>
             <ol className="list-decimal space-y-1 pl-5">
               <li>A product manager creates a Bitable with a table whose columns are exactly: <span className="font-medium">{FIELDS.join("、")}</span> (all of type Text / 文本).</li>
-              <li>In the base, Share → add the app <strong>售后工单Robot</strong> as an editor (可编辑).</li>
+              <li>In the base, Share → add the app <strong>{bot}</strong> as an editor (可编辑).</li>
               <li>Open the table and copy the link from the address bar (it contains <code>/base/…?table=tbl…</code>), paste it below and save.</li>
               <li>Optional: in the base, Automations → "When a record is added" → send a Feishu message to the product managers.</li>
             </ol>

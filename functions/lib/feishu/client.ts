@@ -32,6 +32,13 @@ async function call(env: Env, method: string, path: string, body?: unknown): Pro
   return (await transportCall(app(env), method, path, body)).data ?? {};
 }
 
+// The bot's name as set in the Feishu developer console, so the portal's
+// instructions name the bot people actually see. Feishu returns it outside `data`.
+export async function botName(env: Env): Promise<string | null> {
+  const res = await transportCall(app(env), "GET", "/bot/v3/info");
+  return res.bot?.app_name ? String(res.bot.app_name) : null;
+}
+
 export type ReceiveIdType = "chat_id" | "open_id" | "union_id";
 
 export async function sendCard(env: Env, type: ReceiveIdType, receiveId: string, card: unknown): Promise<string> {

@@ -30,7 +30,7 @@ import {
   type FeishuPerson,
   type RequestRefusal
 } from "../../lib/feishu/ticketRequest";
-import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, SERVICE_CHAT_OPTION_KEY, serviceChatId, updateCard } from "../../lib/feishu/client";
+import { botName, feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, SERVICE_CHAT_OPTION_KEY, serviceChatId, updateCard } from "../../lib/feishu/client";
 import { firstSeen, readFeishuRequest, runLater, toast } from "../../lib/feishu/inbound";
 import { requestNote } from "../../lib/feishu/requestNote";
 import {
@@ -295,7 +295,6 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
       },
       {
         requireProduct: false,
-        validateQuestionnaire: false,
         creator: user,
         initialFiles: attachmentsFromItems(items),
         // Type and fault type are optional here, and only after-sales/admin may set them.
@@ -393,6 +392,19 @@ feishuRoutes.get("/feishu/chats", async (c) => {
   } catch (error) {
     console.error("Could not list the bot's groups", error);
     return c.json([]);
+  }
+});
+
+// The after-sales bot's name in Feishu, for the portal's instructions (any
+// signed-in user: the AI settings page names it too). Null when unknown.
+feishuRoutes.get("/feishu/bot", async (c) => {
+  const env = c.env as Env;
+  if (!feishuEnabled(env)) return c.json({ name: null });
+  try {
+    return c.json({ name: await botName(env) });
+  } catch (error) {
+    console.error("Could not read the bot's name", error);
+    return c.json({ name: null });
   }
 });
 

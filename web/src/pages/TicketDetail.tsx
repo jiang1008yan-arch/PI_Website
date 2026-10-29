@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
-import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
+import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketStatus, TicketType, TicketUpdate, User } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, formatDateTime } from "../tickets/ticketShared";
 import { nextStatuses, resolveBlocker, ticketCapabilities } from "../../../shared/ticketCapabilities";
 import { markSeen } from "../pi/notifications";
@@ -16,7 +16,6 @@ import { TicketFault } from "../tickets/TicketFault";
 type Detail = {
   ticket: Ticket;
   updates: TicketUpdate[];
-  fields: TicketField[];
   matchedPis: MatchedPi[];
   device: { serialNumber: string; piId: string; piNo: string; linkedPiNo?: string | null; linkedPiNoSnapshot?: string | null } | null;
   repeat: RepeatInfo | null;
@@ -90,13 +89,7 @@ export function TicketDetailPage() {
 
   if (!data) return <div className="py-10 text-center text-sm text-[#63749b]">Loading…</div>;
 
-  const { ticket, updates, fields } = data;
-  let parsedAnswers: Record<string, string> = {};
-  try {
-    parsedAnswers = JSON.parse(ticket.answers || "{}");
-  } catch {
-    parsedAnswers = {};
-  }
+  const { ticket, updates } = data;
   const transitions = nextStatuses(ticket.status);
   // A ticket is classified (and a fault confirmed) before it can be resolved.
   const blocker = resolveBlocker(ticket);
@@ -136,12 +129,8 @@ export function TicketDetailPage() {
             </dl>
             <TicketEquipment ticket={ticket} matchedPis={data.matchedPis ?? []} device={data.device ?? null} canManage={caps.confirmFault} onChanged={load} />
             <div className="border-t pt-4">
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Questionnaire</h3>
               <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Info label="Product (as reported)" value={ticket.productNameEn ?? "—"} />
-                {fields.map((f) => (
-                  <Info key={f.id} label={f.label} value={parsedAnswers[f.id!] || "—"} />
-                ))}
               </dl>
             </div>
           </Section>

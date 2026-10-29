@@ -99,6 +99,26 @@ describe("tickets and PIs", () => {
     expect((await h.db.prepare("SELECT COUNT(*) AS n FROM ticketUpdates WHERE ticketId = ?").bind(res.body.id).first<{ n: number }>())!.n).toBe(0);
   });
 
+  it("takes the summary, details (as the creator's first note), type and fault type from the New ticket form", async () => {
+    await h.request("ADMIN", "PUT", "/options/faultType", { values: ["Offline", "RCD tripped"] });
+    const create = (extra: Record<string, unknown>) =>
+      h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", contactName: "Li", contactInfo: "li@x", productId, summary: "Keeps going offline", ...extra });
+
+    const fault = await create({ details: "Drops off Wi-Fi every night.", ticketType: "FAULT", faultType: "Offline" });
+    expect(fault.status).toBe(200);
+    const detail = (await h.request("SERVICE", "GET", `/tickets/${fault.body.id}`)).body;
+    expect(detail.ticket).toMatchObject({ summary: "Keeps going offline", ticketType: "FAULT", faultType: "Offline" });
+    const first = detail.updates.find((u: any) => u.kind === "NOTE" && !u.isSystem);
+    expect(first).toMatchObject({ note: "Drops off Wi-Fi every night.", actorId: h.users.SERVICE.id });
+
+    // A fault type that is not on the list is skipped, as if not picked.
+    const unknown = (await h.request("SERVICE", "GET", `/tickets/${(await create({ ticketType: "FAULT", faultType: "Made up" })).body.id}`)).body.ticket;
+    expect(unknown).toMatchObject({ ticketType: "FAULT", faultType: null });
+    // Nothing picked: not classified yet.
+    const plain = (await h.request("SERVICE", "GET", `/tickets/${(await create({})).body.id}`)).body.ticket;
+    expect(plain).toMatchObject({ ticketType: null, faultType: null });
+  });
+
   it("shows no match for an unknown production order number", async () => {
     const t = await ticket("PO-UNKNOWN");
     expect((await h.request("SERVICE", "GET", `/tickets/${t}`)).body.matchedPis).toEqual([]);

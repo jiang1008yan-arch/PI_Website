@@ -107,15 +107,6 @@ export type PiReviewEvent = {
 
 export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
 
-export type TicketField = {
-  id?: string;
-  label: string;
-  fieldType: "TEXT" | "DROPDOWN";
-  options?: string[];
-  required: number;
-  sortOrder: number;
-};
-
 export type Ticket = {
   id: string;
   ticketNo: string;
@@ -129,7 +120,6 @@ export type Ticket = {
   productCode?: string | null;
   productNameEn?: string | null;
   productNameZh?: string | null;
-  answers: string;
   assignedSalesId?: string | null;
   assignedServiceId?: string | null;
   assignedSalesName?: string | null;

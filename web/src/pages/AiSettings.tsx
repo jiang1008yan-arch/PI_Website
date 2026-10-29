@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { api } from "../api/client";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
+import { useBotName } from "../hooks/useBotName";
 
 type Provider = "QWEN" | "DEEPSEEK";
 type AiState = {
@@ -21,6 +22,7 @@ const KEY_HELP: Record<Provider, string> = {
 // form simply has no AI suggestion. The key is write-only — once saved it is
 // only shown masked.
 export function AiSettingsPage() {
+  const bot = useBotName();
   const [state, setState] = useState<AiState | null>(null);
   const [provider, setProvider] = useState<Provider | "OFF">("OFF");
   const [apiKey, setApiKey] = useState("");
@@ -77,7 +79,7 @@ export function AiSettingsPage() {
           {state.available && !state.feishuLinked && (
             <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
               This portal account is not linked to your Feishu account, so a key saved here will not be used. In Feishu, send
-              <strong> bind </strong> to 售后工单Robot in a direct message, open the link and sign in with this account.
+              <strong> bind </strong> to {bot} in a direct message, open the link and sign in with this account.
             </div>
           )}
           {!state.available && (

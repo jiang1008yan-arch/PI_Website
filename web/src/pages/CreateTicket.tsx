@@ -7,19 +7,16 @@ import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
 import { ticketProductOptionLabel } from "../tickets/productOptionLabel";
 import { SimilarTicketsPanel } from "../tickets/SimilarTicketsPanel";
+import { TICKET_TYPE_LABEL } from "../tickets/ticketShared";
 import { usePiLines } from "../tickets/usePiLines";
-import type { PublicProduct, TicketField, User } from "../types";
-
-function parseFields(raw: any[]): TicketField[] {
-  return raw.map((f) => ({ ...f, options: JSON.parse(f.options || "[]") }));
-}
+import type { PublicProduct, TicketType, User } from "../types";
 
 export function CreateTicketPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const [fields, setFields] = useState<TicketField[]>([]);
   const [products, setProducts] = useState<PublicProduct[]>([]);
+  const [faultTypes, setFaultTypes] = useState<string[]>([]);
   const [users, setUsers] = useState<User[]>([]);
 
   const [customerCompany, setCustomerCompany] = useState("");
@@ -42,7 +39,13 @@ export function CreateTicketPage() {
     api.get(`/lookup/pi/${piId}/devices`).then((res) => setPiSerials(res.data)).catch(() => setPiSerials([]));
   }, [piId]);
   const line = lineOptions.find((o) => o.key === lineKey) ?? null;
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  // The same fields as the Feishu request form: a one-line summary, details
+  // (the ticket's first note), and optionally the type and fault type, which
+  // can also wait until the ticket is resolved.
+  const [summary, setSummary] = useState("");
+  const [details, setDetails] = useState("");
+  const [ticketType, setTicketType] = useState<TicketType | "">("");
+  const [faultType, setFaultType] = useState("");
   const [assignedSalesId, setAssignedSalesId] = useState("");
   const [assignedServiceId, setAssignedServiceId] = useState("");
   // A customer group the Feishu bot is in, told when the ticket is created and resolved.
@@ -54,15 +57,11 @@ export function CreateTicketPage() {
 
   useEffect(() => {
     (async () => {
-      const [f, p, u] = await Promise.all([
-        api.get("/ticket-fields"),
-        api.get("/tickets/products"),
-        api.get("/assignable-users")
-      ]);
-      setFields(parseFields(f.data));
+      const [p, u] = await Promise.all([api.get("/tickets/products"), api.get("/assignable-users")]);
       setProducts(p.data);
       setUsers(u.data);
     })().catch(() => setError("Could not load the form."));
+    api.get("/options/faultType").then((res) => setFaultTypes(res.data.map((r: { value: string }) => r.value))).catch(() => setFaultTypes([]));
     api.get("/feishu/chats").then((res) => setChats(res.data)).catch(() => setChats([]));
   }, []);
 
@@ -77,8 +76,8 @@ export function CreateTicketPage() {
 
   const effectiveProductId = line?.productId ?? productId;
   const canSubmit = useMemo(
-    () => Boolean(contactName.trim() && contactInfo.trim() && effectiveProductId),
-    [contactName, contactInfo, effectiveProductId]
+    () => Boolean(contactName.trim() && contactInfo.trim() && effectiveProductId && summary.trim()),
+    [contactName, contactInfo, effectiveProductId, summary]
   );
 
   function applyPi(next: { piId: string; productionOrderNo: string; customerCompany: string }) {
@@ -102,7 +101,10 @@ export function CreateTicketPage() {
         productId: effectiveProductId,
         productModel: line?.model || undefined,
         serialNumber: serialNumber.trim() || undefined,
-        answers,
+        summary: summary.trim(),
+        details: details.trim() || undefined,
+        ticketType: ticketType || undefined,
+        faultType: ticketType === "FAULT" ? faultType || undefined : undefined,
         assignedSalesId: assignedSalesId || undefined,
         assignedServiceId: assignedServiceId || undefined,
         feishuSourceChatId: notifyChat || undefined
@@ -213,32 +215,46 @@ export function CreateTicketPage() {
               </Field>
             )}
 
-            {fields.map((field) => (
-              <Field key={field.id} label={`${field.label}${field.required ? " *" : ""}`}>
-                {field.fieldType === "DROPDOWN" ? (
-                  <select
-                    value={answers[field.id!] ?? ""}
-                    required={Boolean(field.required)}
-                    onChange={(e) => setAnswers((s) => ({ ...s, [field.id!]: e.target.value }))}
-                  >
-                    <option value="">Select…</option>
-                    {(field.options ?? []).map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
+            <Field label="Summary * (one line: the symptoms, not a guessed cause)">
+              <input value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={300} required placeholder="e.g. Charger goes offline every night" />
+            </Field>
+            <Field label="Details (optional)">
+              <textarea
+                rows={4}
+                value={details}
+                onChange={(e) => setDetails(e.target.value)}
+                maxLength={4000}
+                placeholder="What the customer reported, error codes, what was tried. Saved as the ticket's first note."
+              />
+            </Field>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Ticket type (optional)">
+                <select value={ticketType} onChange={(e) => setTicketType(e.target.value as TicketType | "")}>
+                  <option value="">Decide later</option>
+                  {(Object.keys(TICKET_TYPE_LABEL) as TicketType[]).map((t) => (
+                    <option key={t} value={t}>
+                      {TICKET_TYPE_LABEL[t]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {ticketType === "FAULT" && (
+                <Field label="Fault type (optional)">
+                  <select value={faultType} onChange={(e) => setFaultType(e.target.value)} disabled={faultTypes.length === 0}>
+                    <option value="">{faultTypes.length ? "Decide later" : "No fault types yet"}</option>
+                    {faultTypes.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
                       </option>
                     ))}
                   </select>
-                ) : (
-                  <textarea
-                    rows={3}
-                    value={answers[field.id!] ?? ""}
-                    required={Boolean(field.required)}
-                    maxLength={2000}
-                    onChange={(e) => setAnswers((s) => ({ ...s, [field.id!]: e.target.value }))}
-                  />
-                )}
-              </Field>
-            ))}
+                </Field>
+              )}
+            </div>
+            <p className="text-xs text-[#7184ab]">
+              The type (and, for a fault, the fault type) can wait until you know the cause, but a ticket cannot be resolved without them.
+              {ticketType === "FAULT" && faultTypes.length === 0 && " The fault type list is empty: add the common ones under Fault Analytics → Settings."}
+            </p>
           </div>
         </Section>
 

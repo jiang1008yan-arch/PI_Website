@@ -8,14 +8,16 @@ import { api } from "../api/client";
 import { useCachedList } from "../hooks/useCachedList";
 import type { Ticket, TicketStatus, TicketType } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, STATUS_ORDER, TICKET_TYPE_LABEL, formatDateTime } from "./ticketShared";
-import { ticketCapabilities } from "../../../shared/ticketCapabilities";
+import { resolveBlocker, ticketCapabilities } from "../../../shared/ticketCapabilities";
 
 export function TicketListPanel() {
   const [status, setStatus] = useState<"" | TicketStatus>("");
   // ?q= pre-fills the search (links from "earlier tickets like this").
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
-  const [type, setType] = useState<"" | TicketType | "NONE">("");
+  // "NEEDS": not classified yet, or a fault without its fault type — what
+  // still has to be filled in before the ticket can be resolved.
+  const [type, setType] = useState<"" | TicketType | "NEEDS">("");
   // Cached per status filter so re-entering the tab (or switching filters back)
   // paints instantly, then revalidates.
   const { data: tickets, loading } = useCachedList<Ticket>(
@@ -37,7 +39,7 @@ export function TicketListPanel() {
     const q = query.trim().toLowerCase();
     return tickets.filter(
       (t) =>
-        (!type || (type === "NONE" ? !t.ticketType : t.ticketType === type)) &&
+        (!type || (type === "NEEDS" ? resolveBlocker(t) !== null : t.ticketType === type)) &&
         (!q ||
           [t.ticketNo, t.orderNo, t.customerCompany, t.productNameEn, t.productNameZh, t.serialNumber, t.faultType, t.summary].some((v) =>
             (v ?? "").toLowerCase().includes(q)
@@ -64,7 +66,7 @@ export function TicketListPanel() {
             {(Object.keys(TICKET_TYPE_LABEL) as TicketType[]).map((t) => (
               <option key={t} value={t}>{TICKET_TYPE_LABEL[t]}</option>
             ))}
-            <option value="NONE">Not classified</option>
+            <option value="NEEDS">Needs classification</option>
           </select>
           <div className="relative w-full sm:w-72">
             <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#8595b6]" />
@@ -115,7 +117,9 @@ export function TicketListPanel() {
                 <td>{t.customerCompany}</td>
                 <td>{t.orderNo}</td>
                 <td>{t.productNameEn ?? "—"}</td>
-                <td className="text-[#294477]">{t.ticketType ? TICKET_TYPE_LABEL[t.ticketType] : <span className="text-[#8595b6]">—</span>}</td>
+                <td className="text-[#294477]">
+                  <TypeCell ticket={t} />
+                </td>
                 <td>
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[t.status]}`}>
                     {STATUS_LABEL[t.status]}
@@ -138,5 +142,18 @@ export function TicketListPanel() {
         </table>
       )}
     </div>
+  );
+}
+
+// The type, with the fault type for a fault; what is still missing shows in
+// amber (open tickets only: a resolved ticket is always classified).
+function TypeCell({ ticket }: { ticket: Ticket }) {
+  const missing = (text: string) => <span className="text-xs font-medium text-amber-700">{text}</span>;
+  if (!ticket.ticketType) return missing("Not classified");
+  if (ticket.ticketType !== "FAULT") return <>{TICKET_TYPE_LABEL[ticket.ticketType]}</>;
+  return (
+    <>
+      Fault · {ticket.faultType ? ticket.faultType : missing("fault type missing")}
+    </>
   );
 }
