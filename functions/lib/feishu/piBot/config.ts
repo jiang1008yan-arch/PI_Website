@@ -6,6 +6,7 @@ import type { Env } from "../../types";
 // card. People are addressed by union_id — the same for one person across all
 // of the company's Feishu apps — stored in users.feishuUnionId.
 export type PiBotApp = {
+  bot: "pi";
   appId: string;
   appSecret: string;
   encryptKey: string;
@@ -18,6 +19,7 @@ export function piBotApp(env: Env): PiBotApp | null {
   const appSecret = String(env.FEISHU_PI_APP_SECRET ?? "").trim();
   if (!appId || !appSecret) return null;
   return {
+    bot: "pi",
     appId,
     appSecret,
     encryptKey: String(env.FEISHU_PI_ENCRYPT_KEY ?? "").trim(),

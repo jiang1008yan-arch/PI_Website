@@ -1,46 +1,22 @@
 import type { Env } from "../types";
+import { call as transportCall, download, setBotFetch, type FeishuApp } from "./transport";
 
-// Minimal Feishu Open Platform client: tenant token, send/reply/update
-// messages, read a message and download its files, list the bot's groups.
-// Everything goes through `feishuFetch`, which tests replace with a fake.
+// The after-sales bot's Feishu client (FEISHU_APP_ID), over the shared
+// transport: send/reply/update messages, read a message and download its
+// files, list the bot's groups, the requirement-pool Bitable.
 
-const BASE = "https://open.feishu.cn/open-apis";
-
-let fetchImpl: typeof fetch = (input, init) => fetch(input, init);
-export function setFeishuFetch(impl: typeof fetch | null) {
-  fetchImpl = impl ?? ((input, init) => fetch(input, init));
-  tokenCache = null;
-}
+// Tests replace this bot's Feishu with a fake.
+export const setFeishuFetch = (impl: typeof fetch | null) => setBotFetch("afterSales", impl);
 
 export function feishuEnabled(env: Env): boolean {
   return Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.FEISHU_SERVICE_CHAT_ID);
 }
 
-let tokenCache: { appId: string; value: string; expiresAt: number } | null = null;
+const app = (env: Env): FeishuApp => ({ bot: "afterSales", appId: env.FEISHU_APP_ID ?? "", appSecret: env.FEISHU_APP_SECRET ?? "" });
 
-async function tenantToken(env: Env): Promise<string> {
-  const now = Date.now();
-  if (tokenCache && tokenCache.appId === env.FEISHU_APP_ID && tokenCache.expiresAt > now + 60_000) return tokenCache.value;
-  const res = await fetchImpl(`${BASE}/auth/v3/tenant_access_token/internal`, {
-    method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body: JSON.stringify({ app_id: env.FEISHU_APP_ID, app_secret: env.FEISHU_APP_SECRET })
-  });
-  const data: any = await res.json();
-  if (data.code !== 0 || !data.tenant_access_token) throw new Error(`Feishu token: ${data.code} ${data.msg}`);
-  tokenCache = { appId: env.FEISHU_APP_ID!, value: data.tenant_access_token, expiresAt: now + Number(data.expire ?? 3600) * 1000 };
-  return tokenCache.value;
-}
-
+// The `data` part of Feishu's answer.
 async function call(env: Env, method: string, path: string, body?: unknown): Promise<any> {
-  const res = await fetchImpl(`${BASE}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${await tenantToken(env)}`, "content-type": "application/json; charset=utf-8" },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (data.code !== 0) throw new Error(`Feishu ${method} ${path}: ${data.code} ${data.msg}`);
-  return data.data ?? {};
+  return (await transportCall(app(env), method, path, body)).data ?? {};
 }
 
 export type ReceiveIdType = "chat_id" | "open_id" | "union_id";
@@ -104,9 +80,7 @@ export type Download = { ok: true; body: ArrayBuffer; contentType: string } | { 
 // A picture ("image") or voice message / video / file ("file") of a message
 // the bot can see. Feishu refuses files inside merged forwards (234043).
 export async function downloadResource(env: Env, messageId: string, fileKey: string, type: "image" | "file", maxBytes: number): Promise<Download> {
-  const res = await fetchImpl(`${BASE}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${type}`, {
-    headers: { authorization: `Bearer ${await tenantToken(env)}` }
-  });
+  const res = await download(app(env), `/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${type}`);
   const contentType = res.headers.get("content-type") ?? "application/octet-stream";
   if (!res.ok || contentType.includes("application/json")) {
     const data: any = await res.json().catch(() => ({}));
