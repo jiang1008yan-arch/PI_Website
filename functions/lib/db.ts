@@ -1,10 +1,3 @@
-import { drizzle } from "drizzle-orm/d1";
-import type { Env } from "./types";
-
-export function getDb(env: Env) {
-  return drizzle(env.DB);
-}
-
 export function id(prefix = "id") {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 }
