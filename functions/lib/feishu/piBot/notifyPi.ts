@@ -1,3 +1,4 @@
+import { parseFieldValues } from "../../../../shared/piItemCodec";
 import { all, first, id } from "../../db";
 import type { AppUser, Env } from "../../types";
 import { patchCard, sendCard } from "./client";
@@ -58,18 +59,14 @@ export async function loadCardPi(db: D1Database, piId: string): Promise<{ pi: Pi
     quantity: Number(r.quantity),
     unitPrice: Number(r.unitPrice),
     discountPct: Number(r.discountPct),
-    fieldValues: parseFieldValues(r.fieldValues)
+    fieldValues: cardFields(r.fieldValues)
   }));
   return { pi, items };
 }
 
-function parseFieldValues(raw: unknown): Array<{ label: string; value: string }> {
-  try {
-    const parsed = JSON.parse(String(raw ?? "[]"));
-    return Array.isArray(parsed) ? parsed.map((f) => ({ label: String(f.label ?? ""), value: String(f.value ?? "") })) : [];
-  } catch {
-    return [];
-  }
+// Label and value of each field, as the card shows them.
+function cardFields(raw: unknown): Array<{ label: string; value: string }> {
+  return parseFieldValues(raw).map((f) => ({ label: String(f.label ?? ""), value: String(f.value ?? "") }));
 }
 
 // Outcome line for earlier action cards, e.g. "Approved by Pat (Presales)".

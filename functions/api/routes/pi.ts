@@ -21,6 +21,7 @@ import {
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
 import { hasEffectiveVersion } from "../../../shared/piCapabilities";
+import { parseFieldValues } from "../../../shared/piItemCodec";
 import { parseSerials } from "../../lib/devices";
 import { canRegisterSn } from "../../lib/ticketAccess";
 import { purgeExpired } from "../../scheduled";
@@ -118,16 +119,6 @@ const ITEM_SELECT =
 
 async function loadPiItems(db: D1Database, piId: string) {
   return await all(db, "SELECT * FROM piItems WHERE piId=? ORDER BY sortOrder", piId);
-}
-
-function parseFieldValues(raw: string | null | undefined): any[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 // ZH PIs awaiting presales confirmation by the caller: a PRESALES user sees

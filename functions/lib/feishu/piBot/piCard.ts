@@ -2,6 +2,8 @@
 // builders — no I/O — so card shape is unit-tested. All copy is English
 // (user-entered values are shown as typed).
 
+import { itemsTotal, lineAmount } from "../../../../shared/lineItem";
+
 // The approval step a pending ZH PI is waiting on.
 export type ApprovalStep = "PRESALES" | "COMMERCE";
 
@@ -56,9 +58,8 @@ function money(n: number): string {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function lineAmount(item: CardItem): number {
-  return Number(item.quantity) * Number(item.unitPrice) * (1 - Number(item.discountPct) / 100);
-}
+// The card shows the same line amounts as the portal.
+export { lineAmount };
 
 // Visible product fields (hidden "__" meta fields are internal).
 function itemFields(item: CardItem): string {
@@ -93,7 +94,7 @@ function headerFor(pi: CardPi, mode: PiCardMode) {
 }
 
 export function buildPiCard(pi: CardPi, items: CardItem[], mode: PiCardMode, editUrl: string) {
-  const total = items.reduce((sum, it) => sum + lineAmount(it), 0);
+  const total = itemsTotal(items);
   const facts = [
     `**Customer:** ${md(pi.customerCompany) || "—"}`,
     `**Production order no.:** ${md(pi.productionOrderNo) || "—"}`,

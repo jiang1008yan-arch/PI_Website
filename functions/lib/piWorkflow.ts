@@ -1,3 +1,4 @@
+import { parseFieldValues } from "../../shared/piItemCodec";
 import { id } from "./db";
 import type { PiRow, PiStatus } from "./piAccess";
 import { piItemReplaceStatements, type PiItemInput } from "./piItems";
@@ -232,17 +233,7 @@ export function parseEffectiveSnapshot(raw: unknown): EffectiveSnapshot | null {
 }
 
 function toItemInput(item: Record<string, unknown>): PiItemInput {
-  const raw = item.fieldValues;
-  let fieldValues: unknown[] = [];
-  if (Array.isArray(raw)) fieldValues = raw;
-  else if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) fieldValues = parsed;
-    } catch {
-      // keep empty
-    }
-  }
+  const fieldValues = parseFieldValues(item.fieldValues);
   return {
     productId: String(item.productId),
     quantity: Number(item.quantity ?? 1),
