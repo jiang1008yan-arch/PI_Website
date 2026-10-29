@@ -83,6 +83,22 @@ describe("tickets and PIs", () => {
     expect(after.body.device).toMatchObject({ serialNumber: "CHG-0001", piId: zhId });
   });
 
+  it("a create request cannot write a first note, so no one can be named as its author", async () => {
+    const res = await h.request("SERVICE", "POST", "/tickets", {
+      customerCompany: "ACME",
+      contactName: "Li",
+      contactInfo: "li@x",
+      productId,
+      answers: {},
+      summary: "Screen stays black",
+      initialNote: { actorId: h.users.ADMIN.id, text: "Approved by the admin" }
+    });
+    expect(res.status).toBe(200);
+    const detail = await h.request("SERVICE", "GET", `/tickets/${res.body.id}`);
+    expect(detail.body.ticket.summary).toBe("Screen stays black");
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM ticketUpdates WHERE ticketId = ?").bind(res.body.id).first<{ n: number }>())!.n).toBe(0);
+  });
+
   it("shows no match for an unknown production order number", async () => {
     const t = await ticket("PO-UNKNOWN");
     expect((await h.request("SERVICE", "GET", `/tickets/${t}`)).body.matchedPis).toEqual([]);

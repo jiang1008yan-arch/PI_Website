@@ -14,7 +14,8 @@ import {
   MAX_ATTACHMENT_BYTES,
   setTicketCustomer,
   setTicketProduct,
-  setTicketType
+  setTicketType,
+  type NewTicket
 } from "../../lib/ticketWorkflow";
 import { afterTicketChange } from "../../lib/feishu/sync";
 import { feishuEnabled, listBotChats } from "../../lib/feishu/client";
@@ -113,11 +114,24 @@ ticketRoutes.post("/tickets", async (c) => {
       return c.json({ error: "Choose a customer group the Feishu bot is in." }, 400);
     }
   }
-  const created = await createTicket(
-    c.env,
-    { ...d, feishuSourceChatId: chatId, feishuSourceMessageId: null },
-    { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") }
-  );
+  // Only what the New ticket form sends: never a first note, which would carry
+  // its own author.
+  const input: NewTicket = {
+    customerCompany: d.customerCompany,
+    orderNo: d.orderNo,
+    contactName: d.contactName,
+    contactInfo: d.contactInfo,
+    productId: d.productId,
+    productModel: d.productModel,
+    serialNumber: d.serialNumber,
+    answers: d.answers,
+    assignedSalesId: d.assignedSalesId,
+    assignedServiceId: d.assignedServiceId,
+    summary: d.summary,
+    feishuSourceChatId: chatId,
+    feishuSourceMessageId: null
+  };
+  const created = await createTicket(c.env, input, { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") });
   afterTicketChange(c, created.id, created.changes);
   return c.json({ id: created.id, ticketNo: created.ticketNo });
 });

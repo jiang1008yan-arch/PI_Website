@@ -92,3 +92,7 @@ Commit locally only. No push and no PR until reviewed.
   note in another person's name. The Feishu-only inputs added here (stored files, picked type,
   card, device alert) are deliberately kept in `createTicket`'s options, so the body cannot reach
   them. Closing this would mean picking the allowed fields out of the body.
+  **Resolved 2026-10-29:** `POST /tickets` now takes only the fields the New ticket form sends,
+  plus `summary`. A body `initialNote` is ignored, and `aftersales.int.test.ts` covers this.
+  Still open as its own small decision: the owners named at create are not checked to exist, as
+  they are when reassigning.
