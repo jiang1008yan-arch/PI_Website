@@ -1,5 +1,7 @@
 # A separate cron Worker triggers the portal's scheduled jobs
 
+**Superseded:** the portal now runs as a single Worker with its own cron trigger (`src/worker.ts`), so `workers/cron` is only needed until the custom domain leaves Pages.
+
 The portal runs on Cloudflare Pages, and Pages Functions have no cron triggers: the `onScheduled` export in `functions/scheduled.ts` was never called, so purging expired PIs and retrying failed Feishu pushes never actually ran. The new weekly summary, owner reminders and Feishu request expiry need a clock too. We add a tiny Worker (`workers/cron`) whose only job is to call `POST /api/internal/cron` every 30 minutes with a shared `CRON_SECRET`; the portal runs every job from there (`runScheduledJobs`), each independently so one failure does not stop the rest. Jobs are written to be safe to run often: each decides from the database whether there is work (the weekly summary records the week it was sent for; reminders record when each ticket was last reminded).
 
 ## Considered Options

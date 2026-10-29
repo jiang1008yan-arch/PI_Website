@@ -1,6 +1,16 @@
 name = "sales-portal"
+main = "src/worker.ts"
 compatibility_date = "2025-04-01"
-pages_build_output_dir = "web/dist"
+
+# SPA build output, served by the Worker. run_worker_first sends every request
+# through src/worker.ts so /api/* (including navigations to /api/files/...
+# download links) always reaches Hono; other paths go to env.ASSETS, which
+# falls back to index.html for client-side routes.
+[assets]
+directory = "web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
 
 [vars]
 R2_PUBLIC_BASE = ""
@@ -13,3 +23,30 @@ database_id = "fd065e2a-698f-4a51-ba91-428ba5f22734"
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "sales-portal-files"
+
+# Background jobs (Feishu bot NOTIFY / ANALYZE / ANSWER). Create once with:
+#   wrangler queues create app-jobs
+#   wrangler queues create app-jobs-dlq
+[[queues.producers]]
+binding = "JOBS"
+queue = "app-jobs"
+
+[[queues.consumers]]
+queue = "app-jobs"
+max_batch_size = 10
+max_batch_timeout = 2
+max_retries = 3
+dead_letter_queue = "app-jobs-dlq"
+
+[ai]
+binding = "AI"
+
+# Scheduled jobs (runScheduledJobs in functions/scheduled.ts), same cadence the
+# old workers/cron Worker used. Once this Worker serves the domain, delete that
+# cron Worker or the jobs run twice.
+[triggers]
+crons = ["*/30 * * * *"]
+
+# Keep the port the Vite dev server proxies /api to (web/vite.config.ts).
+[dev]
+port = 8788

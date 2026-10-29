@@ -21,10 +21,10 @@ Until the secrets below are set, the bot is off and the portal works exactly as 
    - Set an **Encrypt Key** and copy the **Verification Token**.
 5. Publish a version of the app so the settings take effect.
 
-## 2. Secrets and settings (Cloudflare Pages)
+## 2. Secrets and settings (portal Worker)
 
 ```bash
-npx wrangler pages secret put FEISHU_APP_ID
+npx wrangler secret put FEISHU_APP_ID
 ```
 
 Set the same way: `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY`, `FEISHU_SERVICE_CHAT_ID`
@@ -38,10 +38,14 @@ Two more shared secrets (long random strings):
 - `CRON_SECRET` — lets the cron Worker run the scheduled jobs (next section).
 - `DEVICE_INGEST_SECRET` — lets the charger backend push device status (section 3b).
 
-## 2a. Scheduled jobs (cron Worker)
+## 2a. Scheduled jobs
 
-Cloudflare Pages cannot run anything on a timer, so a tiny separate Worker (`workers/cron`) calls
-`POST /api/internal/cron` every 30 minutes (see [ADR 0003](adr/0003-cron-worker-for-pages.md)). Deploy it once:
+The portal Worker runs the scheduled jobs itself every 30 minutes (`scheduled()` in `src/worker.ts`, cron in
+`wrangler.toml`). The section below describes the old separate cron Worker (`workers/cron`), which was only needed
+while the portal ran on Cloudflare Pages ([ADR 0003](adr/0003-cron-worker-for-pages.md)); delete it once the
+domain has moved to the Worker. `CRON_SECRET` still guards `POST /api/internal/cron` for manual runs.
+
+Old setup (Pages only):
 
 ```bash
 npx wrangler deploy --config workers/cron/wrangler.toml

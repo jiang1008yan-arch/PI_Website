@@ -30,6 +30,11 @@ export type Env = {
   CRON_SECRET?: string;
   // Shared with the charger backend that pushes device status (POST /api/devices/status).
   DEVICE_INGEST_SECRET?: string;
+  // Worker bindings (wrangler.toml): SPA static assets, the `app-jobs` queue
+  // producer (Feishu bot jobs), and Workers AI.
+  ASSETS: Fetcher;
+  JOBS: Queue;
+  AI: Ai;
 };
 
 export type AppUser = {

@@ -79,8 +79,10 @@ app.route("/", internalRoutes);
 app.route("/", lookupRoutes);
 app.route("/", deviceRoutes);
 
-// Exported for the integration tests (functions/test/harness.ts), which drive the
-// app directly with a Miniflare-backed D1 instead of going through Pages.
+// Exported for the Worker entry (src/worker.ts) and the integration tests
+// (functions/test/harness.ts, which drive it with a Miniflare-backed D1).
+// onRequest below keeps the old Pages project serving until the custom domain
+// has moved to the Worker.
 export { app };
 
 export const onRequest: PagesFunction<Env> = (context) =>
