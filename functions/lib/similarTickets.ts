@@ -1,6 +1,7 @@
 import { all } from "./db";
 import { loadRepeatSettings, repeatWindowStart } from "./faultStats";
 import { normalizeSerial } from "./devices";
+import { FROM_FEISHU } from "./feishu/requestNote";
 
 // "Has this happened before?" — earlier tickets shown before a new one is
 // created, in the Feishu form and on the portal's New ticket page
@@ -87,7 +88,7 @@ export function assembleLayers(matches: { key: SimilarLayerKey; value: string; r
 // The first thing anyone wrote about it, when no one-line summary was set.
 const COLUMNS = `t.id, t.ticketNo, t.createdAt, t.customerCompany, t.status,
   COALESCE(NULLIF(TRIM(t.summary), ''),
-    (SELECT REPLACE(u.note, 'From Feishu: ', '') FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' AND u.isSystem = 0 AND u.note <> ''
+    (SELECT REPLACE(u.note, '${FROM_FEISHU} ', '') FROM ticketUpdates u WHERE u.ticketId = t.id AND u.kind = 'NOTE' AND u.isSystem = 0 AND u.note <> ''
      ORDER BY u.createdAt, u.rowid LIMIT 1)) AS summary`;
 const CAP = 50;
 

@@ -3,6 +3,8 @@
 // written there once as a row; filtering, export, assignment and notifying
 // product managers happen in Bitable itself (pure helpers; I/O in sync.ts).
 
+import { customerWordsOf } from "./requestNote";
+
 export const POOL_URL_OPTION_KEY = "requirementPoolUrl";
 
 // Column names the table must have, all of type Text (多行文本).
@@ -50,7 +52,7 @@ export type PoolTicket = {
 export function poolRecordFields(t: PoolTicket, portalUrl: string | null): Record<(typeof POOL_FIELDS)[number], string> {
   // Tickets created from Feishu start their timeline with the customer's words.
   const note = t.firstNote ?? "";
-  const original = note.startsWith("From Feishu:") ? note.replace(/^From Feishu:\s*/, "").slice(0, 2000) : "";
+  const original = customerWordsOf(note).slice(0, 2000);
   return {
     工单号: t.ticketNo,
     提交日期: t.createdAt.slice(0, 10),

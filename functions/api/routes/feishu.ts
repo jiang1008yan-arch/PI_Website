@@ -31,6 +31,7 @@ import {
 } from "../../lib/feishu/ticketRequest";
 import { feishuEnabled, listBitableFields, listBotChats, sendCard, sendText, updateCard } from "../../lib/feishu/client";
 import { firstSeen, readFeishuRequest, runLater, toast } from "../../lib/feishu/inbound";
+import { requestNote } from "../../lib/feishu/requestNote";
 import {
   attachmentsFromItems,
   handleIncomingMessage,
@@ -286,7 +287,7 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
         // words go on the timeline, recorded as the confirming user.
         initialNote: {
           actorId: user.id,
-          text: details ? `${details}\n\nFrom Feishu:\n${draft.text || "(files only)"}` : `From Feishu: ${draft.text || "(files only)"}`
+          text: requestNote(details, draft.text || "(files only)")
         }
       },
       {
