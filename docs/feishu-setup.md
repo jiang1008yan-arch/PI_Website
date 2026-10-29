@@ -129,7 +129,8 @@ Product managers keep their requirement pool in a Feishu Bitable; each ticket cl
 1. In the Feishu Open Platform, add the permission `bitable:app` to the app and publish a new version.
 2. A product manager creates a Bitable with one table whose columns are exactly (all of type Text / 文本):
    工单号、提交日期、客户、产品、型号、SN、摘要、客户原话、售后负责人、工单链接.
-3. In the base, **Share** → add the app **售后工单Robot** as an editor (可编辑).
+3. In the base, **Share** → add the after-sales bot (currently **After-sales Service Robot**; the portal pages show its
+   current name) as an editor (可编辑).
 4. Open the table, copy the link from the address bar (`…/base/<id>?table=tbl…`), and paste it in the portal under
    **Administration → Requirement Pool**; press **Check table** — it lists missing or wrongly typed columns.
 5. To notify product managers, use the base's own **Automations → When a record is added → Send a Feishu message**.

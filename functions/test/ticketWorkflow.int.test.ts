@@ -36,7 +36,7 @@ const feishuCreate = (opts: FeishuCreateOptions = {}) =>
   createTicket(
     h.env,
     { ...base, initialNote: { actorId: h.users.SERVICE.id, text: "From Feishu: it is off" } },
-    { requireProduct: false, validateQuestionnaire: false, creator: h.users.SERVICE, ...opts }
+    { requireProduct: false, creator: h.users.SERVICE, ...opts }
   );
 const row = (id: string) => h.db.prepare("SELECT * FROM tickets WHERE id = ?").bind(id).first<any>();
 const count = async (sql: string, ...params: unknown[]) => (await h.db.prepare(sql).bind(...params).first<{ n: number }>())!.n;
@@ -101,7 +101,7 @@ describe("create", () => {
     const other = await createTicket(
       h.env,
       { ...base, assignedServiceId: h.users.ADMIN.id },
-      { requireProduct: false, validateQuestionnaire: false, creator: h.users.SERVICE, feishuCardMessageId: "om_2" }
+      { requireProduct: false, creator: h.users.SERVICE, feishuCardMessageId: "om_2" }
     );
     expect(other.ownCard).toBe(false);
     expect((await row(other.id)).feishuCardMessageId).toBeNull();
@@ -143,7 +143,7 @@ describe("status guard", () => {
   });
 
   it("guards take, whose owner change rolls back with it", async () => {
-    const { id } = await createTicket(h.env, base, { requireProduct: false, validateQuestionnaire: false, creator: h.users.ADMIN });
+    const { id } = await createTicket(h.env, base, { requireProduct: false, creator: h.users.ADMIN });
     const raced = raceBeforeCommit(h.db, "UPDATE tickets SET status = 'RESOLVED' WHERE id = ?", id);
     await expect(takeTicket(raced, h.users.SERVICE, id)).rejects.toMatchObject({ status: 409 });
     expect((await row(id)).assignedServiceId).toBe(h.users.ADMIN.id);
@@ -156,7 +156,7 @@ describe("status guard", () => {
 
 describe("reported changes", () => {
   it("each edit reports what the routes sent before", async () => {
-    const { id } = await createTicket(h.env, { ...base, productId }, { requireProduct: false, validateQuestionnaire: false, creator: h.users.SERVICE });
+    const { id } = await createTicket(h.env, { ...base, productId }, { requireProduct: false, creator: h.users.SERVICE });
     expect((await addTicketNote(h.db, h.users.SERVICE, id, "called")).changes).toEqual([{ kind: "note" }]);
     expect((await assignTicket(h.db, h.users.SERVICE, id, { assignedServiceId: h.users.ADMIN.id, assignedSalesId: h.users.SALES.id })).changes).toEqual([
       { kind: "assigned", newOwnerIds: [h.users.ADMIN.id, h.users.SALES.id] }
@@ -196,7 +196,6 @@ describe("repeat faults", () => {
   const withFault = (extra: Record<string, unknown> = {}) =>
     createTicket(h.env, { ...base, productId, ...extra }, {
       requireProduct: false,
-      validateQuestionnaire: false,
       creator: h.users.SERVICE,
       ticketType: "FAULT",
       faultType: "Offline"

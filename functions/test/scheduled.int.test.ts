@@ -34,6 +34,7 @@ beforeEach(async () => {
     calls.push({ method: init?.method ?? "GET", path, body: init?.body ? JSON.parse(String(init.body)) : null });
     const json = (data: unknown) => new Response(JSON.stringify(data));
     if (path.startsWith("/auth/")) return json({ code: 0, tenant_access_token: "t", expire: 7200 });
+    if (path.startsWith("/bot/v3/info")) return json({ code: 0, bot: { app_name: "After-sales Service Robot" } });
     if (path.startsWith("/im/v1/chats")) {
       return json({ code: 0, data: { items: [{ chat_id: "oc_picked", name: "After-sales team" }, { chat_id: SERVICE_CHAT, name: "Old group" }], has_more: false } });
     }
@@ -188,6 +189,12 @@ describe("after-sales group settings", () => {
     expect((await h.request("ADMIN", "PUT", "/feishu/service-chat", { chatId: "oc_elsewhere" })).status).toBe(400);
     expect((await h.request("SERVICE", "PUT", "/feishu/service-chat", { chatId: "oc_picked" })).status).toBe(403);
     expect((await h.request("SERVICE", "GET", "/feishu/service-chat")).status).toBe(403);
+  });
+
+  it("names the bot as Feishu shows it, for any signed-in user", async () => {
+    expect((await h.request("SALES", "GET", "/feishu/bot")).body).toEqual({ name: "After-sales Service Robot" });
+    h.env.FEISHU_APP_ID = undefined;
+    expect((await h.request("SALES", "GET", "/feishu/bot")).body).toEqual({ name: null });
   });
 
   it("sends a test message to the group", async () => {

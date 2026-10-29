@@ -19,7 +19,6 @@ import { RequirementPoolPage } from "./pages/RequirementPoolPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TemplatesPage } from "./pages/Templates";
 import { TicketDetailPage } from "./pages/TicketDetail";
-import { TicketFieldsConfigPage } from "./pages/TicketFieldsConfig";
 import { TicketNotificationsPage } from "./pages/TicketNotificationsPage";
 import { TicketsPage } from "./pages/Tickets";
 
@@ -65,7 +64,6 @@ export default function App() {
             <Route path="/tickets/new" element={<CreateTicketPage />} />
           </Route>
           <Route element={<AdminRoute />}>
-            <Route path="/ticket-fields-config" element={<TicketFieldsConfigPage />} />
             <Route path="/products" element={<ProductsPage />} />
             <Route path="/permissions" element={<PermissionsPage />} />
             <Route path="/excel-templates" element={<TemplatesPage />} />

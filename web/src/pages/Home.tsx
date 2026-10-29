@@ -1,4 +1,4 @@
-import { Activity, Archive, BadgeCheck, BellRing, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { Activity, Archive, BadgeCheck, BellRing, ChevronRight, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -230,12 +230,9 @@ function areasFor(role: Role | undefined): Area[] {
       { to: "/tickets", title: "Tickets", desc: "Service requests from Feishu and the team", Icon: LifeBuoy, tone: "teal" },
       { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange" },
       lookup,
-      // After-sales settings live with after-sales, but the pages are admin-only.
+      // After-sales settings live with after-sales, but the page is admin-only.
       ...(role === "ADMIN"
-        ? [
-            { to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Questions on the New ticket form", Icon: ClipboardList, tone: "blue" } as Entry,
-            { to: "/ticket-notifications", title: "Ticket Notifications", desc: "After-sales group and update reminders", Icon: BellRing, tone: "violet" } as Entry
-          ]
+        ? [{ to: "/ticket-notifications", title: "Ticket Notifications", desc: "After-sales group and update reminders", Icon: BellRing, tone: "violet" } as Entry]
         : [])
     ]
   };

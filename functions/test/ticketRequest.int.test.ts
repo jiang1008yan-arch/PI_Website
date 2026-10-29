@@ -37,7 +37,6 @@ const openFor = async (person: FeishuPerson, at = now) => (await getOrOpenDraft(
 const newTicket = () =>
   createTicket(h.env, { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "Feishu" }, {
     requireProduct: false,
-    validateQuestionnaire: false,
     creator: h.users.SERVICE
   });
 const deviceAlert = async (serialNumber = "SN1", card = "om_group") => {
@@ -127,7 +126,6 @@ describe("claims left behind", () => {
   const ticketFor = (claim: RequestClaim) =>
     createTicket(h.env, { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "Feishu" }, {
       requireProduct: false,
-      validateQuestionnaire: false,
       creator: h.users.SERVICE,
       request: claim
     });

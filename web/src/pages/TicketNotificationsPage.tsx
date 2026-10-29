@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { BellRing } from "lucide-react";
 import { api } from "../api/client";
 import { ErrorText, Field, PageHero, Section } from "../components/Form";
+import { useBotName } from "../hooks/useBotName";
 
 type GroupState = {
   configured: boolean;
@@ -29,6 +30,7 @@ export function TicketNotificationsPage() {
 }
 
 function AfterSalesGroup() {
+  const bot = useBotName();
   const [state, setState] = useState<GroupState | null>(null);
   const [picked, setPicked] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,7 +88,7 @@ function AfterSalesGroup() {
             The <strong>weekly summary</strong>, <strong>repeat-fault alerts</strong> and <strong>device alerts</strong> go to this group.
             Without one, the bot still works in private chats; those messages are skipped.
           </p>
-          <p>Add the bot <strong>售后工单Robot</strong> to your internal after-sales group first; it then appears in the list below.</p>
+          <p>Add the bot <strong>{bot}</strong> to your internal after-sales group first; it then appears in the list below.</p>
         </div>
         {state && !state.configured && (
           <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">The Feishu bot is not configured on this server (FEISHU_APP_ID / FEISHU_APP_SECRET).</div>

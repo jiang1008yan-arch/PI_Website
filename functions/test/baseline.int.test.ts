@@ -111,14 +111,6 @@ describe("tickets", () => {
     expect(detail.body.updates.map((u: any) => u.kind)).toEqual(["STATUS", "NOTE"]);
   });
 
-  it("the questionnaire is admin configuration", async () => {
-    const field = { label: "Does the charger power on?", fieldType: "DROPDOWN", options: ["Yes", "No"], required: 0, sortOrder: 0 };
-    expect((await h.request("SERVICE", "POST", "/ticket-fields", field)).status).toBe(403);
-    expect((await h.request("ADMIN", "POST", "/ticket-fields", field)).status).toBe(200);
-    // Everyone who files tickets still reads it.
-    expect((await h.request("SALES", "GET", "/ticket-fields")).body).toHaveLength(1);
-  });
-
   it("is closed to commerce", async () => {
     expect((await h.request("COMMERCE", "GET", "/tickets")).status).toBe(403);
     expect((await h.request("COMMERCE", "GET", "/tickets/stats")).status).toBe(403);

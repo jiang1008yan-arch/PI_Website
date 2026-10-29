@@ -101,11 +101,13 @@ async function approvedPisForOrder(db: D1Database, orderNo: string) {
 
 // Staff-created ticket (no customer link). ADMIN and SERVICE create tickets
 // directly and name the responsible people (SALES cannot create). Product is
-// required and the questionnaire is validated exactly like the public submission.
-// Optionally a customer group the Feishu bot is in, told when the ticket is
-// created and resolved.
+// required. Like a ticket made from a Feishu request it takes a one-line
+// summary, details (its first note, by the creator) and optionally the ticket
+// type and fault type. Optionally a customer group the Feishu bot is in, told
+// when the ticket is created and resolved.
 ticketRoutes.post("/tickets", async (c) => {
-  if (!canCreateTicket(c.get("user"))) return c.json({ error: "Your role cannot create tickets" }, 403);
+  const user = c.get("user");
+  if (!canCreateTicket(user)) return c.json({ error: "Your role cannot create tickets" }, 403);
   const d = await body<any>(c);
   const chatId = String(d.feishuSourceChatId ?? "").trim() || null;
   if (chatId) {
@@ -114,8 +116,9 @@ ticketRoutes.post("/tickets", async (c) => {
       return c.json({ error: "Choose a customer group the Feishu bot is in." }, 400);
     }
   }
-  // Only what the New ticket form sends: never a first note, which would carry
-  // its own author.
+  // Only what the New ticket form sends. The details become the first note,
+  // always by the creator: a note's author is never taken from the body.
+  const details = String(d.details ?? "").trim();
   const input: NewTicket = {
     customerCompany: d.customerCompany,
     orderNo: d.orderNo,
@@ -124,14 +127,19 @@ ticketRoutes.post("/tickets", async (c) => {
     productId: d.productId,
     productModel: d.productModel,
     serialNumber: d.serialNumber,
-    answers: d.answers,
     assignedSalesId: d.assignedSalesId,
     assignedServiceId: d.assignedServiceId,
     summary: d.summary,
+    initialNote: details ? { actorId: user.id, text: details } : null,
     feishuSourceChatId: chatId,
     feishuSourceMessageId: null
   };
-  const created = await createTicket(c.env, input, { requireProduct: true, validateQuestionnaire: true, creator: c.get("user") });
+  const created = await createTicket(c.env, input, {
+    requireProduct: true,
+    creator: user,
+    ticketType: d.ticketType,
+    faultType: d.faultType
+  });
   afterTicketChange(c, created.id, created.changes);
   return c.json({ id: created.id, ticketNo: created.ticketNo });
 });
@@ -223,7 +231,6 @@ ticketRoutes.get("/tickets/:id", async (c) => {
      LEFT JOIN users ON users.id = u.actorId WHERE u.ticketId = ? ORDER BY u.createdAt`,
     ticket.id
   );
-  const fields = await all(c.env.DB, "SELECT * FROM ticketFields ORDER BY sortOrder, label");
   const attachments = await all(
     c.env.DB,
     "SELECT id, updateId, fileName, contentType, size, createdAt FROM ticketAttachments WHERE ticketId = ? ORDER BY createdAt, rowid",
@@ -243,7 +250,7 @@ ticketRoutes.get("/tickets/:id", async (c) => {
   // Sales keep the repeat count but see only their own tickets in its list.
   const user = c.get("user");
   if (repeat && seesOnlyOwnTickets(user)) repeat.tickets = repeat.tickets.filter((t) => canReadTicket(user, t));
-  return c.json({ ticket, updates, fields, matchedPis, device, repeat, attachments });
+  return c.json({ ticket, updates, matchedPis, device, repeat, attachments });
 });
 
 // After-sales record which PI line the issue is about: the catalog product,

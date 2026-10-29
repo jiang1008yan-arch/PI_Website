@@ -1,7 +1,6 @@
 import { all, first, id } from "./db";
 import { resolveBlocker, TICKET_TYPE_LABEL, TICKET_TYPES, type TicketType } from "../../shared/ticketCapabilities";
 import { canAssignSalesSide, canAssignServiceSide, canChangeStatus, canConfirmFault, canWriteNote, isValidTransition, type TicketStatus } from "./ticketAccess";
-import { validateAnswers, type TicketFieldRow } from "./ticketAnswers";
 import { nextTicketNumber } from "./ticketNumber";
 import { isKnownSerial, normalizeSerial } from "./devices";
 import { repeatInfo } from "./faultStats";
@@ -79,7 +78,6 @@ export type NewTicket = {
   // The concrete model (from the PI's product line) and device SN, when known.
   productModel?: string | null;
   serialNumber?: string | null;
-  answers?: unknown;
   assignedSalesId?: string | null;
   assignedServiceId?: string | null;
   feishuSourceChatId?: string | null;
@@ -100,15 +98,19 @@ export function ownersForCreator(creator: AppUser | null | undefined, input: Pic
   return { assignedSalesId, assignedServiceId };
 }
 
-// What a ticket created from a Feishu request starts with besides its fields.
-// Never taken from a request body.
-export type FeishuCreateOptions = {
-  // Files already in R2, attached to the first note.
-  initialFiles?: StoredFile[];
-  // Type / fault type picked on the request card. Skipped, as if not picked,
-  // when the creator may not classify tickets or the value is not valid.
+// Type / fault type picked when the ticket is created (the Feishu request card
+// or the portal's New ticket form). Skipped, as if not picked, when the creator
+// may not classify tickets or the value is not valid.
+export type NewTicketClassification = {
   ticketType?: unknown;
   faultType?: unknown;
+};
+
+// What a ticket created from a Feishu request starts with besides its fields.
+// Never taken from a request body.
+export type FeishuCreateOptions = NewTicketClassification & {
+  // Files already in R2, attached to the first note.
+  initialFiles?: StoredFile[];
   // The request card, which becomes the ticket's card when the creator is its
   // after-sales owner (no second card is sent).
   feishuCardMessageId?: string | null;
@@ -121,7 +123,7 @@ export type FeishuCreateOptions = {
 export async function createTicket(
   env: Env,
   input: NewTicket,
-  opts: { requireProduct: boolean; validateQuestionnaire: boolean; creator?: AppUser | null } & FeishuCreateOptions
+  opts: { requireProduct: boolean; creator?: AppUser | null } & FeishuCreateOptions
 ) {
   const db = env.DB;
   const customerCompany = String(input.customerCompany ?? "").trim().slice(0, 200);
@@ -135,14 +137,6 @@ export async function createTicket(
     ? await first<{ id: string }>(db, "SELECT id FROM products WHERE id=? AND status='ACTIVE'", String(input.productId))
     : null;
   if (opts.requireProduct && !product) throw new TicketError("A valid product is required.", 400);
-
-  let answers: Record<string, string> = {};
-  if (opts.validateQuestionnaire) {
-    const fields = await all<TicketFieldRow>(db, "SELECT id, label, fieldType, options, required FROM ticketFields ORDER BY sortOrder, label");
-    const validated = validateAnswers(fields, input.answers);
-    if (!validated.ok) throw new TicketError(validated.error, 400);
-    answers = validated.answers;
-  }
 
   const serialNumber = normalizeSerial(input.serialNumber).slice(0, 64) || null;
   if (serialNumber && !(await isKnownSerial(db, serialNumber))) throw new TicketError("That SN is not known to the system.", 400);
@@ -167,7 +161,8 @@ export async function createTicket(
         contactName,
         contactInfo,
         product?.id ?? null,
-        JSON.stringify(answers),
+        // The questionnaire is gone; the column stays for tickets that have answers.
+        "{}",
         owners.assignedSalesId,
         owners.assignedServiceId,
         input.feishuSourceChatId || null,
