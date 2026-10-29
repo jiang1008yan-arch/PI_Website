@@ -7,7 +7,7 @@ import { ErrorText, Field, PageHero, Section } from "../components/Form";
 import { LookupInput } from "../components/LookupInput";
 import type { MatchedPi, RepeatInfo, Ticket, TicketAttachment, TicketField, TicketStatus, TicketType, TicketUpdate, User } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, TICKET_TYPE_LABEL, formatDateTime } from "../tickets/ticketShared";
-import { nextStatuses } from "../../../shared/ticketCapabilities";
+import { nextStatuses, resolveBlocker, ticketCapabilities } from "../../../shared/ticketCapabilities";
 import { markSeen } from "../pi/notifications";
 import { TicketActivity } from "../tickets/TicketActivity";
 import { TicketEquipment } from "../tickets/TicketEquipment";
@@ -26,8 +26,8 @@ type Detail = {
 export function TicketDetailPage() {
   const { id = "" } = useParams();
   const { user } = useAuth();
-  const canManage = user?.role === "ADMIN" || user?.role === "SERVICE";
-  const isAdmin = user?.role === "ADMIN";
+  // What this user may change, by section; the server enforces the same table.
+  const caps = ticketCapabilities(user?.role);
 
   const [data, setData] = useState<Detail | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -99,11 +99,8 @@ export function TicketDetailPage() {
   }
   const transitions = nextStatuses(ticket.status);
   // A ticket is classified (and a fault confirmed) before it can be resolved.
-  const resolveBlocker = !ticket.ticketType
-    ? "Choose the ticket type before resolving."
-    : ticket.ticketType === "FAULT" && !ticket.faultType
-      ? "Confirm the fault type before resolving."
-      : "";
+  const blocker = resolveBlocker(ticket);
+  const resolveHint = blocker === "type" ? "Choose the ticket type before resolving." : blocker === "fault" ? "Confirm the fault type before resolving." : "";
   const salesUsers = users.filter((u) => u.role === "SALES" || u.role === "ADMIN");
   const serviceUsers = users.filter((u) => u.role === "SERVICE" || u.role === "ADMIN");
 
@@ -130,14 +127,14 @@ export function TicketDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <Section title="Customer & request">
-            {canManage && <p className="-mt-2 mb-3 text-xs text-[#8595b6]">Double-click a value to change it. Enter saves, Esc cancels.</p>}
+            {caps.confirmFault && <p className="-mt-2 mb-3 text-xs text-[#8595b6]">Double-click a value to change it. Enter saves, Esc cancels.</p>}
             <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <EditableInfo label="Company" value={ticket.customerCompany} lookup="customer" canEdit={canManage} maxLength={200} onSave={(v) => saveCustomerField("customerCompany", v)} />
-              <EditableInfo label="Production order no." value={ticket.orderNo} lookup="order" canEdit={canManage} maxLength={100} onSave={(v) => saveCustomerField("orderNo", v)} />
-              <EditableInfo label="Contact name" value={ticket.contactName} canEdit={canManage} maxLength={200} required onSave={(v) => saveCustomerField("contactName", v)} />
-              <EditableInfo label="Contact details" value={ticket.contactInfo} canEdit={canManage} maxLength={200} required onSave={(v) => saveCustomerField("contactInfo", v)} />
+              <EditableInfo label="Company" value={ticket.customerCompany} lookup="customer" canEdit={caps.confirmFault} maxLength={200} onSave={(v) => saveCustomerField("customerCompany", v)} />
+              <EditableInfo label="Production order no." value={ticket.orderNo} lookup="order" canEdit={caps.confirmFault} maxLength={100} onSave={(v) => saveCustomerField("orderNo", v)} />
+              <EditableInfo label="Contact name" value={ticket.contactName} canEdit={caps.confirmFault} maxLength={200} required onSave={(v) => saveCustomerField("contactName", v)} />
+              <EditableInfo label="Contact details" value={ticket.contactInfo} canEdit={caps.confirmFault} maxLength={200} required onSave={(v) => saveCustomerField("contactInfo", v)} />
             </dl>
-            <TicketEquipment ticket={ticket} matchedPis={data.matchedPis ?? []} device={data.device ?? null} canManage={canManage} onChanged={load} />
+            <TicketEquipment ticket={ticket} matchedPis={data.matchedPis ?? []} device={data.device ?? null} canManage={caps.confirmFault} onChanged={load} />
             <div className="border-t pt-4">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#8595b6]">Questionnaire</h3>
               <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -149,18 +146,18 @@ export function TicketDetailPage() {
             </div>
           </Section>
 
-          <TicketActivity ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={canManage} onChanged={load} />
+          <TicketActivity ticket={ticket} updates={updates} attachments={data.attachments ?? []} canManage={caps.writeNote} onChanged={load} />
 
         </div>
 
         <div className="space-y-6">
-          <TicketTypeSection ticket={ticket} repeat={data.repeat ?? null} canManage={canManage} onChanged={load} />
+          <TicketTypeSection ticket={ticket} repeat={data.repeat ?? null} canManage={caps.confirmFault} onChanged={load} />
 
           <Section title="Status">
             <div className={`inline-block rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE[ticket.status]}`}>
               {STATUS_LABEL[ticket.status]}
             </div>
-            {canManage ? (
+            {caps.changeStatus ? (
               transitions.length > 0 ? (
                 <div className="mt-4 space-y-2">
                   {transitions.map((to) => (
@@ -168,14 +165,14 @@ export function TicketDetailPage() {
                       key={to}
                       type="button"
                       className="btn-secondary w-full"
-                      disabled={busy || (to === "RESOLVED" && Boolean(resolveBlocker))}
-                      title={to === "RESOLVED" ? resolveBlocker : undefined}
+                      disabled={busy || (to === "RESOLVED" && Boolean(resolveHint))}
+                      title={to === "RESOLVED" ? resolveHint : undefined}
                       onClick={() => changeStatus(to)}
                     >
                       Move to {STATUS_LABEL[to]}
                     </button>
                   ))}
-                  {transitions.includes("RESOLVED") && resolveBlocker && <p className="text-xs text-amber-700">{resolveBlocker}</p>}
+                  {transitions.includes("RESOLVED") && resolveHint && <p className="text-xs text-amber-700">{resolveHint}</p>}
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-[#8595b6]">No further transitions.</p>
@@ -190,7 +187,7 @@ export function TicketDetailPage() {
               <AssigneeControl
                 label="Sales"
                 currentName={ticket.assignedSalesName}
-                canEdit={isAdmin || user?.role === "SERVICE"}
+                canEdit={caps.assignSales}
                 users={salesUsers}
                 currentId={ticket.assignedSalesId}
                 busy={busy}
@@ -199,7 +196,7 @@ export function TicketDetailPage() {
               <AssigneeControl
                 label="Service"
                 currentName={ticket.assignedServiceName}
-                canEdit={isAdmin || user?.role === "SERVICE"}
+                canEdit={caps.assignService}
                 users={serviceUsers}
                 currentId={ticket.assignedServiceId}
                 busy={busy}

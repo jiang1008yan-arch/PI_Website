@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState, Section } from "../components/Form";
+import { ticketCapabilities } from "../../../shared/ticketCapabilities";
 
 type Device = { id: string; serialNumber: string; createdAt: string; createdByName?: string | null };
 type RegisterResult = {
@@ -16,7 +17,7 @@ type RegisterResult = {
 // the PI sees them. An SN belongs to one PI only — duplicates are reported.
 export function DeviceSerials({ piId }: { piId: string }) {
   const { user } = useAuth();
-  const canEdit = user?.role === "ADMIN" || user?.role === "SERVICE";
+  const canEdit = ticketCapabilities(user?.role).registerSn;
   const [devices, setDevices] = useState<Device[]>([]);
   const [input, setInput] = useState("");
   const [result, setResult] = useState<RegisterResult | null>(null);

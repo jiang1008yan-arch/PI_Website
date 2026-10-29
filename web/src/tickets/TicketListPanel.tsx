@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import { useCachedList } from "../hooks/useCachedList";
 import type { Ticket, TicketStatus, TicketType } from "../types";
 import { STATUS_BADGE, STATUS_LABEL, STATUS_ORDER, TICKET_TYPE_LABEL, formatDateTime } from "./ticketShared";
+import { ticketCapabilities } from "../../../shared/ticketCapabilities";
 
 export function TicketListPanel() {
   const [status, setStatus] = useState<"" | TicketStatus>("");
@@ -25,7 +26,7 @@ export function TicketListPanel() {
   // Seeing the list counts as seeing its new tickets: clear the home badge.
   const { user } = useAuth();
   // Sales only read the tickets in their name; ADMIN and SERVICE create them.
-  const canCreate = user?.role === "ADMIN" || user?.role === "SERVICE";
+  const canCreate = ticketCapabilities(user?.role).create;
   useEffect(() => {
     markSeen(["newTickets"], user?.id, tickets.filter((t) => t.status === "NEW").map((t) => t.id));
   }, [tickets, user?.id]);

@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { getCachedCount, setCachedCount, unseenCount } from "../pi/notifications";
 import { prefetchPiList } from "../pi/piListCache";
+import { ticketCapabilities } from "../../../shared/ticketCapabilities";
 
 type HomeModule = {
   to: string;
@@ -33,7 +34,7 @@ export function HomePage() {
   // Badge the After-Sales card with NEW tickets the user hasn't looked at yet;
   // opening the ticket list (or the ticket) clears them.
   useEffect(() => {
-    if (role === "COMMERCE" || role === "PRESALES") return;
+    if (!ticketCapabilities(role).use) return;
     api
       .get("/tickets", { params: { status: "NEW" } })
       .then((res) => {
@@ -142,7 +143,7 @@ export function HomePage() {
   if (role === "ADMIN" || role === "SALES") {
     sections.push({ id: "pi", title: "Proforma Invoices", subtitle: "Create, review and export PIs", modules: piModules });
   }
-  if (role !== "COMMERCE" && role !== "PRESALES") {
+  if (ticketCapabilities(role).use) {
     sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
   }
   if (role === "ADMIN") {

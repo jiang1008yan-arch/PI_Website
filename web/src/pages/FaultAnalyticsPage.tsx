@@ -5,6 +5,7 @@ import { PageHero, Section } from "../components/Form";
 import { DeviceMonitorPanel } from "../faults/DeviceMonitorPanel";
 import { FaultSettings } from "../faults/FaultSettings";
 import { FaultStatsPanel } from "../faults/FaultStatsPanel";
+import { ticketCapabilities } from "../../../shared/ticketCapabilities";
 
 // Fault analytics: which products keep showing the same fault, and the fault
 // type list and repeat-fault alert settings behind it. Further fault tooling
@@ -14,15 +15,12 @@ type Tab = "stats" | "devices" | "settings";
 
 export function FaultAnalyticsPage() {
   const { user } = useAuth();
-  const canConfigure = user?.role === "ADMIN" || user?.role === "SERVICE";
+  // Device monitoring is for those who confirm faults; the settings for those who keep the fault type list.
+  const caps = ticketCapabilities(user?.role);
   const tabs: { key: Tab; label: string }[] = [
     { key: "stats", label: "Statistics" },
-    ...(canConfigure
-      ? [
-          { key: "devices" as Tab, label: "Device monitoring" },
-          { key: "settings" as Tab, label: "Fault types & alerts" }
-        ]
-      : [])
+    ...(caps.confirmFault ? [{ key: "devices" as Tab, label: "Device monitoring" }] : []),
+    ...(caps.manageFaultTypes ? [{ key: "settings" as Tab, label: "Fault types & alerts" }] : [])
   ];
   const [tab, setTab] = useState<Tab>("stats");
 
@@ -43,8 +41,8 @@ export function FaultAnalyticsPage() {
           <FaultStatsPanel />
         </Section>
       )}
-      {tab === "devices" && canConfigure && <DeviceMonitorPanel />}
-      {tab === "settings" && canConfigure && <FaultSettings />}
+      {tab === "devices" && caps.confirmFault && <DeviceMonitorPanel />}
+      {tab === "settings" && caps.manageFaultTypes && <FaultSettings />}
     </div>
   );
 }
