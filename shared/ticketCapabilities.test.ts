@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidTransition, nextStatuses, resolveBlocker, ticketCapabilities, type Role, type TicketStatus } from "./ticketCapabilities";
+import { isValidTransition, nextStatuses, resolveBlocker, ticketCapabilities, TICKET_TYPE_LABEL, TICKET_TYPES, type Role, type TicketStatus } from "./ticketCapabilities";
 
 describe("ticketCapabilities", () => {
   // The whole matrix, written out: a changed cell is a changed rule.
@@ -41,5 +41,12 @@ describe("resolveBlocker", () => {
     expect(resolveBlocker({ ticketType: "FAULT", faultType: "Offline" })).toBeNull();
     expect(resolveBlocker({ ticketType: "PRODUCT_REQUEST" })).toBeNull();
     expect(resolveBlocker({ ticketType: "OTHER", faultType: null })).toBeNull();
+  });
+});
+
+describe("ticket types", () => {
+  it("are named the same in the portal, on Feishu cards and on the timeline", () => {
+    expect(TICKET_TYPES).toEqual(["FAULT", "PRODUCT_REQUEST", "OTHER"]);
+    expect(TICKET_TYPE_LABEL).toEqual({ FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" });
   });
 });

@@ -1,6 +1,5 @@
 import { all, first, id } from "./db";
-import { TICKET_TYPES, type TicketType } from "./aiTriage";
-import { resolveBlocker } from "../../shared/ticketCapabilities";
+import { resolveBlocker, TICKET_TYPE_LABEL, TICKET_TYPES, type TicketType } from "../../shared/ticketCapabilities";
 import { canAssignSalesSide, canAssignServiceSide, canChangeStatus, canConfirmFault, canWriteNote, isValidTransition, type TicketStatus } from "./ticketAccess";
 import { validateAnswers, type TicketFieldRow } from "./ticketAnswers";
 import { nextTicketNumber } from "./ticketNumber";
@@ -72,7 +71,6 @@ export type NewTicket = {
   summary?: string | null;
 };
 
-export const TICKET_TYPE_TEXT: Record<TicketType, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
 
 // Whoever creates a ticket owns it: after-sales and admins become its
 // after-sales owner, sales its sales owner, unless someone else was named.
@@ -198,7 +196,7 @@ async function classifyNewTicket(db: D1Database, user: AppUser, ticketId: string
   const ticketType = TICKET_TYPES.find((t) => t === opts.ticketType);
   const faultType = String(opts.faultType ?? "").trim();
   const typeNote = (type: TicketType) =>
-    db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)").bind(id("tup"), ticketId, user.id, `Ticket type: ${TICKET_TYPE_TEXT[type]}`);
+    db.prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)").bind(id("tup"), ticketId, user.id, `Ticket type: ${TICKET_TYPE_LABEL[type]}`);
   if (ticketType && ticketType !== "FAULT") {
     return {
       statements: [db.prepare("UPDATE tickets SET ticketType=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticketType, ticketId), typeNote(ticketType)],
@@ -537,7 +535,7 @@ export async function setTicketType(
     statements.push(
       db
         .prepare("INSERT INTO ticketUpdates (id, ticketId, actorId, kind, note, isSystem) VALUES (?, ?, ?, 'NOTE', ?, 1)")
-        .bind(id("tup"), ticket.id, user.id, `Ticket type: ${TICKET_TYPE_TEXT[ticketType]}`)
+        .bind(id("tup"), ticket.id, user.id, `Ticket type: ${TICKET_TYPE_LABEL[ticketType]}`)
     );
   }
   await commit(db, statements);

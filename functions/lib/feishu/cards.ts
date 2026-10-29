@@ -1,4 +1,4 @@
-import { nextStatuses } from "../../../shared/ticketCapabilities";
+import { nextStatuses, TICKET_TYPE_LABEL } from "../../../shared/ticketCapabilities";
 
 // Feishu card JSON 2.0 builders (pure). Cards are sent with update_multi so a
 // ticket's single card can be refreshed in place for everyone in the group.
@@ -28,7 +28,8 @@ export const STATUS_TEXT: Record<TicketCardData["status"], string> = {
   CLOSED: "Closed"
 };
 
-export const TYPE_TEXT: Record<string, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
+// Looked up by whatever type a ticket or the AI holds.
+const TYPE_TEXT: Record<string, string> = TICKET_TYPE_LABEL;
 
 const TEMPLATE: Record<TicketCardData["status"], string> = { NEW: "red", IN_PROGRESS: "orange", RESOLVED: "green", CLOSED: "grey" };
 

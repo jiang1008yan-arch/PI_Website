@@ -1,3 +1,4 @@
+import { TICKET_TYPE_LABEL } from "../../../shared/ticketCapabilities";
 import type { Context } from "hono";
 import { all, first } from "../db";
 import { enqueueOutbox, markOutbox, OUTBOX_MAX_ATTEMPTS } from "../outbox";
@@ -213,7 +214,8 @@ async function deliver(env: Env, payload: Payload) {
   }
 }
 
-const TICKET_TYPE_LABEL: Record<string, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
+// Looked up by whatever type a change carries.
+const TYPE_TEXT: Record<string, string> = TICKET_TYPE_LABEL;
 
 function describe(change: TicketChange, t: TicketRow): string {
   switch (change.kind) {
@@ -228,7 +230,7 @@ function describe(change: TicketChange, t: TicketRow): string {
     case "product":
       return "product line updated.";
     case "type":
-      return `type is now ${TICKET_TYPE_LABEL[change.ticketType] ?? change.ticketType}.`;
+      return `type is now ${TYPE_TEXT[change.ticketType] ?? change.ticketType}.`;
     case "assigned":
       return `after-sales owner: ${t.serviceName ?? "unassigned"}.`;
     default:

@@ -10,7 +10,10 @@
 
 export type Role = "ADMIN" | "SALES" | "SERVICE" | "COMMERCE" | "PRESALES";
 export type TicketStatus = "NEW" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
-export type TicketType = "FAULT" | "PRODUCT_REQUEST" | "OTHER";
+export const TICKET_TYPES = ["FAULT", "PRODUCT_REQUEST", "OTHER"] as const;
+export type TicketType = (typeof TICKET_TYPES)[number];
+// How each type is named: in the portal, on Feishu cards and on the timeline.
+export const TICKET_TYPE_LABEL: Record<TicketType, string> = { FAULT: "Fault", PRODUCT_REQUEST: "Product request", OTHER: "Question / other" };
 
 export type TicketCapabilities = {
   // Sees the ticket pages at all.

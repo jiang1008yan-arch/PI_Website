@@ -7,6 +7,8 @@
 // staff member confirms or corrects it before anything is created — so any
 // failure simply yields no suggestion.
 
+import { TICKET_TYPES, type TicketType } from "../../shared/ticketCapabilities";
+
 export type AiProvider = "QWEN" | "DEEPSEEK";
 export type AiConfig = { provider: AiProvider; apiKey: string; model?: string | null };
 
@@ -34,8 +36,6 @@ export function toBase64(body: ArrayBuffer): string {
   return btoa(binary);
 }
 
-export const TICKET_TYPES = ["FAULT", "PRODUCT_REQUEST", "OTHER"] as const;
-export type TicketType = (typeof TICKET_TYPES)[number];
 
 // summary: one line, the ticket's summary. digest: a few short lines putting
 // all the material together (text, pictures, voice), for the ticket's first note.

@@ -16,11 +16,8 @@ export const STATUS_BADGE: Record<TicketStatus, string> = {
   CLOSED: "bg-slate-100 text-slate-600"
 };
 
-export const TICKET_TYPE_LABEL: Record<TicketType, string> = {
-  FAULT: "Fault",
-  PRODUCT_REQUEST: "Product request",
-  OTHER: "Question / other"
-};
+// The same names the server and Feishu cards use.
+export { TICKET_TYPE_LABEL } from "../../../shared/ticketCapabilities";
 
 export function formatDateTime(value?: string | null): string {
   if (!value) return "—";
