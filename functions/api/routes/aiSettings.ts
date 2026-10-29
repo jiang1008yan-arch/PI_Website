@@ -1,7 +1,6 @@
-import { maskApiKey, sealApiKey } from "../../lib/aiKeys";
 import { AI_PROVIDERS, testAiKey, type AiProvider } from "../../lib/aiTriage";
+import { loadUserAiConfig, loadUserAiRow, maskApiKey, removeUserAiKey, saveUserAiKey } from "../../lib/personalAiKey";
 import { canUseTickets } from "../../lib/ticketAccess";
-import { loadUserAiConfig, loadUserAiRow } from "../../lib/userAi";
 import { body, createApp } from "./_shared";
 
 // Each user's own AI provider key (Qwen or DeepSeek) for ticket suggestions.
@@ -36,7 +35,7 @@ aiSettingsRoutes.put("/me/ai", async (c) => {
   const d = await body<{ provider?: string; apiKey?: string; model?: string }>(c);
   const provider = String(d.provider ?? "");
   if (provider === "OFF") {
-    await c.env.DB.prepare("DELETE FROM userAiSettings WHERE userId = ?").bind(user.id).run();
+    await removeUserAiKey(c.env.DB, user.id);
     return c.json({ ok: true });
   }
   if (!c.env.AI_KEY_SECRET) return c.json({ error: "AI is not enabled on this server yet. Ask an administrator." }, 400);
@@ -56,16 +55,8 @@ aiSettingsRoutes.put("/me/ai", async (c) => {
   const check = await testAiKey({ provider: provider as AiProvider, apiKey, model });
   if (!check.ok) return c.json({ error: `The provider rejected this key or model: ${check.error}` }, 400);
 
-  const sealed = await sealApiKey(c.env.AI_KEY_SECRET, user.id, apiKey);
-  await c.env.DB.prepare(
-    `INSERT INTO userAiSettings (userId, provider, apiKeyCipher, apiKeyIv, apiKeyLast4, model, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(userId) DO UPDATE SET provider = excluded.provider, apiKeyCipher = excluded.apiKeyCipher, apiKeyIv = excluded.apiKeyIv,
-       apiKeyLast4 = excluded.apiKeyLast4, model = excluded.model, updatedAt = excluded.updatedAt`
-  )
-    .bind(user.id, provider, sealed.cipher, sealed.iv, apiKey.slice(-4), model)
-    .run();
-  return c.json({ ok: true, maskedKey: maskApiKey(apiKey.slice(-4)) });
+  const maskedKey = await saveUserAiKey(c.env.AI_KEY_SECRET, c.env.DB, user.id, { provider: provider as AiProvider, apiKey, model });
+  return c.json({ ok: true, maskedKey });
 });
 
 aiSettingsRoutes.post("/me/ai/test", async (c) => {

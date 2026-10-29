@@ -23,7 +23,7 @@ export type Env = {
   FEISHU_PI_APP_SECRET?: string;
   FEISHU_PI_ENCRYPT_KEY?: string;
   FEISHU_PI_VERIFICATION_TOKEN?: string;
-  // Master secret that encrypts users' own AI provider keys (functions/lib/aiKeys.ts).
+  // Master secret that encrypts users' own AI provider keys (functions/lib/personalAiKey.ts).
   // Without it nobody can save a key and there are no AI suggestions.
   AI_KEY_SECRET?: string;
   // Shared with the cron Worker (workers/cron) that triggers scheduled jobs.

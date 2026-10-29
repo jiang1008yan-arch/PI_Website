@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskApiKey, openApiKey, sealApiKey } from "../aiKeys";
+import { maskApiKey, openApiKey, sealApiKey } from "../personalAiKey";
 import { redactKey, testAiKey, toBase64, transcribeAudio, triageMessages, type AiConfig } from "../aiTriage";
 import { CARD_ITEM_LIMIT, collectCard, collectedCounts, draftCard, similarElements, ticketCard, type TicketCardData } from "./cards";
 import { messageContentToText } from "./client";

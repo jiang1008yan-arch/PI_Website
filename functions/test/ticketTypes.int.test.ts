@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setAiFetch } from "../lib/aiTriage";
-import { loadUserAiConfig } from "../lib/userAi";
+import { loadUserAiConfig } from "../lib/personalAiKey";
 import { applyMigrations, createD1, createHarness, seedProduct, type Harness } from "./harness";
 
 // Ticket types (and the rule that a ticket is classified before it is

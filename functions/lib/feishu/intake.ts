@@ -5,7 +5,7 @@ import { findSimilarTickets } from "../similarTickets";
 import { canCreateTicket } from "../ticketAccess";
 import { FAULT_TYPE_OPTION_KEY } from "../ticketWorkflow";
 import type { AppUser, Env } from "../types";
-import { loadUserAiConfig } from "../userAi";
+import { loadUserAiConfig } from "../personalAiKey";
 import { addCard, bindCard, collectCard, collectedCounts, draftCard, type CardItem, type DraftPrefill } from "./cards";
 import { siteBase } from "./piBot/notifyPi";
 import { getMessageItems, listBotChats, messageContentToText, sendCard, sendText, updateCard } from "./client";
