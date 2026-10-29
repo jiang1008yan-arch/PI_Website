@@ -8,6 +8,7 @@ import { EmptyState, PageHero, Section } from "../components/Form";
 import { formatCurrency } from "../pi/format";
 import { getMeta, visibleItemFields } from "../../../shared/lineItemFields";
 import { generatedModelFor } from "../../../shared/modelRule";
+import { itemsTotal } from "../../../shared/lineItem";
 import { labelForCustomer, labelForSender, piDisplayName, piStatusLabel, reviewEventLabel, revisionLabel } from "../pi/labels";
 import { parsePiItems, type ParsedPiItem } from "../../../shared/piItemCodec";
 import { revisionChanges, type RevisionChanges } from "../pi/piDiff";
@@ -249,7 +250,7 @@ function PiContent({ content, language, changes }: { content: Content; language:
           ...EN_PARTIES.map((k) => [k, `Customer ${labelForCustomer(k)}`] as [string, string]),
           ...EN_SENDER.map((k) => [k, `Sender ${labelForSender(k)}`] as [string, string])
         ];
-  const total = content.items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unitPrice) * (1 - Number(it.discountPct) / 100), 0);
+  const total = itemsTotal(content.items);
 
   return (
     <div className="space-y-6">

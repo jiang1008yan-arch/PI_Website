@@ -1,6 +1,7 @@
 import { Field } from "../components/Form";
 import type { Language, PiItem, Product } from "../types";
 import { getMeta, setMeta, visibleItemFields } from "../../../shared/lineItemFields";
+import { lineAmount } from "../../../shared/lineItem";
 import {
   applyModelRule,
   buildGeneratedModel,
@@ -29,7 +30,7 @@ export function LineItem({
   onRemove: () => void;
 }) {
   const currency = getMeta(item, "currency") || "USD";
-  const amount = item.quantity * item.unitPrice * (1 - item.discountPct / 100);
+  const amount = lineAmount(item);
   const rule = language === "ZH" ? getModelRule(item) : null;
   const generated = rule ? buildGeneratedModel(rule, item) : null;
   const fields = visibleItemFields(item).filter((field) => !rule || !isGeneratedModelField(field));

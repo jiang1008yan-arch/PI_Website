@@ -1,6 +1,7 @@
 import type ExcelJS from "exceljs";
 import { getMetaValue, visibleFieldValues } from "../../../shared/lineItemFields";
 import { generatedModelFor } from "../../../shared/modelRule";
+import { itemsTotal, lineAmount } from "../../../shared/lineItem";
 
 export type FieldRecord = { label: string; value: string };
 
@@ -17,9 +18,7 @@ export function tokensFor(data: ExportBundle): Record<string, string> {
   const pi = data.pi;
   const sender = data.sender ?? {};
   const totalCurrency = data.items[0] ? getMetaValue(data.items[0].fieldValues, "currency") || "USD" : "USD";
-  const totalAmount = data.items.reduce((sum, item) => {
-    return sum + Number(item.quantity) * Number(item.unitPrice) * (1 - Number(item.discountPct) / 100);
-  }, 0);
+  const totalAmount = itemsTotal(data.items);
   const base: Record<string, string> = {
     piNo: pi.piNo,
     date: pi.date,
@@ -58,7 +57,7 @@ export function itemTokens(item: any, fields: FieldRecord[]) {
   const currency = getMetaValue(fields, "currency") || "USD";
   const generated = generatedModelFor(item);
   const model = fieldValue(fields, ["Model", "型号"]) || generated.model;
-  const amount = Number(item.quantity) * Number(item.unitPrice) * (1 - Number(item.discountPct) / 100);
+  const amount = lineAmount(item);
   return {
     "${item.productName}": item.nameEn || item.nameZh || "",
     "${item.productNameEn}": item.nameEn || "",

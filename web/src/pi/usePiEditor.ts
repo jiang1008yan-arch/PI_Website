@@ -3,6 +3,7 @@ import type { SetURLSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Language, Pi, PiItem, User } from "../types";
 import { getMeta } from "../../../shared/lineItemFields";
+import { itemsTotal } from "../../../shared/lineItem";
 import { canActOnPresales, canDeletePiByStatus, canEditPiDirectly, isReviewerEditMode } from "../../../shared/piCapabilities";
 import { isConfirmedReceivedPi, piDisplayName } from "./labels";
 import { isPiDirty, type PiSnapshot } from "./piDiff";
@@ -87,7 +88,7 @@ export function usePiEditor({ language, user, linkedPiId, senderDefaults, setSea
   const hasBufferedEdits = canConfirmReceivedZh && isDirty;
 
   const total = useMemo(
-    () => items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unitPrice) * (1 - Number(it.discountPct) / 100), 0),
+    () => itemsTotal(items),
     [items]
   );
   const totalCurrency = getMeta(items[0], "currency") || "USD";

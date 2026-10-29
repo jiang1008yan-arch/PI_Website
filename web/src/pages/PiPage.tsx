@@ -116,8 +116,8 @@ export function PiPage({ language }: { language: Language }) {
     if (!revising || !editor.current?.effectiveSnapshot) return null;
     try {
       const parsed = JSON.parse(editor.current.effectiveSnapshot);
-      // Frozen items already carry fieldValues as arrays (not wire JSON strings).
-      return parsed?.zh ? { header: parsed.zh.header ?? {}, items: (parsed.zh.items ?? []) as any[] } : null;
+      // The codec reads the frozen items' fieldValues (arrays) like stored ones.
+      return parsed?.zh ? { header: parsed.zh.header ?? {}, items: parsePiItems(parsed.zh.items ?? []) } : null;
     } catch {
       return null;
     }
