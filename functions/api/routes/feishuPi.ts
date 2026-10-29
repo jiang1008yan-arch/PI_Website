@@ -64,7 +64,7 @@ async function onMessage(c: Context, app: PiBotApp, event: any) {
   const base = siteBase(c.env, c.req.url);
   const text = user
     ? `Hi ${user.displayName}! I send you Chinese PI approvals here; approve or reject right in the card.`
-    : `Hi! Link your Feishu account to the Sales Portal first (one-time): ${base}/api/auth/feishu/start?next=${encodeURIComponent("/")}`;
+    : `Hi! Link your Feishu account to the Business Portal first (one-time): ${base}/api/auth/feishu/start?next=${encodeURIComponent("/")}`;
   await sendText(app, unionId, text);
 }
 
