@@ -21,19 +21,33 @@ export class TicketError extends Error {
   }
 }
 
-// Commits one change. A guarded batch (one that moves the status) is rolled
-// back by workflowGuard when the ticket no longer had the status it was read
-// with, i.e. someone else moved it first (website and Feishu card at once).
-async function commit(db: D1Database, statements: D1PreparedStatement[]) {
+// Commits one change. A guarded batch is rolled back by workflowGuard when what
+// it was read with no longer holds: the ticket's status (someone else moved it
+// first, website and Feishu card at once), or the claim on a Feishu request.
+async function commit(db: D1Database, statements: D1PreparedStatement[], conflict = "This ticket was already changed by someone else. Refresh to see its latest state.") {
   if (!statements.length) return;
   try {
     await db.batch(statements);
   } catch (error) {
-    if (/CHECK constraint failed: ok = 1/.test(String((error as Error)?.message))) {
-      throw new TicketError("This ticket was already changed by someone else. Refresh to see its latest state.", 409);
-    }
+    if (/CHECK constraint failed: ok = 1/.test(String((error as Error)?.message))) throw new TicketError(conflict, 409);
     throw error;
   }
+}
+
+// A Feishu ticket request (or Add to ticket) claimed for this change
+// (feishu/ticketRequest.ts). It is linked to the ticket in the same batch, and
+// only while the claim is still this one, so a request is never left claimed
+// with its ticket made, nor turned into two tickets.
+export type RequestClaim = { requestId: string; claimedAt: string };
+
+function requestLinkStatements(db: D1Database, claim: RequestClaim, ticketId: string) {
+  return [
+    db
+      .prepare("UPDATE feishuDrafts SET ticketId = ?, claimedAt = NULL WHERE id = ? AND ticketId = 'CREATING' AND claimedAt = ?")
+      .bind(ticketId, claim.requestId, claim.claimedAt),
+    db.prepare("INSERT INTO workflowGuard (ok) VALUES (changes())"),
+    db.prepare("DELETE FROM workflowGuard")
+  ];
 }
 
 export const FAULT_TYPE_OPTION_KEY = "faultType";
@@ -96,6 +110,8 @@ export type FeishuCreateOptions = {
   feishuCardMessageId?: string | null;
   // The device alert request (feishuDrafts id) the ticket was created from.
   alertDraftId?: string | null;
+  // The claimed request the ticket is made from, linked in the same batch.
+  request?: RequestClaim | null;
 };
 
 export async function createTicket(
@@ -180,7 +196,8 @@ export async function createTicket(
   if (opts.alertDraftId) {
     statements.push(db.prepare("UPDATE deviceStatus SET alertTicketId = ? WHERE alertDraftId = ?").bind(ticketId, opts.alertDraftId));
   }
-  await commit(db, statements);
+  if (opts.request) statements.push(...requestLinkStatements(db, opts.request, ticketId));
+  await commit(db, statements, "A ticket was already created for this.");
   const changes: TicketChange[] = [{ kind: "created" }];
   // As before, a fault type picked at creation sends no fault change.
   if (classification.toPool) changes.push({ kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true });
@@ -266,10 +283,12 @@ export async function addTicketNote(
   user: AppUser,
   ticketId: string,
   rawNote: string,
-  opts: { parentId?: string | null; withAttachments?: boolean; files?: StoredFile[] } = {}
+  // request: the claimed Add to ticket this note saves, linked in the same batch.
+  opts: { parentId?: string | null; withAttachments?: boolean; files?: StoredFile[]; request?: RequestClaim | null } = {}
 ): Promise<{ id: string; changes: TicketChange[] }> {
   const note = await noteStatements(db, user, ticketId, rawNote, opts);
-  await commit(db, note.statements);
+  const link = opts.request ? requestLinkStatements(db, opts.request, ticketId) : [];
+  await commit(db, [...note.statements, ...link], "Already added.");
   return { id: note.id, changes: [{ kind: "note" }] };
 }
 

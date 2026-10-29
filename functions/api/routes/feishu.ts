@@ -270,7 +270,7 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
   const chatId = notifyChat && notifyChat !== "none" && notifyChat !== env.FEISHU_SERVICE_CHAT_ID ? notifyChat : null;
   const items = await loadItems(env.DB, draft.id);
   // Two presses cannot both create a ticket.
-  const created = await createTicketFromRequest(env.DB, draft.id, () =>
+  const created = await createTicketFromRequest(env.DB, draft.id, (claim) =>
     createTicket(
       env,
       {
@@ -301,7 +301,9 @@ async function confirmDraft(c: Context, env: Env, user: AppUser, draft: DraftRow
         // When the creator owns the new ticket, this card becomes its card: no second one is sent.
         feishuCardMessageId: cardMessageId,
         // A ticket from a device alert is linked to that alert.
-        alertDraftId: draft.kind === "DEVICE_ALERT" ? draft.id : null
+        alertDraftId: draft.kind === "DEVICE_ALERT" ? draft.id : null,
+        // Linked to the new ticket in the same batch.
+        request: claim
       }
     )
   );
@@ -364,8 +366,8 @@ async function saveAddition(c: Context, env: Env, user: AppUser, draft: DraftRow
   if (!items.length) return toast("info", "Send me something to add first.");
   const ticketId = draft.targetTicketId!;
   // Two presses cannot add it twice.
-  const added = await saveToTicket(env.DB, draft, () =>
-    addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true, files: attachmentsFromItems(items) })
+  const added = await saveToTicket(env.DB, draft, (claim) =>
+    addTicketNote(env.DB, user, ticketId, draft.text, { withAttachments: true, files: attachmentsFromItems(items), request: claim })
   );
   if (!added) return toast("info", "Already added.");
   const ticketNo = (await first<{ ticketNo: string }>(env.DB, "SELECT ticketNo FROM tickets WHERE id = ?", ticketId))?.ticketNo ?? "the ticket";

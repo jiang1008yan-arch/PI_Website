@@ -86,6 +86,16 @@ Continues the list in [the Ticket workflow plan](2026-10-28-ticket-workflow.md) 
   ticket is created, the request stays claimed for good. Every later press says "A ticket was
   already created for this", but no ticket exists. Possible fixes are a claim timestamp that
   expires, or a scheduled job that releases old `CREATING` claims.
+  **Resolved 2026-10-29** with a claim that expires:
+  - Migration `0022_request_claims.sql` adds `feishuDrafts.claimedAt`.
+  - The Ticket workflow links the request inside the create batch, or the note batch for Save to
+    ticket, guarded by `workflowGuard` so that the link only happens while the claim is still the
+    caller's. This is the one documented exception to "ticketRequest is the only writer".
+  - A claim older than 2 minutes (or one from before `claimedAt` existed) is open again.
+  - Stopping after the batch leaves the request linked, so nothing is redone. A slow attempt whose
+    claim was taken over gets a 409 and makes no second ticket. Its ticket number is skipped,
+    which is the price of an edge case that needs a Worker running over 2 minutes.
+  - Covered by the "claims left behind" tests in `ticketRequest.int.test.ts`.
 - **E.** When an expired Add to ticket is found by a button press, the guard path shows the
   new-request expired card (`expiredDraftCard`). Its toast also says "nothing added for 6 hours",
   but Add to ticket expires after 30 minutes. The scheduled expiry correctly uses

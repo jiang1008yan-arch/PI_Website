@@ -12,7 +12,7 @@ import {
   type FeishuPerson
 } from "../lib/feishu/ticketRequest";
 import { sqlTime } from "../lib/db";
-import { createTicket } from "../lib/ticketWorkflow";
+import { addTicketNote, createTicket, type RequestClaim } from "../lib/ticketWorkflow";
 import { createHarness, type Harness } from "./harness";
 
 // The Ticket request lifecycle at its own interface (CONTEXT.md "Ticket
@@ -108,6 +108,92 @@ describe("create from a request", () => {
     expect((await request(draft.id)).ticketId).toBeNull();
     const created = await createTicketFromRequest(h.db, draft.id, newTicket);
     expect((await request(draft.id)).ticketId).toBe(created!.id);
+  });
+});
+
+// Decision D (docs/plans/2026-10-28-ticket-request.md): a Worker that stops
+// half-way never leaves a request claimed for good, nor makes two tickets.
+describe("claims left behind", () => {
+  const minutesAgo = (m: number) => sqlTime(new Date(now.getTime() - m * 60 * 1000));
+  const ticketFor = (claim: RequestClaim) =>
+    createTicket(h.env, { customerCompany: "ACME", orderNo: "PO-1", contactName: "Li", contactInfo: "Feishu" }, {
+      requireProduct: false,
+      validateQuestionnaire: false,
+      creator: h.users.SERVICE,
+      request: claim
+    });
+  const tickets = async () => (await h.db.prepare("SELECT COUNT(*) AS n FROM tickets").first<{ n: number }>())!.n;
+  const leaveClaim = (draftId: string, claimedAt: string | null) =>
+    h.db.prepare("UPDATE feishuDrafts SET ticketId = 'CREATING', claimedAt = ? WHERE id = ?").bind(claimedAt, draftId).run();
+
+  it("a fresh claim still counts as made; one left for minutes, or from before claims were dated, is open again", async () => {
+    const draft = await openFor(alice);
+    await leaveClaim(draft.id, minutesAgo(1));
+    expect(await openRequestFor(h.db, draft.id, alice, null, now)).toEqual({ refused: "created" });
+    expect(await createTicketFromRequest(h.db, draft.id, ticketFor, now)).toBeNull();
+
+    await leaveClaim(draft.id, minutesAgo(3));
+    expect(await openRequestFor(h.db, draft.id, alice, null, now)).toMatchObject({ draft: { id: draft.id } });
+    const created = await createTicketFromRequest(h.db, draft.id, ticketFor, now);
+    expect(await request(draft.id)).toMatchObject({ ticketId: created!.id, claimedAt: null });
+
+    const legacy = await openFor(bob);
+    await leaveClaim(legacy.id, null);
+    expect(await openRequestFor(h.db, legacy.id, bob, null, now)).toMatchObject({ draft: { id: legacy.id } });
+  });
+
+  it("the ticket and its link are made together, so stopping right after leaves nothing to redo", async () => {
+    const draft = await openFor(alice);
+    const stopped = createTicketFromRequest(
+      h.db,
+      draft.id,
+      async (claim) => {
+        await ticketFor(claim);
+        throw new Error("Worker stopped");
+      },
+      now
+    );
+    await expect(stopped).rejects.toThrow("Worker stopped");
+    expect((await request(draft.id)).ticketId).toMatch(/^tkt_/);
+    expect(await createTicketFromRequest(h.db, draft.id, ticketFor, new Date(now.getTime() + 10 * 60 * 1000))).toBeNull();
+    expect(await tickets()).toBe(1);
+  });
+
+  it("a slow first attempt whose claim was taken over makes no second ticket", async () => {
+    const draft = await openFor(alice);
+    let second: unknown;
+    const first = createTicketFromRequest(
+      h.db,
+      draft.id,
+      async (claim) => {
+        // Meanwhile the claim goes stale and the next press takes it over.
+        await h.db.prepare("UPDATE feishuDrafts SET claimedAt = ? WHERE id = ?").bind(minutesAgo(5), draft.id).run();
+        second = await createTicketFromRequest(h.db, draft.id, ticketFor, now);
+        return await ticketFor(claim);
+      },
+      now
+    );
+    await expect(first).rejects.toMatchObject({ status: 409, message: "A ticket was already created for this." });
+    expect((await request(draft.id)).ticketId).toBe((second as { id: string }).id);
+    expect(await tickets()).toBe(1);
+  });
+
+  it("Save to ticket saves the note and links it together, too", async () => {
+    const ticket = await newTicket();
+    const { draft } = await openAddition(h.env, alice.unionId, ticket.id, now);
+    const stopped = saveToTicket(
+      h.db,
+      draft,
+      async (claim) => {
+        await addTicketNote(h.db, h.users.SERVICE, ticket.id, "photos", { withAttachments: true, request: claim });
+        throw new Error("Worker stopped");
+      },
+      now
+    );
+    await expect(stopped).rejects.toThrow("Worker stopped");
+    expect((await request(draft.id)).ticketId).toBe(ticket.id);
+    expect(await saveToTicket(h.db, draft, async () => "again", new Date(now.getTime() + 10 * 60 * 1000))).toBeNull();
+    expect((await h.db.prepare("SELECT COUNT(*) AS n FROM ticketUpdates WHERE ticketId = ? AND note = 'photos'").bind(ticket.id).first<{ n: number }>())!.n).toBe(1);
   });
 });
 

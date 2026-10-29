@@ -1,4 +1,5 @@
 import { all, first, id, parseSqlTime, sqlTime } from "../db";
+import type { RequestClaim } from "../ticketWorkflow";
 import type { Env } from "../types";
 import { addExpiredCard, expiredDraftCard } from "./cards";
 import { downloadResource, updateCard } from "./client";
@@ -36,6 +37,8 @@ export type DraftRow = {
   // "Add to ticket": the material goes onto this existing ticket.
   targetTicketId: string | null;
   formOpenedAt: string | null;
+  // When ticketId was set to 'CREATING' (see claimRequest).
+  claimedAt: string | null;
   createdAt: string;
   updatedAt: string | null;
   expiredAt: string | null;
@@ -150,7 +153,8 @@ export async function openRequestFor(
 ): Promise<{ draft: DraftRow } | { refused: RequestRefusal }> {
   const draft = await loadDraft(db, draftId);
   if (!draft) return { refused: "gone" };
-  if (draft.ticketId) return { refused: "created" };
+  // A claim left behind by a Worker that stopped is no ticket: the request is open again.
+  if (draft.ticketId && !isClaimLeftBehind(draft, now)) return { refused: "created" };
   if (draft.dismissedAt) return { refused: "discarded" };
   if (!draft.requestedBy) {
     if (draft.kind === "DEVICE_ALERT" && opts.allowUnclaimedAlert) return { draft };
@@ -206,31 +210,83 @@ export async function saveAiSuggestion(
     .run();
 }
 
-// Turns the request into a ticket. It is claimed first, so two presses make
-// one ticket; released when `create` fails, and linked to the ticket after.
-// null when it was already claimed.
-export async function createTicketFromRequest<T extends { id: string }>(db: D1Database, draftId: string, create: () => Promise<T>): Promise<T | null> {
-  const claim = await db.prepare("UPDATE feishuDrafts SET ticketId = 'CREATING' WHERE id = ? AND ticketId IS NULL").bind(draftId).run();
-  if (!claim.meta?.changes) return null;
-  const created = await create().catch(async (error) => {
-    await db.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ? AND ticketId = 'CREATING'").bind(draftId).run();
+// ── Claims: one ticket (or one saved note) per request ──────────────────────
+// Before its ticket is made the request is claimed (ticketId = 'CREATING',
+// claimedAt), so two presses make one ticket. The ticket workflow links the
+// request to its ticket in the same batch that makes it, and only while the
+// claim is still this one. A failed attempt releases the claim; a claim older
+// than CLAIM_STALE_MINUTES was left by a Worker that stopped half-way (no
+// ticket was made), and the next press may take it again.
+
+export const CLAIM_STALE_MINUTES = 2;
+const claimCutoff = (now: Date) => sqlTime(new Date(now.getTime() - CLAIM_STALE_MINUTES * 60 * 1000));
+
+export function isClaimLeftBehind(draft: Pick<DraftRow, "ticketId" | "claimedAt">, now: Date): boolean {
+  return draft.ticketId === "CREATING" && (!draft.claimedAt || draft.claimedAt < claimCutoff(now));
+}
+
+async function claimRequest(db: D1Database, draftId: string, now: Date): Promise<RequestClaim | null> {
+  const claimedAt = sqlTime(now);
+  const res = await db
+    .prepare(
+      `UPDATE feishuDrafts SET ticketId = 'CREATING', claimedAt = ? WHERE id = ?
+         AND (ticketId IS NULL OR (ticketId = 'CREATING' AND (claimedAt IS NULL OR claimedAt < ?)))`
+    )
+    .bind(claimedAt, draftId, claimCutoff(now))
+    .run();
+  return res.meta?.changes ? { requestId: draftId, claimedAt } : null;
+}
+
+// Gives the request back, unless someone has since taken it over.
+async function releaseClaim(db: D1Database, claim: RequestClaim) {
+  await db
+    .prepare("UPDATE feishuDrafts SET ticketId = NULL, claimedAt = NULL WHERE id = ? AND ticketId = 'CREATING' AND claimedAt = ?")
+    .bind(claim.requestId, claim.claimedAt)
+    .run();
+}
+
+// Links the request after `run`, in case it did not (it normally links in its own batch).
+async function linkClaim(db: D1Database, claim: RequestClaim, ticketId: string) {
+  await db
+    .prepare("UPDATE feishuDrafts SET ticketId = ?, claimedAt = NULL WHERE id = ? AND ticketId = 'CREATING' AND claimedAt = ?")
+    .bind(ticketId, claim.requestId, claim.claimedAt)
+    .run();
+}
+
+// Turns the request into a ticket: `create` gets the claim to pass to the
+// Ticket workflow. null when the request is already claimed or made.
+export async function createTicketFromRequest<T extends { id: string }>(
+  db: D1Database,
+  draftId: string,
+  create: (claim: RequestClaim) => Promise<T>,
+  now = new Date()
+): Promise<T | null> {
+  const claim = await claimRequest(db, draftId, now);
+  if (!claim) return null;
+  const created = await create(claim).catch(async (error) => {
+    await releaseClaim(db, claim);
     throw error;
   });
-  await db.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ?").bind(created.id, draftId).run();
+  await linkClaim(db, claim, created.id);
   return created;
 }
 
-// "Save to ticket" for Add to ticket: claimed the same way, so two presses
-// add it once; released when `save` fails. null when it was already claimed.
-export async function saveToTicket<T>(db: D1Database, draft: Pick<DraftRow, "id" | "targetTicketId">, save: () => Promise<T>): Promise<T | null> {
-  const claim = await db.prepare("UPDATE feishuDrafts SET ticketId = ? WHERE id = ? AND ticketId IS NULL").bind(draft.targetTicketId, draft.id).run();
-  if (!claim.meta?.changes) return null;
-  try {
-    return await save();
-  } catch (error) {
-    await db.prepare("UPDATE feishuDrafts SET ticketId = NULL WHERE id = ?").bind(draft.id).run();
+// "Save to ticket" for Add to ticket, claimed the same way: `save` gets the
+// claim to pass with the note. null when it is already claimed or saved.
+export async function saveToTicket<T>(
+  db: D1Database,
+  draft: Pick<DraftRow, "id" | "targetTicketId">,
+  save: (claim: RequestClaim) => Promise<T>,
+  now = new Date()
+): Promise<T | null> {
+  const claim = await claimRequest(db, draft.id, now);
+  if (!claim) return null;
+  const saved = await save(claim).catch(async (error) => {
+    await releaseClaim(db, claim);
     throw error;
-  }
+  });
+  await linkClaim(db, claim, draft.targetTicketId!);
+  return saved;
 }
 
 // A device alert in the after-sales group: a request nobody has claimed yet,
