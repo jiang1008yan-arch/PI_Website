@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPiBotFetch } from "../lib/feishu/piBot/client";
 import { planApprove, runTransition, WorkflowConflictError } from "../lib/piWorkflow";
 import type { AppUser, Role } from "../lib/types";
@@ -290,6 +290,17 @@ describe("PI Assistant bot", () => {
 });
 
 describe("Sign in with Feishu", () => {
+  it("without the PI Assistant app set up, goes back to the login page with a message", async () => {
+    h.env.FEISHU_PI_APP_ID = "";
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await h.fetchAs("SALES", "GET", "/auth/feishu/start?next=%2Fpi%2Fzh");
+    errorLog.mockRestore();
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get("location")!.replace("#", "?"));
+    expect(location.origin + location.pathname).toBe("https://portal.example/login");
+    expect(location.searchParams.get("feishuError")).toContain("not set up");
+  });
+
   it("first time links via a password sign-in; afterwards signs straight in", async () => {
     const start = await h.raw("GET", "/auth/feishu/start?next=%2Fpi%2Fzh", "");
     expect(start.status).toBe(302);

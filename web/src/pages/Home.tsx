@@ -1,334 +1,326 @@
-import { Activity, Archive, BadgeCheck, ChevronRight, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
+import { Activity, Archive, BadgeCheck, ChevronRight, ClipboardList, Clock3, FileCheck2, FileSearch, FileText, Folder, LayoutGrid, LifeBuoy, Lightbulb, Package, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { getCachedCount, setCachedCount, unseenCount } from "../pi/notifications";
+import { getCachedCount, setCachedCount, unseenCount, type BadgeCategory } from "../pi/notifications";
 import { prefetchPiList } from "../pi/piListCache";
-import { ticketCapabilities } from "../../../shared/ticketCapabilities";
+import type { Role } from "../types";
 
-type HomeModule = {
-  to: string;
-  title: string;
-  desc: string;
-  Icon: LucideIcon;
-  tone: ModuleTone;
-  art: "document" | "temple" | "folder" | "stamp" | "blocks" | "people" | "grid" | "shield";
-  badge?: number;
+// The home page is a workbench, not a menu of equal cards:
+//   1. "Needs your attention" — the queues this role works, each with how many
+//      items wait and how many of them are new since the user last looked.
+//   2. One compact panel per area the role uses (Sales, After-sales, Commerce,
+//      Administration), each a short list of the pages in that area.
+// Each role sees only its own areas. SALES has no after-sales area: the tickets
+// in their name show up as an attention item only while one is still open.
+
+type Tone = "blue" | "green" | "cyan" | "violet" | "orange" | "indigo" | "teal" | "emerald";
+
+const toneClass: Record<Tone, string> = {
+  blue: "bg-[#e8f0ff] text-[#1d5fd0]",
+  green: "bg-[#e5f6ee] text-[#0b8a56]",
+  cyan: "bg-[#e3f5f9] text-[#147b91]",
+  violet: "bg-[#efe9ff] text-[#6330c8]",
+  orange: "bg-[#fff0e3] text-[#d2580a]",
+  indigo: "bg-[#eaedff] text-[#3044b6]",
+  teal: "bg-[#e3f6f5] text-[#0f7f80]",
+  emerald: "bg-[#e5f6eb] text-[#158044]"
 };
 
-type ModuleTone = "blue" | "green" | "cyan" | "violet" | "orange" | "indigo" | "teal" | "emerald";
+type Attention = {
+  to: string;
+  title: string;
+  Icon: LucideIcon;
+  tone: Tone;
+  // Items waiting, and how many of them the user has not opened yet. A queue
+  // shows the total; a feed (newly approved PIs) only has the new ones.
+  total?: number;
+  fresh: number;
+  // What the number counts, e.g. "waiting".
+  unit: string;
+};
 
-type HomeSection = { id: string; title: string; subtitle: string; modules: HomeModule[] };
+type Entry = { to: string; title: string; desc: string; Icon: LucideIcon; tone: Tone };
+type Area = { id: string; title: string; entries: Entry[] };
+
+// Totals are cached next to the unseen counts so the attention row paints at
+// once from storage, then revalidates.
+type Totals = Partial<Record<"reviews" | "commerce" | "newTickets" | "myOpenTickets", number>>;
+const totalsKey = (userId: string | undefined) => `home-totals:${userId ?? "anon"}`;
+function readTotals(userId: string | undefined): Totals {
+  try {
+    return JSON.parse(localStorage.getItem(totalsKey(userId)) ?? "{}") as Totals;
+  } catch {
+    return {};
+  }
+}
+function writeTotals(userId: string | undefined, totals: Totals) {
+  try {
+    localStorage.setItem(totalsKey(userId), JSON.stringify(totals));
+  } catch {
+    /* ignore quota / private-mode failures */
+  }
+}
+
+const idsOf = (rows: unknown) => (Array.isArray(rows) ? (rows as { id: string }[]).map((r) => r.id) : []);
 
 export function HomePage() {
   const { user } = useAuth();
   const role = user?.role;
-  const [newTickets, setNewTickets] = useState(() => getCachedCount("newTickets", user?.id));
-  // Seed from the cached count so the badge paints instantly (no delayed dot),
-  // then revalidate against the live list below.
-  const [pendingReviews, setPendingReviews] = useState(() => getCachedCount("pendingReviews", user?.id));
-  const [confirmedReceived, setConfirmedReceived] = useState(() => getCachedCount("confirmedReceived", user?.id));
-  const [pendingCommerce, setPendingCommerce] = useState(() => getCachedCount("pendingCommerce", user?.id));
+  const userId = user?.id;
+  const [totals, setTotals] = useState<Totals>(() => readTotals(userId));
+  const [fresh, setFresh] = useState<Record<BadgeCategory, number>>(() => ({
+    pendingReviews: getCachedCount("pendingReviews", userId),
+    pendingCommerce: getCachedCount("pendingCommerce", userId),
+    newTickets: getCachedCount("newTickets", userId),
+    confirmedReceived: getCachedCount("confirmedReceived", userId)
+  }));
 
-  // Badge the After-Sales card with NEW tickets the user hasn't looked at yet;
-  // opening the ticket list (or the ticket) clears them.
   useEffect(() => {
-    if (!ticketCapabilities(role).use) return;
-    api
-      .get("/tickets", { params: { status: "NEW" } })
-      .then((res) => {
-        const ids = (Array.isArray(res.data) ? res.data : []).map((t: { id: string }) => t.id);
-        const n = unseenCount("newTickets", user?.id, ids);
-        setNewTickets(n);
-        setCachedCount("newTickets", user?.id, n);
-      })
-      .catch(() => setNewTickets(0));
-  }, [role, user?.id]);
+    if (!role) return;
+    let cancelled = false;
+    const nextTotals: Totals = {};
+    const nextFresh: Partial<Record<BadgeCategory, number>> = {};
+    // A queue: its total, and how many the user has not opened (the badge).
+    const queue = (url: string, params: Record<string, string> | undefined, total: keyof Totals, category: BadgeCategory) =>
+      api
+        .get(url, params ? { params } : undefined)
+        .then((res) => {
+          const ids = idsOf(res.data);
+          nextTotals[total] = ids.length;
+          nextFresh[category] = unseenCount(category, userId, ids);
+        })
+        .catch(() => {
+          nextTotals[total] = 0;
+          nextFresh[category] = 0;
+        });
 
-  // Badge "Pending Commerce Approval" with queued PIs this commerce user hasn't opened.
-  useEffect(() => {
-    if (role !== "COMMERCE") return;
-    api
-      .get("/pi/commerce-queue")
-      .then((res) => {
-        const ids = (Array.isArray(res.data) ? res.data : []).map((p: { id: string }) => p.id);
-        const n = unseenCount("pendingCommerce", user?.id, ids);
-        setPendingCommerce(n);
-        setCachedCount("pendingCommerce", user?.id, n);
-      })
-      .catch(() => setPendingCommerce(0));
-  }, [role, user?.id]);
+    const jobs: Promise<unknown>[] = [];
+    if (role === "ADMIN" || role === "PRESALES") jobs.push(queue("/pi/review-queue", undefined, "reviews", "pendingReviews"));
+    if (role === "ADMIN" || role === "COMMERCE") jobs.push(queue("/pi/commerce-queue", undefined, "commerce", "pendingCommerce"));
+    // NEW tickets are the ones nobody has started on yet.
+    if (role === "ADMIN" || role === "SERVICE") jobs.push(queue("/tickets", { status: "NEW" }, "newTickets", "newTickets"));
+    if (role === "SALES") {
+      // Sales read the tickets in their name; only the open ones matter here.
+      jobs.push(
+        api
+          .get("/tickets/stats")
+          .then((res) => {
+            const byStatus = (res.data?.byStatus ?? []) as { status: string; n: number }[];
+            nextTotals.myOpenTickets = byStatus.filter((s) => s.status === "NEW" || s.status === "IN_PROGRESS").reduce((a, s) => a + s.n, 0);
+          })
+          .catch(() => {
+            nextTotals.myOpenTickets = 0;
+          })
+      );
+    }
+    if (role === "ADMIN" || role === "SALES") {
+      jobs.push(
+        api
+          .get("/pi/approved", { params: { scope: "mine" } })
+          .then((res) => {
+            nextFresh.confirmedReceived = unseenCount("confirmedReceived", userId, idsOf(res.data?.items));
+          })
+          .catch(() => {
+            nextFresh.confirmedReceived = 0;
+          })
+      );
+      // Warm both PI workspace lists so the first jump from home paints instantly.
+      void prefetchPiList(userId, "EN");
+      void prefetchPiList(userId, "ZH");
+    }
 
-  // Badge the "Pending Reviews" card with the number of waiting Chinese PIs the
-  // admin hasn't opened yet; opening the Pending Reviews page clears it (需求3).
-  useEffect(() => {
-    if (role !== "ADMIN" && role !== "PRESALES") return;
-    api
-      .get("/pi/review-queue")
-      .then((res) => {
-        const ids = (Array.isArray(res.data) ? res.data : []).map((p: { id: string }) => p.id);
-        const n = unseenCount("pendingReviews", user?.id, ids);
-        setPendingReviews(n);
-        setCachedCount("pendingReviews", user?.id, n);
-      })
-      .catch(() => setPendingReviews(0));
-  }, [role, user?.id]);
+    void Promise.all(jobs).then(() => {
+      if (cancelled) return;
+      setTotals(nextTotals);
+      writeTotals(userId, nextTotals);
+      setFresh((prev) => ({ ...prev, ...nextFresh }));
+      for (const [category, n] of Object.entries(nextFresh)) setCachedCount(category as BadgeCategory, userId, n);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [role, userId]);
 
-  // Badge the "Confirmed Received PIs" card with approved Chinese PIs (the
-  // newest page of the user's own) not opened yet; opening that page clears it.
-  useEffect(() => {
-    if (role !== "ADMIN" && role !== "SALES") return;
-    api
-      .get("/pi/approved", { params: { scope: "mine" } })
-      .then((res) => {
-        const ids = ((res.data?.items ?? []) as { id: string }[]).map((pi) => pi.id);
-        const n = unseenCount("confirmedReceived", user?.id, ids);
-        setConfirmedReceived(n);
-        setCachedCount("confirmedReceived", user?.id, n);
-      })
-      .catch(() => setConfirmedReceived(0));
-  }, [role, user?.id]);
-
-  // Warm both PI workspace lists so the first jump from home paints instantly.
-  useEffect(() => {
-    if (role !== "ADMIN" && role !== "SALES") return;
-    void prefetchPiList(user?.id, "EN");
-    void prefetchPiList(user?.id, "ZH");
-  }, [role, user?.id]);
-
-  const piModules: HomeModule[] = [
-    { to: "/pi/en", title: "English PI", desc: "Create English proforma invoices", Icon: FileText, tone: "blue", art: "document" },
-    { to: "/pi/zh", title: "Chinese PI", desc: "Create Chinese PIs for presales confirmation and commerce approval", Icon: FileCheck2, tone: "green", art: "temple" },
-    { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "Approved Chinese PIs you created or received", Icon: ShieldCheck, tone: "cyan", art: "shield", badge: confirmedReceived },
-    { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
-  ];
-  const ticketModules: HomeModule[] = [
-    { to: "/tickets", title: "After-Sales Tickets", desc: role === "SALES" ? "Service requests in your name, with status" : "Service requests from Feishu and the team, with status counts", Icon: LifeBuoy, tone: "teal", art: "people", badge: newTickets },
-    { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange", art: "grid" },
-    ...(role === "ADMIN" || role === "SERVICE"
-      ? [{ to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" } as HomeModule]
-      : [])
-  ];
-  const adminModules: HomeModule[] = [
-    { to: "/reviews", title: "Pending Reviews", desc: "Presales confirmation of Chinese PIs", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
-    { to: "/commerce", title: "Commerce Queue", desc: "Approve or reject PIs awaiting commerce approval", Icon: BadgeCheck, tone: "violet", art: "stamp" },
-    { to: "/products", title: "Product Management", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo", art: "blocks" },
-    { to: "/permissions", title: "Permission Management", desc: "Users and admin roles", Icon: UsersRound, tone: "teal", art: "people" },
-    { to: "/excel-templates", title: "Excel Template Settings", desc: "Header templates by language", Icon: LayoutGrid, tone: "emerald", art: "grid" },
-    { to: "/requirement-pool", title: "Requirement Pool", desc: "Send product requests to the product managers' Feishu table", Icon: Lightbulb, tone: "orange", art: "blocks" }
-  ];
-
-  // PRESALES confirms the Chinese PIs picked for them; they open each PI from the queue.
-  const presalesModules: HomeModule[] = [
-    { to: "/reviews", title: "Pending Reviews", desc: "Chinese PIs waiting for your presales confirmation", Icon: Clock3, tone: "orange", art: "stamp", badge: pendingReviews },
-    { to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan", art: "shield" }
-  ];
-
-  const commerceModules: HomeModule[] = [
-    { to: "/commerce", title: "Pending Commerce Approval", desc: "Approve or reject Chinese PIs after presales confirmation", Icon: BadgeCheck, tone: "orange", art: "stamp", badge: pendingCommerce },
-    { to: "/pi/approved", title: "Approved PIs", desc: "Search approved PIs and download Chinese and English Excel", Icon: Archive, tone: "cyan", art: "shield" },
-    { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet", art: "folder" }
-  ];
-
-  // Each role sees only its own modules: SERVICE handles after-sales; COMMERCE
-  // approves and downloads PIs; SALES and ADMIN create PIs.
-  const sections: HomeSection[] = [];
-  if (role === "COMMERCE") {
-    sections.push({ id: "commerce", title: "Commerce", subtitle: "Commerce approval and approved PIs", modules: commerceModules });
-  }
-  if (role === "PRESALES") {
-    sections.push({ id: "presales", title: "Presales", subtitle: "Presales confirmation of Chinese PIs", modules: presalesModules });
-  }
-  if (role === "ADMIN" || role === "SALES") {
-    sections.push({ id: "pi", title: "Proforma Invoices", subtitle: "Create, review and export PIs", modules: piModules });
-  }
-  if (ticketCapabilities(role).use) {
-    sections.push({ id: "after-sales", title: "After-Sales", subtitle: "Customer service requests and statistics", modules: ticketModules });
-  }
-  if (role === "ADMIN") {
-    sections.push({ id: "admin", title: "Administration", subtitle: "Products, reviews, access control and configuration", modules: adminModules });
-  }
+  const attention = attentionFor(role, totals, fresh);
+  const areas = areasFor(role);
+  const waiting = attention.reduce((acc, a) => acc + (a.total ?? a.fresh), 0);
 
   return (
-    <div className="space-y-10">
-      <div className="relative overflow-hidden rounded-lg border border-[#dbe6fb] bg-gradient-to-br from-white via-[#f9fbff] to-[#dbe7ff] px-8 py-12 shadow-[0_24px_70px_rgba(8,36,107,0.09)]">
-        <div className="absolute -right-10 -top-20 h-72 w-72 rounded-full bg-[#adc4fb]/45 blur-sm" />
-        <div className="absolute right-10 top-8 hidden h-48 w-36 rotate-6 rounded-[2rem] border border-white/70 bg-white/60 shadow-2xl shadow-[#6f8fd9]/25 backdrop-blur-md md:block" />
-        <div className="absolute right-24 top-16 hidden h-40 w-32 rotate-6 rounded-[1.6rem] border border-white/80 bg-white/80 shadow-xl shadow-[#6f8fd9]/20 md:block" />
-        <div className="absolute right-32 top-24 hidden h-20 w-20 rounded-full bg-[#6f8fd9]/20 md:block" />
-        <div className="absolute right-40 top-20 hidden h-3 w-3 rotate-45 bg-white md:block" />
-        <div className="absolute right-16 bottom-10 hidden h-2 w-2 rotate-45 bg-white md:block" />
-        <div className="absolute right-28 top-28 hidden h-16 w-16 rounded-2xl bg-primary/80 text-center text-3xl font-semibold leading-[4rem] text-white shadow-xl shadow-primary/20 md:block">$</div>
-        <div className="relative max-w-xl">
-          <h1 className="text-4xl font-semibold tracking-tight text-[#07183f]">Hello, {user?.displayName}</h1>
-          <p className="mt-3 text-base text-[#617295]">Choose a module to continue your workflow.</p>
-          <div className="mt-6 h-1 w-14 rounded-full bg-primary" />
+    <div className="space-y-8">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-[#07183f]">Hello, {user?.displayName}</h1>
+          <p className="mt-1 text-sm text-[#617295]">
+            {attention.length === 0 ? "Pick where to continue." : waiting > 0 ? "Here is what is waiting for you." : "Nothing is waiting for you right now."}
+          </p>
         </div>
+        <div className="text-sm text-[#8193b8]">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</div>
       </div>
-      {sections.map((section) => (
-        <section key={section.id} className="space-y-4">
-          <div className="flex items-center gap-4">
-            <h2 className="shrink-0 text-lg font-semibold tracking-tight text-[#07183f]">{section.title}</h2>
-            <div className="h-px flex-1 bg-gradient-to-r from-[#cdddf8] to-transparent" />
-          </div>
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            {section.modules.map((module) => (
-              <ModuleCard key={module.title} module={module} />
+
+      {attention.length > 0 && (
+        <section className="space-y-3">
+          <SectionTitle>Needs your attention</SectionTitle>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {attention.map((a) => (
+              <AttentionTile key={a.to} item={a} />
             ))}
           </div>
         </section>
-      ))}
+      )}
+
+      <section className="space-y-3">
+        <SectionTitle>Workspaces</SectionTitle>
+        <div className={`grid grid-cols-1 gap-4 ${areas.length >= 3 ? "lg:grid-cols-3" : areas.length === 2 ? "md:grid-cols-2" : ""}`}>
+          {areas.map((area) => (
+            <AreaPanel key={area.id} area={area} wide={areas.length === 1} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
 
-function ModuleCard({ module }: { module: HomeModule }) {
-  const { to, title, Icon, tone, art, badge } = module;
-  const theme = moduleThemes[tone];
+function attentionFor(role: Role | undefined, totals: Totals, fresh: Record<BadgeCategory, number>): Attention[] {
+  const reviews: Attention = { to: "/reviews", title: "Pending Reviews", Icon: Clock3, tone: "orange", total: totals.reviews, fresh: fresh.pendingReviews, unit: "waiting" };
+  const commerce: Attention = { to: "/commerce", title: role === "COMMERCE" ? "Commerce Approval" : "Commerce Queue", Icon: BadgeCheck, tone: "violet", total: totals.commerce, fresh: fresh.pendingCommerce, unit: "waiting" };
+  const tickets: Attention = { to: "/tickets", title: "New Tickets", Icon: LifeBuoy, tone: "teal", total: totals.newTickets, fresh: fresh.newTickets, unit: "not started" };
+  const approved: Attention = { to: "/pi/confirmed-received", title: "Newly Approved PIs", Icon: ShieldCheck, tone: "cyan", fresh: fresh.confirmedReceived, unit: "new" };
+  switch (role) {
+    case "ADMIN":
+      return [reviews, commerce, tickets, approved];
+    case "SALES": {
+      const items = [approved];
+      // Only while a customer of theirs has an open ticket; otherwise sales have no after-sales entry at all.
+      if (totals.myOpenTickets) {
+        items.push({ to: "/tickets", title: "Customer Tickets", Icon: LifeBuoy, tone: "teal", total: totals.myOpenTickets, fresh: 0, unit: "open" });
+      }
+      return items;
+    }
+    case "PRESALES":
+      return [reviews];
+    case "COMMERCE":
+      return [commerce];
+    case "SERVICE":
+      return [tickets];
+    default:
+      return [];
+  }
+}
+
+function areasFor(role: Role | undefined): Area[] {
+  const sales: Area = {
+    id: "sales",
+    title: "Sales",
+    entries: [
+      { to: "/pi/en", title: "English PI", desc: "Create English proforma invoices", Icon: FileText, tone: "blue" },
+      { to: "/pi/zh", title: "Chinese PI", desc: "Create Chinese PIs for presales and commerce approval", Icon: FileCheck2, tone: "green" },
+      { to: "/pi/confirmed-received", title: "Confirmed Received PIs", desc: "Approved Chinese PIs you created or received", Icon: ShieldCheck, tone: "cyan" },
+      { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet" }
+    ]
+  };
+  const lookup: Entry = { to: "/pi/approved", title: "Approved PI Lookup", desc: "Find the approved Chinese PI for a customer, order or SN", Icon: FileSearch, tone: "cyan" };
+  const afterSales: Area = {
+    id: "after-sales",
+    title: "After-Sales",
+    entries: [
+      { to: "/tickets", title: "Tickets", desc: "Service requests from Feishu and the team", Icon: LifeBuoy, tone: "teal" },
+      { to: "/fault-analytics", title: "Fault Analytics", desc: "Repeat faults by product, fault types and alerts", Icon: Activity, tone: "orange" },
+      lookup
+    ]
+  };
+  const admin: Area = {
+    id: "admin",
+    title: "Administration",
+    entries: [
+      { to: "/products", title: "Products", desc: "Catalog, pricing and field mapping", Icon: Package, tone: "indigo" },
+      { to: "/permissions", title: "Users & Permissions", desc: "Accounts, roles and Feishu links", Icon: UsersRound, tone: "teal" },
+      { to: "/excel-templates", title: "Excel Templates", desc: "PI header templates by language", Icon: LayoutGrid, tone: "emerald" },
+      { to: "/ticket-fields-config", title: "Ticket Questionnaire", desc: "Questions on the New ticket form", Icon: ClipboardList, tone: "blue" },
+      { to: "/requirement-pool", title: "Requirement Pool", desc: "Product requests to the Feishu table", Icon: Lightbulb, tone: "orange" }
+    ]
+  };
+  switch (role) {
+    case "ADMIN":
+      return [sales, afterSales, admin];
+    case "SALES":
+      return [sales];
+    case "SERVICE":
+      return [afterSales];
+    case "PRESALES":
+      return [{ id: "presales", title: "Presales", entries: [lookup] }];
+    case "COMMERCE":
+      return [
+        {
+          id: "commerce",
+          title: "Commerce",
+          entries: [
+            { to: "/pi/approved", title: "Approved PIs", desc: "Search approved PIs and download Chinese and English Excel", Icon: Archive, tone: "cyan" },
+            { to: "/contracts", title: "Contract Templates", desc: "Download shared contract files", Icon: Folder, tone: "violet" }
+          ]
+        }
+      ];
+    default:
+      return [];
+  }
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-[#7184ab]">{children}</h2>;
+}
+
+function AttentionTile({ item }: { item: Attention }) {
+  const { to, title, Icon, tone, total, fresh, unit } = item;
+  const count = total ?? fresh;
+  const idle = count === 0;
   return (
-    <Link to={to} className={`group relative min-h-36 overflow-hidden rounded-lg border bg-gradient-to-br p-5 shadow-[0_18px_42px_rgba(8,36,107,0.07)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(8,36,107,0.13)] ${theme.card}`}>
-      <div className="relative z-10 flex max-w-[68%] items-start gap-4">
-        <span className={`relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-white shadow-lg ${theme.icon}`}>
-          <Icon size={24} strokeWidth={1.9} />
-          {badge ? (
-            <span className="absolute -right-1.5 -top-1.5 grid h-6 min-w-[1.5rem] place-items-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white shadow-md ring-2 ring-white">
-              {badge > 99 ? "99+" : badge}
-            </span>
-          ) : null}
-        </span>
-        <span className="min-w-0">
-          <span className="block font-semibold text-[#07183f]">{title}</span>
-        </span>
-      </div>
-      <DecorativeArt art={art} className={theme.art} />
-      <span className="absolute bottom-4 right-4 z-10 grid h-9 w-9 place-items-center rounded-full bg-white/75 text-[#294477] shadow-[0_8px_20px_rgba(8,36,107,0.09)] ring-1 ring-white/80 transition group-hover:translate-x-1 group-hover:text-primary">
-        <ChevronRight size={18} />
+    <Link
+      to={to}
+      className={`group flex items-center gap-4 rounded-lg border bg-white p-4 shadow-[0_10px_30px_rgba(8,36,107,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_40px_rgba(8,36,107,0.11)] ${idle ? "border-[#e6ecf7]" : "border-[#d5e1f8]"}`}
+    >
+      <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${idle ? "bg-[#f2f5fb] text-[#9aa8c4]" : toneClass[tone]}`}>
+        <Icon size={21} strokeWidth={1.9} />
       </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-[#294477]">{title}</span>
+        <span className="mt-0.5 flex items-baseline gap-2">
+          {idle ? (
+            <span className="text-sm text-[#9aa8c4]">All clear</span>
+          ) : (
+            <>
+              <span className="text-2xl font-semibold leading-none text-[#07183f]">{count > 99 ? "99+" : count}</span>
+              <span className="text-xs text-[#7184ab]">{unit}</span>
+              {total !== undefined && fresh > 0 && (
+                <span className="rounded-full bg-red-500 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">{fresh} new</span>
+              )}
+            </>
+          )}
+        </span>
+      </span>
+      <ChevronRight size={18} className="shrink-0 text-[#a3b2cf] transition group-hover:translate-x-0.5 group-hover:text-primary" />
     </Link>
   );
 }
 
-const moduleThemes: Record<ModuleTone, { card: string; icon: string; art: string }> = {
-  blue: {
-    card: "border-[#dbe7fb] from-white via-white to-[#e9f0ff]",
-    icon: "bg-gradient-to-br from-[#3b7be8] to-[#0b4aa5] shadow-blue-900/15",
-    art: "text-[#8eb1f1]"
-  },
-  green: {
-    card: "border-[#d9efe7] from-white via-white to-[#e8f8f1]",
-    icon: "bg-gradient-to-br from-[#25b577] to-[#078754] shadow-emerald-900/15",
-    art: "text-[#99d7bf]"
-  },
-  cyan: {
-    card: "border-[#d8eef4] from-white via-white to-[#e7f8fb]",
-    icon: "bg-gradient-to-br from-[#20a6c5] to-[#147b91] shadow-cyan-900/15",
-    art: "text-[#91d4df]"
-  },
-  violet: {
-    card: "border-[#e4dcfb] from-white via-white to-[#f0ebff]",
-    icon: "bg-gradient-to-br from-[#8b5cf6] to-[#6330c8] shadow-violet-900/15",
-    art: "text-[#bba7f2]"
-  },
-  orange: {
-    card: "border-[#f5e4d4] from-white via-white to-[#fff1e4]",
-    icon: "bg-gradient-to-br from-[#fb923c] to-[#d95b0b] shadow-orange-900/15",
-    art: "text-[#efbf98]"
-  },
-  indigo: {
-    card: "border-[#dfe4fb] from-white via-white to-[#eef2ff]",
-    icon: "bg-gradient-to-br from-[#6276ea] to-[#3044b6] shadow-indigo-900/15",
-    art: "text-[#a6b2f3]"
-  },
-  teal: {
-    card: "border-[#d8eeec] from-white via-white to-[#e9f8f7]",
-    icon: "bg-gradient-to-br from-[#21b2b0] to-[#0f7f80] shadow-teal-900/15",
-    art: "text-[#9bd9d6]"
-  },
-  emerald: {
-    card: "border-[#d9efe1] from-white via-white to-[#e9f9ee]",
-    icon: "bg-gradient-to-br from-[#2fb36c] to-[#158044] shadow-green-900/15",
-    art: "text-[#9cd7b3]"
-  }
-};
-
-function DecorativeArt({ art, className }: { art: HomeModule["art"]; className: string }) {
-  const baseClass = `pointer-events-none absolute bottom-0 right-0 h-32 w-40 opacity-55 transition group-hover:scale-105 ${className}`;
-
-  if (art === "document") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <path d="M63 28h58c9 0 16 7 16 16v66H51V40c0-7 5-12 12-12Z" fill="currentColor" opacity=".24" />
-        <path d="M50 40c16 7 41 7 58 0v68c-16 9-41 9-58 0V40Z" fill="white" stroke="currentColor" strokeWidth="5" />
-        <path d="M69 58h41M69 73h34M69 88h25" stroke="currentColor" strokeWidth="6" strokeLinecap="round" opacity=".55" />
-      </svg>
-    );
-  }
-
-  if (art === "temple") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <path d="M45 70h76v42H45V70Z" fill="currentColor" opacity=".2" />
-        <path d="M35 65c18-6 29-17 34-33 11 18 28 28 56 33-29 10-59 10-90 0Z" fill="white" stroke="currentColor" strokeWidth="5" />
-        <path d="M54 74v35M76 74v35M98 74v35M38 111h88" stroke="currentColor" strokeWidth="6" strokeLinecap="round" opacity=".55" />
-      </svg>
-    );
-  }
-
-  if (art === "folder") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <path d="M24 45h43l12 14h58v47c0 8-6 14-14 14H38c-8 0-14-6-14-14V45Z" fill="white" stroke="currentColor" strokeWidth="5" />
-        <path d="M39 31h39l13 14H24c0-8 7-14 15-14Z" fill="currentColor" opacity=".32" />
-        <path d="M45 78h70" stroke="currentColor" strokeWidth="6" strokeLinecap="round" opacity=".45" />
-      </svg>
-    );
-  }
-
-  if (art === "stamp") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <path d="M67 23c14-10 35 0 35 17 0 9-5 16-12 20l23 24H57l23-24c-9-5-16-20-13-37Z" fill="currentColor" opacity=".38" />
-        <path d="M43 82h82l10 35H33l10-35Z" fill="white" stroke="currentColor" strokeWidth="5" />
-        <path d="M52 100h65" stroke="currentColor" strokeWidth="6" strokeLinecap="round" opacity=".5" />
-      </svg>
-    );
-  }
-
-  if (art === "blocks") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <path d="M75 21 105 36 75 51 45 36 75 21ZM42 55l30 15v34L42 89V55ZM79 70l30-15v34l-30 15V70ZM109 44l27 14-27 14-27-14 27-14Z" fill="white" stroke="currentColor" strokeWidth="5" />
-        <path d="M75 51v20M109 72v20" stroke="currentColor" strokeWidth="5" opacity=".45" />
-      </svg>
-    );
-  }
-
-  if (art === "people") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <rect x="42" y="30" width="82" height="86" rx="18" fill="white" stroke="currentColor" strokeWidth="5" />
-        <circle cx="83" cy="61" r="15" fill="currentColor" opacity=".35" />
-        <path d="M57 98c7-15 45-15 52 0" stroke="currentColor" strokeWidth="7" strokeLinecap="round" opacity=".55" />
-        <rect x="92" y="43" width="43" height="58" rx="14" fill="currentColor" opacity=".18" />
-      </svg>
-    );
-  }
-
-  if (art === "grid") {
-    return (
-      <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-        <rect x="34" y="31" width="108" height="78" rx="14" fill="white" stroke="currentColor" strokeWidth="5" />
-        <path d="M34 54h108M62 54v55M92 54v55M122 54v55M50 77h76M50 95h76" stroke="currentColor" strokeWidth="4" opacity=".5" />
-        <rect x="34" y="31" width="108" height="23" rx="12" fill="currentColor" opacity=".28" />
-      </svg>
-    );
-  }
-
+function AreaPanel({ area, wide }: { area: Area; wide: boolean }) {
   return (
-    <svg className={baseClass} viewBox="0 0 160 128" fill="none" aria-hidden="true">
-      <path d="M80 24 123 41v30c0 27-18 43-43 53-25-10-43-26-43-53V41l43-17Z" fill="white" stroke="currentColor" strokeWidth="5" />
-      <path d="m62 70 13 13 27-31" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" opacity=".55" />
-    </svg>
+    <div className="rounded-lg border border-[#e1e9f8] bg-white p-2 shadow-[0_10px_30px_rgba(8,36,107,0.05)]">
+      <div className="px-3 pb-1 pt-2 text-sm font-semibold text-[#07183f]">{area.title}</div>
+      <div className={wide ? "grid grid-cols-1 md:grid-cols-2" : ""}>
+        {area.entries.map(({ to, title, desc, Icon, tone }) => (
+          <Link key={to + title} to={to} className="group flex items-center gap-3 rounded-md px-3 py-2.5 transition hover:bg-[#f3f7ff]">
+            <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${toneClass[tone]}`}>
+              <Icon size={18} strokeWidth={1.9} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium text-[#07183f]">{title}</span>
+              <span className="block truncate text-xs text-[#7184ab]">{desc}</span>
+            </span>
+            <ChevronRight size={16} className="shrink-0 text-[#b3c0da] transition group-hover:translate-x-0.5 group-hover:text-primary" />
+          </Link>
+        ))}
+      </div>
+    </div>
   );
 }
