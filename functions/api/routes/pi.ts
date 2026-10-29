@@ -1,31 +1,50 @@
 import { all, first, id } from "../../lib/db";
 import { nextPiNumber } from "../../lib/piNumber";
 import { buildLinkedZhItems } from "../../lib/piLink";
+import { EFFECTIVE_ZH, effectiveHeader, readEffective } from "../../lib/effectivePi";
 import {
+  canAbandonRevision,
   canApprovePi,
+  canCommerceDecide,
   canDeletePi,
   canExportPi,
   canPatchPi,
   canReadPi,
   canRejectPi,
+  canStartRevision,
   canSubmitForReview,
   canSubmitPi,
+  canViewPi,
+  type ExportVersion,
   type PiRow,
   type Verdict
 } from "../../lib/piAccess";
 import { objectUrl } from "../../lib/r2";
+import { hasEffectiveVersion } from "../../../shared/piCapabilities";
+import { parseFieldValues } from "../../../shared/piItemCodec";
+import { parseSerials } from "../../lib/devices";
+import { canRegisterSn } from "../../lib/ticketAccess";
+import { purgeExpired } from "../../scheduled";
 import { piItemInsertStatements, piItemReplaceStatements } from "../../lib/piItems";
 import type { Language } from "../../lib/types";
 import {
   EDITABLE_HEADER_COLUMN_SET,
+  planAbandonRevision,
   planApprove,
+  planCommerceApprove,
+  planCommerceReject,
   planDelete,
   planReject,
+  planStartRevision,
   planSubmit,
   planSubmitForReview,
-  runTransition
+  runTransition,
+  WorkflowConflictError,
+  type TransitionPlan
 } from "../../lib/piWorkflow";
-import { admin, body, createApp } from "./_shared";
+import { notifyPiTransition, siteBase, type PiTransition } from "../../lib/feishu/piBot/notifyPi";
+import { stepOf } from "../../lib/feishu/piBot/piCard";
+import { body, createApp } from "./_shared";
 import type { Context } from "hono";
 
 export const piRoutes = createApp();
@@ -48,31 +67,71 @@ function runAfterResponse(c: Context, task: () => Promise<unknown>) {
 
 type PiRowFull = PiRow & Record<string, any>;
 
-async function loadPi(c: Context): Promise<PiRowFull | null> {
-  return await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", c.req.param("id"));
+// Runs an approval-chain transition. Returns a 409 response when someone else
+// acted on the PI first (website + Feishu card at once), else null. Once
+// committed, the PI Assistant bot tells the next approver / the submitter,
+// after the response.
+async function approvalTransition(c: Context, row: PiRowFull, plan: TransitionPlan, kind: PiTransition) {
+  try {
+    await runTransition(c.env.DB, row.id, plan, c.get("user").id);
+  } catch (error) {
+    if (error instanceof WorkflowConflictError) return c.json({ error: error.message }, 409);
+    throw error;
+  }
+  const args = { piId: row.id, transition: kind, actor: c.get("user"), step: stepOf(row.status), base: siteBase(c.env, c.req.url) };
+  runAfterResponse(c, () => notifyPiTransition(c.env, args));
+  return null;
 }
+
+// The submitter picks the approvers: presales (a PRESALES user, or an admin)
+// and commerce (a COMMERCE user). Either may be left out — then any admin
+// confirms / any commerce user decides, as before picks existed.
+async function approverPickError(db: D1Database, presalesId: string, commerceId: string) {
+  const ids = [presalesId, commerceId].filter(Boolean);
+  if (!ids.length) return null;
+  const rows = await all<{ id: string; role: string }>(
+    db,
+    `SELECT id, role FROM users WHERE id IN (${ids.map(() => "?").join(",")})`,
+    ...ids
+  );
+  const roleOf = (userId: string) => rows.find((r) => r.id === userId)?.role ?? "";
+  if (presalesId && !["PRESALES", "ADMIN"].includes(roleOf(presalesId))) return "The presales approver must be a Presales user or an admin";
+  if (commerceId && roleOf(commerceId) !== "COMMERCE") return "The commerce approver must be a Commerce user";
+  return null;
+}
+
+// Loads the PI row plus, for a linked EN PI, its ZH PI's status and revision
+// flag — an EN PI follows its approved ZH PI's lock (see piCapabilities).
+async function loadPi(c: Context): Promise<PiRowFull | null> {
+  const row = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", c.req.param("id"));
+  if (row && row.language === "EN" && row.linkedPiId) {
+    row.linkedZh = await first<{ status: PiRow["status"]; revisionInProgress: number }>(
+      c.env.DB,
+      "SELECT status, revisionInProgress FROM pi WHERE id=?",
+      row.linkedPiId
+    );
+  }
+  return row;
+}
+
+const ITEM_SELECT =
+  "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder";
 
 async function loadPiItems(db: D1Database, piId: string) {
   return await all(db, "SELECT * FROM piItems WHERE piId=? ORDER BY sortOrder", piId);
 }
 
-function parseFieldValues(raw: string | null | undefined): any[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
+// ZH PIs awaiting presales confirmation by the caller: a PRESALES user sees
+// those picked for them; an admin sees those picked for them or unassigned.
 piRoutes.get("/pi/review-queue", async (c) => {
-  admin(c);
+  const user = c.get("user");
+  if (user.role !== "ADMIN" && user.role !== "PRESALES") return c.json({ error: "Forbidden" }, 403);
+  const mine = user.role === "ADMIN" ? "(pi.assignedToId IS NULL OR pi.assignedToId = ?)" : "pi.assignedToId = ?";
   return c.json(
     await all(
       c.env.DB,
-      "SELECT pi.*, users.displayName as createdByName, reviewer.displayName as assignedToName FROM pi LEFT JOIN users ON users.id=pi.createdById LEFT JOIN users reviewer ON reviewer.id=pi.assignedToId WHERE pi.language='ZH' AND pi.status='PENDING_REVIEW' AND pi.archivedAt IS NULL AND (pi.assignedToId IS NULL OR pi.assignedToId = ?) ORDER BY pi.updatedAt DESC",
-      c.get("user").id
+      `SELECT pi.*, users.displayName as createdByName, reviewer.displayName as assignedToName FROM pi LEFT JOIN users ON users.id=pi.createdById LEFT JOIN users reviewer ON reviewer.id=pi.assignedToId WHERE pi.language='ZH' AND pi.status='PENDING_REVIEW' AND pi.archivedAt IS NULL AND ${mine} ORDER BY pi.updatedAt DESC`,
+      user.id
     )
   );
 });
@@ -93,6 +152,8 @@ const PI_LIST_COLUMNS = [
   "assignedToId",
   "linkedPiId",
   "linkedPiNoSnapshot",
+  "revisionNo",
+  "revisionInProgress",
   "updatedAt"
 ] as const;
 
@@ -116,6 +177,9 @@ piRoutes.get("/pi", async (c) => {
     where.push("pi.createdById = ?");
     params.push(user.id);
   }
+  // The workspace lists work in progress only; approved ZH PIs live in the
+  // searchable approved list (GET /pi/approved).
+  where.push("NOT (pi.language = 'ZH' AND pi.status = 'APPROVED')");
   // Expose the linked counterpart's PI No so a linked ZH draft can display the
   // English PI No as its name (需求1).
   const cols = PI_LIST_COLUMNS.map((col) => `pi.${col}`).join(", ");
@@ -139,30 +203,95 @@ piRoutes.delete("/pi/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Commerce approval ─────────────────────────────────────────────────────
+
+piRoutes.get("/pi/commerce-queue", async (c) => {
+  const user = c.get("user");
+  if (user.role !== "COMMERCE" && user.role !== "ADMIN") return c.json({ error: "Forbidden" }, 403);
+  return c.json(
+    await all(
+      c.env.DB,
+      `SELECT pi.id, pi.piNo, pi.status, pi.productionOrderNo, pi.customerCompany, pi.linkedPiId, pi.linkedPiNoSnapshot,
+              pi.revisionNo, pi.revisionInProgress, pi.updatedAt, linked.piNo AS linkedPiNo, creator.displayName AS createdByName
+       FROM pi
+       LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+       LEFT JOIN users creator ON creator.id = pi.createdById
+       WHERE pi.language = 'ZH' AND pi.status = 'PENDING_COMMERCE'
+         AND (? = 'ADMIN' OR pi.commerceId IS NULL OR pi.commerceId = ?)
+       ORDER BY pi.updatedAt DESC`,
+      user.role,
+      user.id
+    )
+  );
+});
+
+// ── Approved list (search + paging) ───────────────────────────────────────
+
+const APPROVED_PAGE_SIZE = 50;
+
+piRoutes.get("/pi/approved", async (c) => {
+  const user = c.get("user");
+  const q = String(c.req.query("q") ?? "").trim().slice(0, 100);
+  const offset = Math.max(0, Number(c.req.query("offset") ?? 0) || 0);
+  // Sales only ever see their own (created or received); others may narrow to theirs.
+  const mine = user.role === "SALES" || c.req.query("scope") === "mine";
+
+  const company = effectiveHeader("customerCompany");
+  const orderNo = effectiveHeader("productionOrderNo");
+  const where = [EFFECTIVE_ZH()];
+  const params: unknown[] = [];
+  if (mine) {
+    where.push("(pi.createdById = ? OR pi.assignedToId = ?)");
+    params.push(user.id, user.id);
+  }
+  if (q) {
+    const like = `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    where.push(
+      `(pi.piNo LIKE ? ESCAPE '\\' OR ${orderNo} LIKE ? ESCAPE '\\' OR ${company} LIKE ? ESCAPE '\\' OR linked.piNo LIKE ? ESCAPE '\\' OR pi.linkedPiNoSnapshot LIKE ? ESCAPE '\\'
+        OR EXISTS (SELECT 1 FROM devices d WHERE d.piId = pi.id AND d.serialNumber LIKE ? ESCAPE '\\'))`
+    );
+    // SNs are stored upper-cased.
+    params.push(like, like, like, like, like, like.toUpperCase());
+  }
+  const rows = await all<any>(
+    c.env.DB,
+    `SELECT pi.id, pi.piNo, pi.status, pi.revisionNo, pi.revisionInProgress, pi.approvedAt, pi.createdById, pi.assignedToId,
+            pi.linkedPiId, pi.linkedPiNoSnapshot, linked.piNo AS linkedPiNo,
+            ${company} AS customerCompany, ${orderNo} AS productionOrderNo, creator.displayName AS createdByName
+     FROM pi
+     LEFT JOIN pi linked ON linked.id = pi.linkedPiId
+     LEFT JOIN users creator ON creator.id = pi.createdById
+     WHERE ${where.join(" AND ")}
+     ORDER BY pi.approvedAt DESC, pi.id DESC
+     LIMIT ? OFFSET ?`,
+    ...params,
+    APPROVED_PAGE_SIZE + 1,
+    offset
+  );
+  return c.json({ items: rows.slice(0, APPROVED_PAGE_SIZE), hasMore: rows.length > APPROVED_PAGE_SIZE });
+});
+
 piRoutes.get("/pi/:id", async (c) => {
   const row = await loadPi(c);
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canReadPi(c.get("user"), row));
   if (denied) return denied;
-  const items = await all(
-    c.env.DB,
-    "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder",
-    row.id
-  );
-  const events = await all(
-    c.env.DB,
-    "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY createdAt",
-    row.id
-  );
+  const items = await all(c.env.DB, ITEM_SELECT, row.id);
+  const events = await loadEvents(c.env.DB, row.id);
   const linked = row.linkedPiId
-    ? await first<{ piNo: string; status: string }>(c.env.DB, "SELECT piNo, status FROM pi WHERE id=?", row.linkedPiId)
+    ? await first<{ piNo: string; status: string; revisionInProgress: number }>(
+        c.env.DB,
+        "SELECT piNo, status, revisionInProgress FROM pi WHERE id=?",
+        row.linkedPiId
+      )
     : null;
   const linkedPiNoSnapshot = String(row.linkedPiNoSnapshot ?? "").trim() || null;
   return c.json({
     pi: {
       ...row,
       linkedPiNo: linked?.piNo ?? linkedPiNoSnapshot,
-      linkedPiStatus: linked?.status ?? null
+      linkedPiStatus: linked?.status ?? null,
+      linkedPiRevisionInProgress: linked?.revisionInProgress ?? 0
     },
     items,
     events
@@ -296,14 +425,30 @@ piRoutes.post("/pi/:id/submit-for-review", async (c) => {
   if (!row) return c.json({ error: "Chinese PI not found" }, 404);
   const denied = deny(c, canSubmitForReview(c.get("user"), row));
   if (denied) return denied;
+  const presalesId = String(d.assignedToId ?? "");
+  const commerceId = String(d.commerceId ?? "");
+  const pickError = await approverPickError(c.env.DB, presalesId, commerceId);
+  if (pickError) return c.json({ error: pickError }, 400);
   const items = await loadPiItems(c.env.DB, row.id);
-  await runTransition(
-    c.env.DB,
-    row.id,
-    planSubmitForReview(row, items, { assignedToId: d.assignedToId ?? null }),
-    c.get("user").id
+  const conflict = await approvalTransition(
+    c,
+    row,
+    planSubmitForReview(row, items, { assignedToId: presalesId || null, commerceId: commerceId || null }),
+    "SUBMITTED"
   );
-  return c.json({ ok: true });
+  if (conflict) return conflict;
+  // One PI, one production order: warn (not block) when another ZH PI already
+  // carries this number — older data may legitimately repeat it.
+  const orderNo = String(row.productionOrderNo ?? "").trim();
+  const duplicates = orderNo
+    ? await all<{ piNo: string }>(
+        c.env.DB,
+        "SELECT piNo FROM pi WHERE language='ZH' AND id<>? AND TRIM(productionOrderNo)=?",
+        row.id,
+        orderNo
+      )
+    : [];
+  return c.json({ ok: true, duplicateProductionOrderPiNos: duplicates.map((d) => d.piNo) });
 });
 
 piRoutes.post("/pi/:id/approve", async (c) => {
@@ -312,12 +457,8 @@ piRoutes.post("/pi/:id/approve", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canApprovePi(c.get("user"), row));
   if (denied) return denied;
-  await runTransition(
-    c.env.DB,
-    row.id,
-    planApprove(row, { pi: d.pi, items: d.items }),
-    c.get("user").id
-  );
+  const conflict = await approvalTransition(c, row, planApprove(row, { pi: d.pi, items: d.items }), "APPROVED");
+  if (conflict) return conflict;
   // 需求4 (方案A) hook point — when the company backend contract is ready,
   // enqueue the approved ZH PI here: enqueueOutbox(c.env.DB, "PI_ZH", row.id, {...}).
   // TODO: enqueueOutbox(...).
@@ -330,7 +471,8 @@ piRoutes.post("/pi/:id/reject", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   const denied = deny(c, canRejectPi(c.get("user"), row));
   if (denied) return denied;
-  await runTransition(c.env.DB, row.id, planReject(row, { note: d.note }), c.get("user").id);
+  const conflict = await approvalTransition(c, row, planReject(row, { note: d.note }), "REJECTED");
+  if (conflict) return conflict;
   return c.json({ ok: true });
 });
 
@@ -366,13 +508,14 @@ piRoutes.post("/pi/:id/resync-zh", async (c) => {
 piRoutes.get("/pi/:id/export-bundle", async (c) => {
   const row = await loadPi(c);
   if (!row) return c.json({ error: "Not found" }, 404);
-  const denied = deny(c, canExportPi(c.get("user"), row));
+  const version: ExportVersion = c.req.query("version") === "effective" ? "effective" : "current";
+  const denied = deny(c, canExportPi(c.get("user"), row, version));
   if (denied) return denied;
-  const items = await all<any>(
-    c.env.DB,
-    "SELECT piItems.*, products.code, products.nameEn, products.nameZh FROM piItems LEFT JOIN products ON products.id=piItems.productId WHERE piId=? ORDER BY sortOrder",
-    row.id
-  );
+  // While a revision is in progress the effective version is the frozen
+  // snapshot (on the ZH row, covering its linked EN PI too).
+  const effective = version === "effective" ? await readEffective(c.env.DB, row) : null;
+  const items = effective ? effective.items : await all<any>(c.env.DB, ITEM_SELECT, row.id);
+  const exportRow = effective ? effective.pi : row;
   const sender = await first(c.env.DB, "SELECT * FROM senderProfile WHERE id=1");
   const template = await first<any>(c.env.DB, "SELECT * FROM excelTemplates WHERE language=?", row.language);
   const templateRows = await all<any>(
@@ -383,7 +526,7 @@ piRoutes.get("/pi/:id/export-bundle", async (c) => {
   const urls: Record<string, string> = {};
   for (const tpl of templateRows) urls[tpl.productId] = objectUrl(tpl.r2Key);
   return c.json({
-    pi: row,
+    pi: exportRow,
     items,
     sender,
     excelTemplateUrl: template ? objectUrl(template.r2Key) : null,
@@ -416,11 +559,162 @@ async function replaceItems(db: D1Database, piId: string, items: any[]) {
 }
 
 async function purgeExpiredDrafts(db: D1Database) {
-  const rows = await all<{ id: string }>(
-    db,
-    "SELECT id FROM pi WHERE status='DRAFT' AND updatedAt < datetime('now', '-3 days')"
-  );
-  for (const row of rows) {
-    await runTransition(db, row.id, planDelete({ id: row.id } as PiRow), "");
-  }
+  // Same janitor as the scheduled job (idle drafts and expired approvals).
+  await purgeExpired(db, new Date());
 }
+
+async function loadEvents(db: D1Database, piId: string) {
+  return await all(
+    db,
+    "SELECT piReviewEvents.*, users.displayName as actorName FROM piReviewEvents LEFT JOIN users ON users.id=piReviewEvents.actorId WHERE piId=? ORDER BY piReviewEvents.createdAt, piReviewEvents.rowid",
+    piId
+  );
+}
+
+// ── Commerce approval ─────────────────────────────────────────────────────
+
+piRoutes.post("/pi/:id/commerce-approve", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canCommerceDecide(c.get("user"), row));
+  if (denied) return denied;
+  const conflict = await approvalTransition(c, row, planCommerceApprove(row, new Date()), "APPROVED");
+  if (conflict) return conflict;
+  // ERP hook point (not built this phase): once an ERP contract exists, hand the
+  // approved ZH/EN pair over here, e.g. enqueueOutbox(c.env.DB, "PI_ZH", row.id, {...}).
+  // TODO: ERP hand-off.
+  return c.json({ ok: true });
+});
+
+piRoutes.post("/pi/:id/commerce-reject", async (c) => {
+  const d = await body<any>(c).catch(() => ({}));
+  const note = String(d.note ?? "").trim();
+  if (!note) return c.json({ error: "A rejection reason is required" }, 400);
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canCommerceDecide(c.get("user"), row));
+  if (denied) return denied;
+  const conflict = await approvalTransition(c, row, planCommerceReject(row, { note }), "REJECTED");
+  if (conflict) return conflict;
+  return c.json({ ok: true });
+});
+
+// ── Revisions ─────────────────────────────────────────────────────────────
+
+piRoutes.post("/pi/:id/revisions", async (c) => {
+  const d = await body<any>(c).catch(() => ({}));
+  const reason = String(d.reason ?? "").trim().slice(0, 2000);
+  if (!reason) return c.json({ error: "A reason for the change is required" }, 400);
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canStartRevision(c.get("user"), row));
+  if (denied) return denied;
+  const zhItems = await loadPiItems(c.env.DB, row.id);
+  const enRow = row.linkedPiId ? await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId) : null;
+  const en = enRow ? { row: enRow, items: await loadPiItems(c.env.DB, enRow.id) } : null;
+  await runTransition(c.env.DB, row.id, planStartRevision(row, zhItems as any[], en as any, reason), c.get("user").id);
+  return c.json({ ok: true });
+});
+
+piRoutes.post("/pi/:id/revisions/abandon", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canAbandonRevision(c.get("user"), row));
+  if (denied) return denied;
+  await runTransition(c.env.DB, row.id, planAbandonRevision(row), c.get("user").id);
+  return c.json({ ok: true });
+});
+
+// ── Read-only detail page ─────────────────────────────────────────────────
+
+piRoutes.get("/pi/:id/view", async (c) => {
+  const user = c.get("user");
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canViewPi(user, row));
+  if (denied) return denied;
+
+  // The effective version is the frozen one during a revision, else the live rows once approved.
+  const zhCurrent = { pi: row, items: await all(c.env.DB, ITEM_SELECT, row.id) };
+  const zhEffective = (await readEffective(c.env.DB, row)) ?? (row.status === "APPROVED" ? zhCurrent : null);
+
+  let en: { current: any; effective: any } | null = null;
+  if (row.linkedPiId) {
+    const enRow = await first<PiRowFull>(c.env.DB, "SELECT * FROM pi WHERE id=?", row.linkedPiId);
+    if (enRow) {
+      const enCurrent = { pi: enRow, items: await all(c.env.DB, ITEM_SELECT, enRow.id) };
+      const enEffective = (await readEffective(c.env.DB, enRow, row)) ?? (row.status === "APPROVED" ? enCurrent : null);
+      en = { current: enCurrent, effective: enEffective };
+    }
+  }
+
+  return c.json({
+    zh: { current: zhCurrent, effective: zhEffective },
+    en,
+    events: await loadEvents(c.env.DB, row.id),
+    revisionNo: row.revisionNo,
+    revisionInProgress: Boolean(row.revisionInProgress)
+  });
+});
+
+
+// ── Device serial numbers ─────────────────────────────────────────────────
+
+piRoutes.get("/pi/:id/devices", async (c) => {
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const denied = deny(c, canViewPi(c.get("user"), row));
+  if (denied) return denied;
+  return c.json(
+    await all(
+      c.env.DB,
+      `SELECT d.id, d.serialNumber, d.createdAt, u.displayName AS createdByName
+       FROM devices d LEFT JOIN users u ON u.id = d.createdById
+       WHERE d.piId = ? ORDER BY d.serialNumber`,
+      row.id
+    )
+  );
+});
+
+// Registers SNs (pasted, one per line) on an approved ZH PI. An SN already on
+// any PI is reported, never moved.
+piRoutes.post("/pi/:id/devices", async (c) => {
+  const user = c.get("user");
+  if (!canRegisterSn(user)) return c.json({ error: "Forbidden" }, 403);
+  const row = await loadPi(c);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.language !== "ZH" || !hasEffectiveVersion(row.status, { revisionInProgress: Boolean(row.revisionInProgress) })) {
+    return c.json({ error: "Serial numbers can only be registered on approved Chinese PIs" }, 400);
+  }
+  const d = await body<any>(c).catch(() => ({}));
+  const { serials, invalid } = parseSerials(d.serials ?? "");
+  if (serials.length > 500) return c.json({ error: "Register at most 500 serial numbers at a time" }, 400);
+  const existing = serials.length
+    ? await all<{ serialNumber: string; piId: string; piNo: string }>(
+        c.env.DB,
+        `SELECT d.serialNumber, d.piId, pi.piNo FROM devices d LEFT JOIN pi ON pi.id = d.piId
+         WHERE d.serialNumber IN (${serials.map(() => "?").join(", ")})`,
+        ...serials
+      )
+    : [];
+  const taken = new Set(existing.map((e) => e.serialNumber));
+  const toAdd = serials.filter((sn) => !taken.has(sn));
+  if (toAdd.length) {
+    await c.env.DB.batch(
+      toAdd.map((sn) =>
+        c.env.DB.prepare("INSERT INTO devices (id, serialNumber, piId, createdById) VALUES (?, ?, ?, ?)").bind(id("dev"), sn, row.id, user.id)
+      )
+    );
+  }
+  return c.json({
+    added: toAdd,
+    duplicates: existing.map((e) => ({ serialNumber: e.serialNumber, piNo: e.piNo, samePi: e.piId === row.id })),
+    invalid
+  });
+});
+
+piRoutes.delete("/pi/:id/devices/:deviceId", async (c) => {
+  if (!canRegisterSn(c.get("user"))) return c.json({ error: "Forbidden" }, 403);
+  await c.env.DB.prepare("DELETE FROM devices WHERE id = ? AND piId = ?").bind(c.req.param("deviceId"), c.req.param("id")).run();
+  return c.json({ ok: true });
+});

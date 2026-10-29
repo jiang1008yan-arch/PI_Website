@@ -5,7 +5,7 @@ Internal Proforma Invoice web app for English and Chinese PI creation, admin app
 ## Stack
 
 - React 18 + Vite + TypeScript + Tailwind CSS
-- One Cloudflare Worker (`src/worker.ts`): Hono API, SPA static assets, queue consumer, hourly cron
+- One Cloudflare Worker (`src/worker.ts`): Hono API, SPA static assets, queue consumer, cron (every 30 min)
 - Cloudflare D1 with Drizzle schema and SQL migration
 - Cloudflare R2 for Excel and contract files
 - ExcelJS in the browser for `.xlsx` generation
@@ -39,7 +39,7 @@ npm run dev:web
 
 `npm run dev:web` proxies `/api` to `http://127.0.0.1:8788`, so run `npm run dev` alongside it for the API with local D1/R2.
 
-To trigger the hourly janitor locally:
+To run the scheduled jobs locally:
 
 ```powershell
 npx wrangler dev --test-scheduled
@@ -52,7 +52,7 @@ npx wrangler dev --test-scheduled
 - Batch 2: categories, products, EN/ZH product fields, product sub-template uploads, PI header templates, contract templates.
 - Batch 3: EN/ZH PI creation, item snapshots, EN submit, ZH send/review/approve/reject workflow.
 - Batch 4: browser-side ExcelJS export using header templates, product sub-templates, token replacement, totals.
-- Batch 5: hourly scheduled janitor (Worker cron) that purges DRAFT PIs untouched for 3 days; PI numbering is kept in an independent sequence table. Approved Chinese PIs are kept permanently.
+- Batch 5: scheduled jobs (Worker cron every 30 minutes, `runScheduledJobs`): purge DRAFT PIs idle for 3 days and approved Chinese PIs 3 years after their latest approval; PI numbering is kept in an independent sequence table.
 
 ## Excel Template Notes
 

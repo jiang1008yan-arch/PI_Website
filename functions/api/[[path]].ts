@@ -12,13 +12,16 @@ import { fileRoutes } from "./routes/files";
 import { senderProfileRoutes } from "./routes/senderProfile";
 import { piRoutes } from "./routes/pi";
 import { ticketRoutes } from "./routes/tickets";
-import { ticketLinkRoutes } from "./routes/ticketLinks";
 import { ticketFieldRoutes } from "./routes/ticketFields";
-import { publicTicketRoutes } from "./routes/publicTickets";
+import { feishuRoutes } from "./routes/feishu";
+import { feishuPiRoutes } from "./routes/feishuPi";
+import { feishuAuthRoutes } from "./routes/feishuAuth";
+import { aiSettingsRoutes } from "./routes/aiSettings";
+import { internalRoutes } from "./routes/internal";
+import { lookupRoutes } from "./routes/lookup";
+import { deviceRoutes } from "./routes/devices";
 
-// Exported for the Worker entry (src/worker.ts); onRequest below keeps the old
-// Pages project serving until the custom domain has moved to the Worker.
-export const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
+const app = new Hono<{ Bindings: Env; Variables: Variables }>().basePath("/api");
 
 app.use("*", cors());
 app.use("*", async (c, next) => {
@@ -34,18 +37,28 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   if (c.req.path === "/api/auth/login") return next();
-  // 需求2 — public ticket form endpoints are open (token + Turnstile gated
-  // inside the handlers), mirroring the login whitelist.
-  if (c.req.path.startsWith("/api/public/")) return next();
   if (c.req.method === "GET" && c.req.path.startsWith("/api/files/")) return next();
+  // Feishu pushes events and card callbacks; the handlers check its signature
+  // and verification token instead of a portal login.
+  if (c.req.method === "POST" && (c.req.path === "/api/feishu/events" || c.req.path === "/api/feishu/card")) return next();
+  // PI Assistant bot pushes (checked against its own keys) and the "Sign in
+  // with Feishu" redirects.
+  if (c.req.method === "POST" && c.req.path === "/api/feishu/pi/events") return next();
+  if (c.req.method === "GET" && c.req.path.startsWith("/api/auth/feishu/")) return next();
+  // The cron Worker authenticates with a shared secret (checked in the handler).
+  if (c.req.method === "POST" && c.req.path === "/api/internal/cron") return next();
+  // The charger backend authenticates with its own shared token (checked in the handler).
+  if (c.req.method === "POST" && c.req.path === "/api/devices/status") return next();
   const token = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return c.json({ error: "Authentication required" }, 401);
   try {
     c.set("user", await verifyJwt(c.env, token));
-    await next();
   } catch {
     return c.json({ error: "Invalid or expired token" }, 401);
   }
+  // Outside the try: a handler's own 403 (e.g. requireAdmin throwing a
+  // Response) must not be turned into a 401, which logs the user out.
+  await next();
 });
 
 app.route("/", authRoutes);
@@ -57,9 +70,20 @@ app.route("/", fileRoutes);
 app.route("/", senderProfileRoutes);
 app.route("/", piRoutes);
 app.route("/", ticketRoutes);
-app.route("/", ticketLinkRoutes);
 app.route("/", ticketFieldRoutes);
-app.route("/", publicTicketRoutes);
+app.route("/", feishuRoutes);
+app.route("/", feishuPiRoutes);
+app.route("/", feishuAuthRoutes);
+app.route("/", aiSettingsRoutes);
+app.route("/", internalRoutes);
+app.route("/", lookupRoutes);
+app.route("/", deviceRoutes);
+
+// Exported for the Worker entry (src/worker.ts) and the integration tests
+// (functions/test/harness.ts, which drive it with a Miniflare-backed D1).
+// onRequest below keeps the old Pages project serving until the custom domain
+// has moved to the Worker.
+export { app };
 
 export const onRequest: PagesFunction<Env> = (context) =>
   // Pass the EventContext as Hono's ExecutionContext so handlers can defer

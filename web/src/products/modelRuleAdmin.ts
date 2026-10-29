@@ -1,6 +1,6 @@
 import { api } from "../api/client";
 import type { Language } from "../types";
-import { blankRule, ModelOption, ModelRule, modelRuleKey, normalizeRule, optionPath } from "../pi/modelRule";
+import { blankRule, ModelOption, ModelRule, modelRuleKey, normalizeRule, optionPath } from "../../../shared/modelRule";
 
 export async function loadProductModelRule(productId: string, language: Language): Promise<ModelRule> {
   const res = await api.get(optionPath(modelRuleKey(productId, language)));

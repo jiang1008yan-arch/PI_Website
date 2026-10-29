@@ -18,8 +18,8 @@
   未命中的前端路由回落到 `index.html`（`not_found_handling = "single-page-application"`）。
   `run_worker_first = true` 保证 `/api/files/...` 这类下载链接在浏览器直接打开时也进 API，而不是被当成前端路由。
 - `queue`：消费 `app-jobs` 队列（飞书机器人后台任务；目前只记录日志并 ack），失败 3 次进 `app-jobs-dlq`。
-- `scheduled`：每小时（`0 * * * *`）跑 `functions/scheduled.ts` 的清理：删除 3 天未更新的 DRAFT PI。
-  已审批的中文 PI **永久保留**，不归档、不删除。
+- `scheduled`：每 30 分钟（`*/30 * * * *`）跑 `functions/scheduled.ts` 的 `runScheduledJobs`（清理过期 PI、
+  重试飞书推送、提醒、周报、设备离线等），取代 Pages 时代单独的 cron Worker（`workers/cron`）。
 
 Pages 不支持 Queue 消费者和 Cron，这是迁移的原因。
 
@@ -33,15 +33,18 @@ Pages 不支持 Queue 消费者和 Cron，这是迁移的原因。
 2. **设置 Worker 密钥**（Pages 的密钥不会自动带过来，逐个重新设置；值与 Pages 项目里的一致）：
    ```bash
    npx wrangler secret put JWT_SECRET
-   npx wrangler secret put TURNSTILE_SECRET
    ```
-   如果 Pages 项目还设置过其它变量/密钥（如 `ALLOW_DEFAULT_ADMIN`），在 Pages → Settings → Variables 里核对后一并设置。
+   同样设置 Pages 上已有的：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN`、`FEISHU_ENCRYPT_KEY`、
+   `FEISHU_SERVICE_CHAT_ID`、`FEISHU_PI_APP_ID`、`FEISHU_PI_APP_SECRET`、`FEISHU_PI_ENCRYPT_KEY`、
+   `FEISHU_PI_VERIFICATION_TOKEN`、`AI_KEY_SECRET`、`CRON_SECRET`、`DEVICE_INGEST_SECRET`，以及变量 `APP_BASE_URL`。
+   以 Pages → Settings → Variables 里的实际列表为准（如 `ALLOW_DEFAULT_ADMIN`）。**`AI_KEY_SECRET` 也必须一致**，否则大家保存的 AI key 无法解密。
    **JWT_SECRET 必须与 Pages 相同**，否则切换后所有人的登录会失效。
 3. **部署**：`npm run deploy`。先用 `https://sales-portal.<子域>.workers.dev` 验证登录、PI 列表/编辑、导出、
-   文件上传下载、刷新深链接、公开工单表单。
+   文件上传下载、刷新深链接。
 4. **迁移自定义域名**：Pages 项目 → Custom domains → 移除该域名；然后 Worker → Settings → Domains & Routes →
    Add → Custom domain，填同一个域名（DNS 记录由 Cloudflare 自动改指向 Worker）。
-5. **Turnstile**：若公开工单表单用到 Turnstile，确认站点的 Hostname 列表包含最终访问的域名（测试 workers.dev 时也要临时加上）。
+5. **删除 cron Worker**：域名切到本 Worker 后，`sales-portal-cron`（`workers/cron`）就多余了，且会让任务每 30 分钟跑两次：
+   `npx wrangler delete --config workers/cron/wrangler.toml`。飞书开放平台里的事件/回调地址用的是同一个域名，无需修改。
 6. **保留 Pages 项目**直到确认 Worker 稳定，然后再删除。
    注意：Pages 项目若仍连着 Git，合并本次改动到 `main` 后它会用 dashboard 配置继续构建（`wrangler.toml` 已不再是
    Pages 配置）——在切完域名前，建议到 Pages → Settings → Builds 暂停自动部署。
@@ -54,7 +57,7 @@ Pages 不支持 Queue 消费者和 Cron，这是迁移的原因。
 npm run build
 npm run db:migrate:local
 npm run dev                      # wrangler dev，http://localhost:8788
-npx wrangler dev --test-scheduled # 然后访问 /__scheduled 手动触发一次清理
+npx wrangler dev --test-scheduled # 然后访问 /__scheduled 手动跑一次全部定时任务
 ```
 
 本地密钥放 `.dev.vars`（已 gitignore），例如 `JWT_SECRET=dev-secret`、`ALLOW_DEFAULT_ADMIN=true`。

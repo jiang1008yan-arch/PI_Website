@@ -2,9 +2,10 @@ import { FormEvent, useState } from "react";
 import { ArrowLeft, Package, Plus } from "lucide-react";
 import { api } from "../api/client";
 import { useCachedList } from "../hooks/useCachedList";
+import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState, ErrorText, Field, PageHero, Section } from "../components/Form";
 import type { Language, Product, ProductField } from "../types";
-import { blankRule, ModelRule, modelRuleKey, optionPath } from "../pi/modelRule";
+import { blankRule, ModelRule, modelRuleKey, optionPath } from "../../../shared/modelRule";
 import { FieldRow } from "../products/FieldRow";
 import { FilePicker } from "../products/FilePicker";
 import { ModelRuleEditor } from "../products/ModelRuleEditor";
@@ -34,6 +35,7 @@ export function ProductsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
+  const confirm = useConfirm();
 
   const enFieldOptions = fieldsByLang.EN
     .filter((f) => f.id && !f.id.startsWith("draft-") && f.label.trim())
@@ -165,7 +167,7 @@ export function ProductsPage() {
   async function deleteField(field: ProductField) {
     if (!field.id) return;
     const fieldLabel = field.label?.trim() || "this field";
-    if (!window.confirm(`Delete "${fieldLabel}"? This cannot be undone.`)) return;
+    if (!(await confirm({ message: `Delete "${fieldLabel}"? This cannot be undone.`, confirmLabel: "Delete", danger: true }))) return;
     if (selected && !field.id.startsWith("draft-")) await api.delete(`/products/${selected.id}/fields/${field.id}`);
     setFieldsByLang((state) => ({
       ...state,

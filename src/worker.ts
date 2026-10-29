@@ -1,5 +1,5 @@
 import { app } from "../functions/api/[[path]]";
-import { runJanitor } from "../functions/scheduled";
+import { runScheduledJobs } from "../functions/scheduled";
 import type { Env } from "../functions/lib/types";
 
 // Single Worker entry: SPA static assets + Hono API + queue consumer + cron.
@@ -27,8 +27,10 @@ export default {
     }
   },
 
+  // Replaces the separate cron Worker (workers/cron) that Pages needed. Each
+  // job is isolated inside runScheduledJobs, so one failure doesn't stop the rest.
   async scheduled(event, env, _ctx) {
-    console.log("scheduled", event.cron);
-    await runJanitor(env);
+    const results = await runScheduledJobs(env, new Date(event.scheduledTime));
+    console.log("scheduled", event.cron, JSON.stringify(results));
   }
 } satisfies ExportedHandler<Env>;

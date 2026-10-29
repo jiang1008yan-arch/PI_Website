@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ClipboardList } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { useConfirm } from "../components/ConfirmDialog";
 import { EmptyState, ErrorText, PageHero, Section } from "../components/Form";
 import { TicketFieldRow } from "../tickets/TicketFieldRow";
 import type { TicketField } from "../types";
@@ -25,6 +26,7 @@ function normalize(f: TicketField, sortOrder: number) {
 export function TicketFieldsConfigPage() {
   const [fields, setFields] = useState<TicketField[]>([]);
   const [error, setError] = useState("");
+  const confirm = useConfirm();
 
   async function load() {
     const res = await api.get("/ticket-fields");
@@ -53,7 +55,7 @@ export function TicketFieldsConfigPage() {
 
   async function deleteField(field: TicketField) {
     if (!field.id) return;
-    if (!window.confirm(`Delete "${field.label.trim() || "this question"}"? This cannot be undone.`)) return;
+    if (!(await confirm({ message: `Delete "${field.label.trim() || "this question"}"? This cannot be undone.`, confirmLabel: "Delete", danger: true }))) return;
     await api.delete(`/ticket-fields/${field.id}`);
     await load();
   }
@@ -76,7 +78,7 @@ export function TicketFieldsConfigPage() {
   return (
     <div className="space-y-6">
       <PageHero
-        eyebrow="After-Sales"
+        eyebrow="Administration"
         title="Ticket Questionnaire"
         Icon={ClipboardList}
         action={
@@ -92,7 +94,8 @@ export function TicketFieldsConfigPage() {
       <Section title="Questions">
         <ErrorText message={error} />
         <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          The first dropdown question is used as the "problem type" axis on the ticket statistics page.
+          These questions appear on the customer ticket form. The first dropdown question is charted as the customer-reported
+          problem type in Fault Analytics; repeat-fault statistics use the fault type after-sales confirm on each ticket.
         </p>
         {fields.length === 0 && (
           <EmptyState title="No questions yet" description="Add your first question below to start collecting structured details." />

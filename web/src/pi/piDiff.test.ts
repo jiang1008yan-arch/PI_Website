@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePiDiff, isPiDirty, type PiSnapshot } from "./piDiff";
+import { computePiDiff, isPiDirty, revisionChanges, type PiSnapshot } from "./piDiff";
 
 const snap = (overrides: Partial<PiSnapshot> = {}): PiSnapshot => ({
   header: { piNo: "PI-1", customerCompany: "Acme", customerEmail: "a@b.c" },
@@ -102,5 +102,36 @@ describe("isPiDirty", () => {
     const before = snap();
     const after = snap({ header: { ...before.header, customerCompany: "Acme Corp" } });
     expect(isPiDirty(before, after)).toBe(true);
+  });
+});
+
+describe("revisionChanges", () => {
+  const effective = {
+    header: { customerCompany: "ACME", paymentTerm: "T/T" },
+    items: [
+      { productId: "p1", quantity: 2, unitPrice: 10, discountPct: 0, fieldValues: [{ label: "Power", value: "7kW" }] },
+      { productId: "p2", quantity: 1, unitPrice: 5, discountPct: 0, fieldValues: [] }
+    ]
+  } as any;
+
+  it("is empty without an effective version", () => {
+    const changes = revisionChanges(null, effective);
+    expect(changes.header.size).toBe(0);
+    expect(changes.items.size).toBe(0);
+  });
+
+  it("flags changed header keys and changed or new items by position", () => {
+    const current = {
+      header: { customerCompany: "ACME Ltd", paymentTerm: "T/T" },
+      items: [
+        // same item, but hydrated with options and a type — not a change
+        { productId: "p1", quantity: "2", unitPrice: 10, discountPct: 0, fieldValues: '[{"label":"Power","value":"7kW","options":["7kW"],"fieldType":"DROPDOWN"}]' },
+        { productId: "p2", quantity: 3, unitPrice: 5, discountPct: 0, fieldValues: [] },
+        { productId: "p3", quantity: 1, unitPrice: 1, discountPct: 0, fieldValues: [] }
+      ]
+    } as any;
+    const changes = revisionChanges(effective, current);
+    expect([...changes.header]).toEqual(["customerCompany"]);
+    expect([...changes.items]).toEqual([1, 2]);
   });
 });

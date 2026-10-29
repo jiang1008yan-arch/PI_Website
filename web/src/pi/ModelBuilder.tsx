@@ -7,7 +7,7 @@ import {
   ModelRule,
   setModelPrefix,
   setSegmentValue
-} from "./modelRule";
+} from "../../../shared/modelRule";
 
 export function ModelBuilder({
   rule,

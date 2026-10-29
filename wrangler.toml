@@ -41,9 +41,11 @@ dead_letter_queue = "app-jobs-dlq"
 [ai]
 binding = "AI"
 
-# Hourly janitor (functions/scheduled.ts).
+# Scheduled jobs (runScheduledJobs in functions/scheduled.ts), same cadence the
+# old workers/cron Worker used. Once this Worker serves the domain, delete that
+# cron Worker or the jobs run twice.
 [triggers]
-crons = ["0 * * * *"]
+crons = ["*/30 * * * *"]
 
 # Keep the port the Vite dev server proxies /api to (web/vite.config.ts).
 [dev]
