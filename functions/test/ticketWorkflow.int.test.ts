@@ -183,6 +183,39 @@ describe("reported changes", () => {
   });
 });
 
+// Separate decision A: a repeat fault is noticed however product and fault
+// type came together, not only when the fault is confirmed.
+describe("repeat faults", () => {
+  const withFault = (extra: Record<string, unknown> = {}) =>
+    createTicket(h.env, { ...base, productId, ...extra }, {
+      requireProduct: false,
+      validateQuestionnaire: false,
+      creator: h.users.SERVICE,
+      ticketType: "FAULT",
+      faultType: "Offline"
+    });
+
+  it("a Feishu ticket created with its product and fault type reports the repeat it makes", async () => {
+    expect((await withFault()).changes).toEqual([{ kind: "created" }]);
+    expect((await withFault()).changes).toEqual([{ kind: "created" }]);
+    const third = await withFault();
+    expect(third.changes).toMatchObject([{ kind: "created" }, { kind: "repeat", repeat: { count: 3, isRepeat: true } }]);
+  });
+
+  it("giving a ticket with a confirmed fault its product reports the repeat it makes, once", async () => {
+    await withFault();
+    await withFault();
+    const other = await seedProduct(h.db, "P2");
+    const moved = await withFault({ productId: other });
+    expect((await setTicketProduct(h.db, h.users.SERVICE, moved.id, { productId })).changes).toMatchObject([
+      { kind: "product" },
+      { kind: "repeat", repeat: { count: 3 } }
+    ]);
+    // Same product again: nothing new came together.
+    expect((await setTicketProduct(h.db, h.users.SERVICE, moved.id, { productId, productModel: "M-2" })).changes).toEqual([{ kind: "product" }]);
+  });
+});
+
 describe("Feishu bookkeeping", () => {
   it("writes only the columns it is given, and not the ticket's updatedAt", async () => {
     const { id } = await feishuCreate();

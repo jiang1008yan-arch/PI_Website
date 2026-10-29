@@ -774,6 +774,31 @@ describe("AI keys, types, the requirement pool and owners", () => {
   });
 });
 
+describe("repeat faults reach the after-sales group", () => {
+  it("also when a product is given to a ticket whose fault was already confirmed", async () => {
+    await h.request("ADMIN", "PUT", "/options/repeatFaultThreshold", { values: ["2"] });
+    const p1 = await seedProduct(h.db, "RP1");
+    const p2 = await seedProduct(h.db, "RP2");
+    const ticket = async (product: string) =>
+      (await h.request("SERVICE", "POST", "/tickets", { customerCompany: "ACME", contactName: "Li", contactInfo: "x", productId: product, answers: {} })).body.id as string;
+    const first = await ticket(p1);
+    await h.request("SERVICE", "PATCH", `/tickets/${first}/fault`, { faultType: "Screen fault" });
+    const second = await ticket(p2);
+    await h.request("SERVICE", "PATCH", `/tickets/${second}/fault`, { faultType: "Screen fault" });
+    await h.settle();
+    const alerts = () =>
+      messages((c) => c.body?.receive_id === SERVICE_CHAT && c.body.msg_type === "text")
+        .map((c) => JSON.parse(c.body.content).text as string)
+        .filter((t) => t.startsWith("Repeat fault"));
+    expect(alerts()).toEqual([]);
+
+    expect((await h.request("SERVICE", "PATCH", `/tickets/${second}/product`, { productId: p1 })).status).toBe(200);
+    await h.settle();
+    expect(alerts()).toHaveLength(1);
+    expect(alerts()[0]).toContain('"Screen fault" 2 times in 90 days');
+  });
+});
+
 describe("finding existing orders, customers and SNs in the Feishu form", () => {
   const dm = (text: string, messageId: string) =>
     push("/feishu/events", {

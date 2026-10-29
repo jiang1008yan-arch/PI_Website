@@ -60,6 +60,10 @@ export type TicketChange =
   | { kind: "taken" }
   | { kind: "product" }
   | { kind: "fault"; repeat: { count: number; windowDays: number } | null }
+  // Product and fault type became known together some other way than
+  // confirming the fault (a Feishu ticket created with its fault type, or a
+  // product set on a ticket whose fault was confirmed), making a repeat fault.
+  | { kind: "repeat"; repeat: { count: number; windowDays: number } }
   | { kind: "type"; ticketType: string; toPool: boolean }
   | { kind: "assigned"; newOwnerIds: string[] };
 
@@ -185,7 +189,7 @@ export async function createTicket(
   if (initialNoteId && opts.initialFiles?.length) {
     statements.push(...storedFileStatements(db, ticketId, initialNoteId, input.initialNote!.actorId, opts.initialFiles));
   }
-  const classification = opts.creator ? await classifyNewTicket(db, opts.creator, ticketId, opts) : { statements: [], toPool: false };
+  const classification = opts.creator ? await classifyNewTicket(db, opts.creator, ticketId, opts) : { statements: [], toPool: false, faultType: null };
   statements.push(...classification.statements);
   const ownCard = Boolean(opts.feishuCardMessageId && opts.creator && owners.assignedServiceId === opts.creator.id);
   if (ownCard) {
@@ -199,8 +203,10 @@ export async function createTicket(
   if (opts.request) statements.push(...requestLinkStatements(db, opts.request, ticketId));
   await commit(db, statements, "A ticket was already created for this.");
   const changes: TicketChange[] = [{ kind: "created" }];
-  // As before, a fault type picked at creation sends no fault change.
   if (classification.toPool) changes.push({ kind: "type", ticketType: "PRODUCT_REQUEST", toPool: true });
+  // A fault type picked at creation is no fault change, but it may make a repeat fault.
+  const repeat = await repeatOf(db, product?.id ?? null, classification.faultType);
+  if (repeat) changes.push(repeat);
   return { id: ticketId, ticketNo, initialNoteId, ownCard, changes };
 }
 
@@ -208,7 +214,7 @@ export async function createTicket(
 // non-fault type, else a fault type from the list (which makes it a fault),
 // else just the fault type. Written like setTicketType / confirmTicketFault.
 async function classifyNewTicket(db: D1Database, user: AppUser, ticketId: string, opts: FeishuCreateOptions) {
-  const none = { statements: [] as D1PreparedStatement[], toPool: false };
+  const none = { statements: [] as D1PreparedStatement[], toPool: false, faultType: null as string | null };
   if (!canConfirmFault(user)) return none;
   const ticketType = TICKET_TYPES.find((t) => t === opts.ticketType);
   const faultType = String(opts.faultType ?? "").trim();
@@ -217,15 +223,16 @@ async function classifyNewTicket(db: D1Database, user: AppUser, ticketId: string
   if (ticketType && ticketType !== "FAULT") {
     return {
       statements: [db.prepare("UPDATE tickets SET ticketType=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticketType, ticketId), typeNote(ticketType)],
-      toPool: ticketType === "PRODUCT_REQUEST"
+      toPool: ticketType === "PRODUCT_REQUEST",
+      faultType: null
     };
   }
   if (faultType) {
     if (!(await isFaultTypeOption(db, faultType))) return none;
-    return { statements: faultStatements(db, user, ticketId, faultType), toPool: false };
+    return { statements: faultStatements(db, user, ticketId, faultType), toPool: false, faultType };
   }
   if (ticketType === "FAULT") {
-    return { statements: [db.prepare("UPDATE tickets SET ticketType='FAULT', updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticketId), typeNote("FAULT")], toPool: false };
+    return { statements: [db.prepare("UPDATE tickets SET ticketType='FAULT', updatedAt=CURRENT_TIMESTAMP WHERE id=?").bind(ticketId), typeNote("FAULT")], toPool: false, faultType: null };
   }
   return none;
 }
@@ -500,13 +507,13 @@ export async function setTicketProduct(
   d: { productId?: unknown; productModel?: unknown; serialNumber?: unknown }
 ): Promise<{ changes: TicketChange[] }> {
   if (!canConfirmFault(user)) throw new TicketError("Forbidden", 403);
-  const ticket = await first<{ id: string; productId: string | null; productModel: string | null; serialNumber: string | null }>(
+  const ticket = await first<{ id: string; productId: string | null; productModel: string | null; serialNumber: string | null; faultType: string | null }>(
     db,
-    "SELECT id, productId, productModel, serialNumber FROM tickets WHERE id=?",
+    "SELECT id, productId, productModel, serialNumber, faultType FROM tickets WHERE id=?",
     ticketId
   );
   if (!ticket) throw new TicketError("Not found", 404);
-  let productId = ticket.productId;
+  let productId: string | null = ticket.productId;
   if (d.productId !== undefined) {
     const product = await first<{ id: string }>(db, "SELECT id FROM products WHERE id=?", String(d.productId));
     if (!product) throw new TicketError("A valid product is required.", 400);
@@ -522,7 +529,11 @@ export async function setTicketProduct(
       .prepare("UPDATE tickets SET productId=?, productModel=?, serialNumber=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?")
       .bind(productId, productModel, serialNumber, ticket.id)
   ]);
-  return { changes: [{ kind: "product" }] };
+  const changes: TicketChange[] = [{ kind: "product" }];
+  // A product given to a ticket whose fault is already known may make a repeat fault.
+  const repeat = productId !== ticket.productId ? await repeatOf(db, productId, ticket.faultType) : null;
+  if (repeat) changes.push(repeat);
+  return { changes };
 }
 
 // Classify the ticket. Only faults keep a fault type; a one-line summary may
@@ -580,6 +591,12 @@ export async function confirmTicketFault(db: D1Database, user: AppUser, ticketId
 async function isFaultTypeOption(db: D1Database, faultType: string) {
   const allowed = await all<{ value: string }>(db, "SELECT value FROM appOptions WHERE optionKey = ?", FAULT_TYPE_OPTION_KEY);
   return allowed.some((o) => o.value === faultType);
+}
+
+// The repeat change when this product and fault type are now a repeat fault.
+async function repeatOf(db: D1Database, productId: string | null, faultType: string | null): Promise<TicketChange | null> {
+  const repeat = await repeatInfo(db, productId, faultType, new Date());
+  return repeat?.isRepeat ? { kind: "repeat", repeat } : null;
 }
 
 function faultStatements(db: D1Database, user: AppUser, ticketId: string, faultType: string) {

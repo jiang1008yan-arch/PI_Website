@@ -135,7 +135,8 @@ async function deliver(env: Env, payload: Payload) {
   const t = await loadTicketForCard(env.DB, payload.ticketId);
   if (!t) return;
   const change = payload.change;
-  const card = ticketCard({ ...t, repeat: change.kind === "fault" ? change.repeat : null }, env.APP_BASE_URL ?? null);
+  const repeat = change.kind === "fault" || change.kind === "repeat" ? change.repeat : null;
+  const card = ticketCard({ ...t, repeat }, env.APP_BASE_URL ?? null);
 
   // 1. The owner's card, in their private chat with the bot: refreshed in
   // place; after a hand-over the old card says so and the new owner gets one.
@@ -162,7 +163,8 @@ async function deliver(env: Env, payload: Payload) {
 
   // 2. Tell the sales person what changed, privately.
   const sales = feishuTarget({ feishuUnionId: t.salesUnionId, feishuOpenId: t.salesOpenId });
-  if (sales && change.kind !== "created") {
+  // (A repeat fault is for the after-sales group, below.)
+  if (sales && change.kind !== "created" && change.kind !== "repeat") {
     await sendText(env, sales.type, sales.id, `${t.ticketNo} (${t.customerCompany || "—"}): ${describe(change, t)}`);
   }
 
@@ -204,12 +206,12 @@ async function deliver(env: Env, payload: Payload) {
   }
 
   // 6. Repeat faults alert the whole after-sales group.
-  if (change.kind === "fault" && change.repeat) {
+  if (repeat) {
     await sendText(
       env,
       "chat_id",
       env.FEISHU_SERVICE_CHAT_ID!,
-      `Repeat fault: ${t.productName ?? "a product"} has had "${t.faultType}" ${change.repeat.count} times in ${change.repeat.windowDays} days (latest ${t.ticketNo}).`
+      `Repeat fault: ${t.productName ?? "a product"} has had "${t.faultType}" ${repeat.count} times in ${repeat.windowDays} days (latest ${t.ticketNo}).`
     );
   }
 }
