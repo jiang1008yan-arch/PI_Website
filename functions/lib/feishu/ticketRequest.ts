@@ -137,7 +137,8 @@ export async function expireDraft(env: Env, draft: DraftRow, now: Date) {
 }
 
 // Why a button on a request is refused; the caller says so in its own words.
-export type RequestRefusal = "gone" | "created" | "discarded" | "unclaimed" | "notYours" | "inPrivate" | "expired";
+// An Add to ticket past its (shorter) limit is "additionExpired".
+export type RequestRefusal = "gone" | "created" | "discarded" | "unclaimed" | "notYours" | "inPrivate" | "expired" | "additionExpired";
 
 // The request a button refers to, if it is still open and belongs to this
 // person; otherwise why not. An unclaimed device alert (in the after-sales
@@ -165,7 +166,7 @@ export async function openRequestFor(
   if (draft.kind === "DEVICE_ALERT" && draft.cardMessageId && cardMessageId && cardMessageId !== draft.cardMessageId) return { refused: "inPrivate" };
   if (isDraftExpired(draft, now)) {
     await markExpired(db, draft.id, now);
-    return { refused: "expired" };
+    return { refused: draft.targetTicketId ? "additionExpired" : "expired" };
   }
   return { draft };
 }

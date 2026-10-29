@@ -75,6 +75,15 @@ describe("open request guard", () => {
     expect((await request(draft.id)).expiredAt).toBe(sqlTime(now));
   });
 
+  // Separate decision E: an expired Add to ticket is told apart, so the card
+  // and the toast speak of 30 minutes and Save to ticket, not of 6 hours.
+  it("an Add to ticket past its 30 minutes is refused as an expired addition", async () => {
+    const ticket = await newTicket();
+    const { draft } = await openAddition(h.env, alice.unionId, ticket.id, new Date(now.getTime() - 31 * 60 * 1000));
+    expect(await openRequestFor(h.db, draft.id, alice, null, now)).toEqual({ refused: "additionExpired" });
+    expect((await request(draft.id)).expiredAt).toBe(sqlTime(now));
+  });
+
   it("an unclaimed device alert may only be opened; once taken, its group card points to the private chat", async () => {
     const draftId = await deviceAlert();
     expect(await openRequestFor(h.db, draftId, bob, "om_group", now)).toEqual({ refused: "unclaimed" });

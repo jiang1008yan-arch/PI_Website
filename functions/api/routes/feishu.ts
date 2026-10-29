@@ -9,6 +9,7 @@ import {
   dismissedCard,
   draftCard,
   expiredDraftCard,
+  addExpiredCard,
   ticketCard,
   type DraftPrefill
 } from "../../lib/feishu/cards";
@@ -119,7 +120,8 @@ const REFUSED: Record<RequestRefusal, ReturnType<typeof toast>> = {
   unclaimed: toast("info", "Press Create ticket on the alert first."),
   notYours: toast("warning", "This request belongs to someone else."),
   inPrivate: toast("info", "This request continues in our private chat."),
-  expired: toast("warning", "This request has expired (nothing added for 6 hours). Send me the messages again to start a new one.")
+  expired: toast("warning", "This request has expired (nothing added for 6 hours). Send me the messages again to start a new one."),
+  additionExpired: toast("warning", "Save to ticket was not pressed within 30 minutes, so nothing was added. Press Add pictures / files on the ticket card to start again.")
 };
 
 feishuRoutes.post("/feishu/card", async (c) => {
@@ -178,6 +180,7 @@ feishuRoutes.post("/feishu/card", async (c) => {
     if ("refused" in found) {
       // A request left alone too long: its card is greyed out too.
       if (found.refused === "expired" && messageId) runLater(c, () => updateCard(env, messageId, expiredDraftCard()));
+      if (found.refused === "additionExpired" && messageId) runLater(c, () => updateCard(env, messageId, addExpiredCard()));
       return c.json(REFUSED[found.refused]);
     }
     const draft = found.draft;
